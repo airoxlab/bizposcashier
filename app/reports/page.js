@@ -49,6 +49,8 @@ import { supabase } from '../../lib/supabase'
 import { cacheManager } from '../../lib/cacheManager'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart as RechartsPieChart, Pie, Cell, LineChart as RechartsLineChart, Line, AreaChart, Area, ComposedChart } from 'recharts'
 import { themeManager } from '../../lib/themeManager'
+import { getTodaysBusinessDate, getBusinessDate } from '../../lib/utils/businessDayUtils'
+import dailySerialManager from '../../lib/utils/dailySerialManager'
 import LedgerTab from '../../components/reports/LedgerTab'
 import NotificationSystem, { notify } from '../../components/ui/NotificationSystem'
 import ProtectedPage from '../../components/ProtectedPage'
@@ -143,7 +145,10 @@ export default function ReportsPage() {
   // Daily P&L State
   const [dailyPnLData, setDailyPnLData] = useState(null)
   const [dailyPnLLoading, setDailyPnLLoading] = useState(false)
-  const [selectedPnLDate, setSelectedPnLDate] = useState(new Date().toISOString().split('T')[0])
+  const [selectedPnLDate, setSelectedPnLDate] = useState(() => {
+    const { startTime, endTime } = dailySerialManager.getBusinessHours()
+    return getTodaysBusinessDate(startTime, endTime)
+  })
 
   // Chart Colors
   const chartColors = {
@@ -189,10 +194,24 @@ export default function ReportsPage() {
     setTheme(themeManager.currentTheme)
     themeManager.applyTheme()
 
-    // Set default date range (today)
-    const today = new Date().toISOString().split('T')[0]
-    setDateFrom(today)
-    setDateTo(today)
+    // Set default date range to today's business day.
+    // For overnight businesses (endTime < startTime, e.g. 12:00→03:00):
+    //   From Date = the calendar date the business day started (e.g. Mar 10)
+    //   To Date   = the calendar date the business day ends   (e.g. Mar 11)
+    const { startTime, endTime } = dailySerialManager.getBusinessHours()
+    const todayBusiness = getTodaysBusinessDate(startTime, endTime)
+    setDateFrom(todayBusiness)
+    const isOvernightBiz = endTime < startTime
+    if (isOvernightBiz) {
+      const d = new Date(todayBusiness + 'T12:00:00')
+      d.setDate(d.getDate() + 1)
+      setDateTo(d.toISOString().split('T')[0])
+    } else {
+      setDateTo(todayBusiness)
+    }
+    // Default time filters to business hours
+    setTimeFrom(startTime)
+    setTimeTo(endTime)
 
   }, [router])
 
@@ -350,12 +369,16 @@ const fetchSalesData = async () => {
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
 
-    // Apply date filters at database level
+    // Filter by created_at using business hours as the time boundaries.
+    // dateFrom + bizStart = exact moment business day opens (e.g. Mar 10 12:00 PM)
+    // dateTo   + bizEnd   = exact moment business day closes (e.g. Mar 11 03:00 AM)
+    // This works correctly for overnight spans without fetching the wrong business day.
+    const { startTime: bizStart, endTime: bizEnd } = dailySerialManager.getBusinessHours()
     if (dateFrom) {
-      query = query.gte('order_date', dateFrom)
+      query = query.gte('created_at', new Date(`${dateFrom}T${bizStart}:00`).toISOString())
     }
     if (dateTo) {
-      query = query.lte('order_date', dateTo)
+      query = query.lte('created_at', new Date(`${dateTo}T${bizEnd}:00`).toISOString())
     }
 
     // Apply type filters at database level
@@ -385,11 +408,22 @@ const fetchSalesData = async () => {
 
     let orders = data || []
 
-    // Apply time filters client-side (less common filter)
+    // Apply time filters client-side
+    // For overnight business hours (e.g. 12:00 → 03:00), timeTo < timeFrom,
+    // so an order is valid if it falls in EITHER window:
+    //   window A: order_time >= timeFrom  (e.g. 12:00 PM onwards)
+    //   window B: order_time <= timeTo    (e.g. midnight to 03:00 AM)
+    // For same-day hours, both conditions must be met (AND logic).
     if (timeFrom || timeTo) {
+      const isOvernight = timeFrom && timeTo && timeTo < timeFrom
       orders = orders.filter(order => {
-        if (timeFrom && order.order_time < timeFrom) return false
-        if (timeTo && order.order_time > timeTo) return false
+        const t = order.order_time
+        if (!t) return true
+        if (isOvernight) {
+          return t >= timeFrom || t <= timeTo
+        }
+        if (timeFrom && t < timeFrom) return false
+        if (timeTo && t > timeTo) return false
         return true
       })
     }
@@ -550,7 +584,7 @@ const fetchExpenseData = async () => {
       .order('created_at', { ascending: false })
 
     if (dateFrom) {
-      stockQuery = stockQuery.gte('created_at', dateFrom)
+      stockQuery = stockQuery.gte('created_at', `${dateFrom}T00:00:00`)
     }
     if (dateTo) {
       stockQuery = stockQuery.lte('created_at', `${dateTo}T23:59:59`)
@@ -664,10 +698,12 @@ const fetchExpenseData = async () => {
   })
   const paymentMethods = Array.from(paymentMethodMap.values())
 
-  // Daily revenue trends - only from valid orders
+  // Daily revenue trends - group by business date derived from created_at
+  // This ensures after-midnight orders (e.g. 1 AM) fall under the correct business day
+  const { startTime: trendBizStart, endTime: trendBizEnd } = dailySerialManager.getBusinessHours()
   const dailyMap = new Map()
   validOrders.forEach(order => {
-    const date = order.order_date
+    const date = getBusinessDate(order.created_at || order.order_date, trendBizStart, trendBizEnd)
     if (!dailyMap.has(date)) {
       dailyMap.set(date, { date, orders: 0, revenue: 0 })
     }
@@ -871,18 +907,20 @@ const fetchExpenseData = async () => {
             order_status,
             order_date,
             order_time,
-            user_id
+            user_id,
+            created_at
           )
         `)
         .eq('orders.user_id', user.id)
         .eq('orders.order_status', 'Completed')
 
-      // Apply date filters
+      // Apply date filters via created_at using business hour boundaries
+      const { startTime: prodBizStart, endTime: prodBizEnd } = dailySerialManager.getBusinessHours()
       if (dateFrom) {
-        query = query.gte('orders.order_date', dateFrom)
+        query = query.gte('orders.created_at', new Date(`${dateFrom}T${prodBizStart}:00`).toISOString())
       }
       if (dateTo) {
-        query = query.lte('orders.order_date', dateTo)
+        query = query.lte('orders.created_at', new Date(`${dateTo}T${prodBizEnd}:00`).toISOString())
       }
 
       // Apply time filters if provided
@@ -979,12 +1017,13 @@ const fetchExpenseData = async () => {
         .eq('user_id', user.id)
         .eq('order_status', 'Completed')
 
-      // Apply date filters
+      // Apply date filters via created_at using business hour boundaries
+      const { startTime: peakBizStart, endTime: peakBizEnd } = dailySerialManager.getBusinessHours()
       if (dateFrom) {
-        query = query.gte('order_date', dateFrom)
+        query = query.gte('created_at', new Date(`${dateFrom}T${peakBizStart}:00`).toISOString())
       }
       if (dateTo) {
-        query = query.lte('order_date', dateTo)
+        query = query.lte('created_at', new Date(`${dateTo}T${peakBizEnd}:00`).toISOString())
       }
 
       // Apply time filters if provided
@@ -1042,8 +1081,10 @@ const fetchExpenseData = async () => {
           }
         }
 
-        // Aggregate by day of week
-        const orderDate = new Date(order.order_date || order.created_at)
+        // Aggregate by day of week — use business date so after-midnight orders
+        // are counted against the correct business day
+        const bizDateStr = getBusinessDate(order.created_at, peakBizStart, peakBizEnd)
+        const orderDate = new Date(bizDateStr + 'T12:00:00')
         const dayOfWeek = orderDate.getDay()
         const dayData = dailyMap.get(dayOfWeek)
         if (dayData) {
@@ -1611,11 +1652,19 @@ const calculateProfitData = (salesDataParam, expenseDataParam) => {
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                     onClick={() => {
-                      const today = new Date().toISOString().split('T')[0]
-                      setDateFrom(today)
-                      setDateTo(today)
-                      setTimeFrom('')
-                      setTimeTo('')
+                      const { startTime: rStart, endTime: rEnd } = dailySerialManager.getBusinessHours()
+                      const todayBiz = getTodaysBusinessDate(rStart, rEnd)
+                      setDateFrom(todayBiz)
+                      const isOvernight = rEnd < rStart
+                      if (isOvernight) {
+                        const d = new Date(todayBiz + 'T12:00:00')
+                        d.setDate(d.getDate() + 1)
+                        setDateTo(d.toISOString().split('T')[0])
+                      } else {
+                        setDateTo(todayBiz)
+                      }
+                      setTimeFrom(rStart)
+                      setTimeTo(rEnd)
                       setOrderTypeFilter('All')
                       setPaymentMethodFilter('All')
                       setOrderStatusFilter('All')
@@ -1623,7 +1672,6 @@ const calculateProfitData = (salesDataParam, expenseDataParam) => {
                       setCashierFilter('All')
                       setExpenseCategoryFilter('All')
                       setExpensePaymentFilter('All')
-                      // Close filter panel after reset
                       setShowFilters(false)
                     }}
                     className={`flex items-center px-4 py-2 ${themeClasses.button} rounded-lg transition-all font-medium text-sm`}

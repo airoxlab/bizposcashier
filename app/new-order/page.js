@@ -18,6 +18,7 @@ import WalkinOrderDetails from '../../components/test/WalkinOrderDetails'
 import TableSelectionPanel from '../../components/test/TableSelectionPanel'
 import loyaltyManager from '../../lib/loyaltyManager'
 import { webOrderNotificationManager } from '../../lib/webOrderNotification'
+import { usePermissions } from '../../lib/permissionManager'
 import { Users, ShoppingBag, Truck, FileText } from 'lucide-react'
 import toast, { Toaster } from 'react-hot-toast'
 import SplitPaymentModal from '../../components/pos/SplitPaymentModal'
@@ -29,7 +30,8 @@ const ORDER_TABS = [
     icon: Users,
     gradient: 'from-purple-500 to-indigo-600',
     activeColor: 'bg-gradient-to-b from-purple-500 to-indigo-600',
-    storageKey: 'new_order_walkin'
+    storageKey: 'new_order_walkin',
+    permissionKey: 'SALES_WALKIN'
   },
   {
     id: 'takeaway',
@@ -37,7 +39,8 @@ const ORDER_TABS = [
     icon: ShoppingBag,
     gradient: 'from-orange-500 to-amber-500',
     activeColor: 'bg-gradient-to-b from-orange-500 to-amber-500',
-    storageKey: 'new_order_takeaway'
+    storageKey: 'new_order_takeaway',
+    permissionKey: 'SALES_TAKEAWAY'
   },
   {
     id: 'delivery',
@@ -45,7 +48,8 @@ const ORDER_TABS = [
     icon: Truck,
     gradient: 'from-emerald-500 to-teal-600',
     activeColor: 'bg-gradient-to-b from-emerald-500 to-teal-600',
-    storageKey: 'new_order_delivery'
+    storageKey: 'new_order_delivery',
+    permissionKey: 'SALES_DELIVERY'
   }
 ]
 
@@ -53,6 +57,20 @@ export default function NewOrderPage() {
   const router = useRouter()
   const productGridRef = useRef(null)
   const isInitialized = useRef(false)
+  const permissions = usePermissions()
+  const [permissionsReady, setPermissionsReady] = useState(() => permissions.isLoaded())
+
+  // Poll until permissions are loaded so tabBar re-renders with correct tabs
+  useEffect(() => {
+    if (permissionsReady) return
+    const interval = setInterval(() => {
+      if (permissions.isLoaded()) {
+        setPermissionsReady(true)
+        clearInterval(interval)
+      }
+    }, 100)
+    return () => clearInterval(interval)
+  }, [permissionsReady])
 
   const [user, setUser] = useState(null)
   const [cashierData, setCashierData] = useState(null)
@@ -148,6 +166,15 @@ export default function NewOrderPage() {
   useEffect(() => {
     localStorage.setItem('new_order_active_type', activeOrderType)
   }, [activeOrderType])
+
+  // If the stored active tab type is not permitted, switch to the first permitted tab
+  useEffect(() => {
+    const activeTabDef = ORDER_TABS.find(t => t.id === activeOrderType)
+    if (activeTabDef && !permissions.hasPermission(activeTabDef.permissionKey)) {
+      const firstAllowed = ORDER_TABS.find(t => permissions.hasPermission(t.permissionKey))
+      if (firstAllowed) setActiveOrderType(firstAllowed.id)
+    }
+  }, [permissions, activeOrderType])
 
   // Load data on mount
   useEffect(() => {
@@ -296,6 +323,11 @@ export default function NewOrderPage() {
   }
 
   const handleTabSwitch = (tabId) => {
+    const tab = ORDER_TABS.find(t => t.id === tabId)
+    if (tab && !permissions.hasPermission(tab.permissionKey)) {
+      notify.error(`You don't have permission to access ${tab.label} orders`)
+      return
+    }
     setActiveOrderType(tabId)
     setCurrentView('products')
     setSelectedProduct(null)
@@ -447,6 +479,11 @@ export default function NewOrderPage() {
       notify.warning('Please add items to cart before proceeding')
       return
     }
+    const activeTabDef = ORDER_TABS.find(t => t.id === activeOrderType)
+    if (activeTabDef && !permissions.hasPermission(activeTabDef.permissionKey)) {
+      notify.error(`You don't have permission to place ${activeTabDef.label} orders`)
+      return
+    }
     const tab = ORDER_TABS.find(t => t.id === activeOrderType)
     const extras = orderExtras[activeOrderType] || {}
     const orderData = {
@@ -482,7 +519,7 @@ export default function NewOrderPage() {
 
   const tabBar = (
     <div className="flex items-center gap-2">
-      {ORDER_TABS.map(tab => {
+      {(permissionsReady ? ORDER_TABS.filter(tab => permissions.hasPermission(tab.permissionKey)) : ORDER_TABS).map(tab => {
         const isActive = activeOrderType === tab.id
         return (
           <button

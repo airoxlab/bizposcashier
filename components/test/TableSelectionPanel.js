@@ -20,6 +20,15 @@ export default function TableSelectionPanel({
     fetchTables()
   }, [])
 
+  // Re-apply occupancy overlay whenever orders change (order completed, new order placed, etc.)
+  useEffect(() => {
+    const handler = () => {
+      setTables(prev => applyActiveOrderOccupancy(cacheManager.getAllTables()))
+    }
+    window.addEventListener('ordersUpdated', handler)
+    return () => window.removeEventListener('ordersUpdated', handler)
+  }, [])
+
   // Overlay occupied status from active orders so the table grid is always accurate
   // even if updateTableStatus() was missed or ran out of order.
   const applyActiveOrderOccupancy = (tableList) => {
