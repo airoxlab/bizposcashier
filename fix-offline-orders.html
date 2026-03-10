@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Fix Offline Orders</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        button {
+            background: #8b5cf6;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        button:hover {
+            background: #7c3aed;
+        }
+        .danger {
+            background: #ef4444;
+        }
+        .danger:hover {
+            background: #dc2626;
+        }
+        .output {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f3f4f6;
+            border-radius: 8px;
+            white-space: pre-wrap;
+        }
+        .success {
+            color: #059669;
+        }
+        .error {
+            color: #dc2626;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔧 Fix Offline Orders with Invalid Status</h1>
+    <p>This tool will fix orders in offline cache that have invalid payment_status values.</p>
+
+    <button onclick="viewOfflineOrders()">1. View Offline Orders</button>
+    <button onclick="fixOfflineOrders()" class="danger">2. Fix Invalid Orders</button>
+    <button onclick="clearAllOffline()" class="danger">3. Clear All Offline Orders (Danger!)</button>
+
+    <div id="output" class="output"></div>
+
+    <script>
+        function log(message, className = '') {
+            const output = document.getElementById('output');
+            const line = document.createElement('div');
+            line.textContent = message;
+            if (className) line.className = className;
+            output.appendChild(line);
+        }
+
+        function clearOutput() {
+            document.getElementById('output').innerHTML = '';
+        }
+
+        function viewOfflineOrders() {
+            clearOutput();
+            log('📋 Viewing offline orders...\n');
+
+            const offlineOrders = JSON.parse(localStorage.getItem('offline_orders') || '[]');
+
+            if (offlineOrders.length === 0) {
+                log('✅ No offline orders found', 'success');
+                return;
+            }
+
+            log(`Found ${offlineOrders.length} offline orders:\n`);
+
+            offlineOrders.forEach((order, idx) => {
+                log(`${idx + 1}. Order ${order.order_number}`);
+                log(`   Payment Method: ${order.payment_method}`);
+                log(`   Payment Status: ${order.payment_status}`);
+                log(`   Total: Rs ${order.total_amount}`);
+                log('');
+            });
+        }
+
+        function fixOfflineOrders() {
+            clearOutput();
+            log('🔧 Fixing offline orders...\n');
+
+            const offlineOrders = JSON.parse(localStorage.getItem('offline_orders') || '[]');
+
+            if (offlineOrders.length === 0) {
+                log('✅ No offline orders found', 'success');
+                return;
+            }
+
+            let fixedCount = 0;
+            const fixedOrders = offlineOrders.map(order => {
+                // Fix orders with 'Unpaid' status to 'Pending'
+                if (order.payment_status === 'Unpaid') {
+                    log(`✅ Fixed: ${order.order_number} - Changed 'Unpaid' to 'Pending'`, 'success');
+                    fixedCount++;
+                    return {
+                        ...order,
+                        payment_status: 'Pending'
+                    };
+                }
+                return order;
+            });
+
+            if (fixedCount > 0) {
+                localStorage.setItem('offline_orders', JSON.stringify(fixedOrders));
+                log(`\n✅ Fixed ${fixedCount} orders`, 'success');
+                log('\n🔄 Please refresh the POS page and sync again');
+            } else {
+                log('ℹ️ No orders need fixing', 'success');
+            }
+        }
+
+        function clearAllOffline() {
+            if (!confirm('⚠️ WARNING: This will DELETE all offline orders!\n\nAre you sure? This cannot be undone!')) {
+                clearOutput();
+                log('❌ Operation cancelled', 'error');
+                return;
+            }
+
+            clearOutput();
+            log('🗑️ Clearing all offline data...\n');
+
+            localStorage.removeItem('offline_orders');
+            localStorage.removeItem('offline_order_items');
+            localStorage.removeItem('sync_queue');
+
+            log('✅ All offline data cleared', 'success');
+            log('\n⚠️ Any unsaved orders have been deleted!');
+        }
+    </script>
+</body>
+</html>

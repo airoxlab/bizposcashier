@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LIMHS - Meal Package Manager</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: #10b981;
+            color: white;
+            padding: 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .header p {
+            font-size: 14px;
+            opacity: 0.9;
+            margin-top: 4px;
+        }
+
+        .btn-primary {
+            background: white;
+            color: #10b981;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 14px;
+            transition: transform 0.2s;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+        }
+
+        .content {
+            padding: 24px;
+        }
+
+        .form-group {
+            margin-bottom: 24px;
+        }
+
+        .form-group label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #374151;
+        }
+
+        .form-group label .required {
+            color: #ef4444;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+
+        .form-control:focus {
+            outline: none;
+            border-color: #10b981;
+        }
+
+        .student-status {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            padding: 16px;
+            margin-top: 12px;
+        }
+
+        .student-status h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            color: #374151;
+        }
+
+        .meal-status {
+            display: flex;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .meal-badge {
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .meal-badge.active {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .meal-badge.inactive {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .meal-section {
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            background: #fafafa;
+        }
+
+        .meal-section.disabled {
+            opacity: 0.5;
+            pointer-events: none;
+        }
+
+        .meal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid #e5e7eb;
+        }
+
+        .meal-header h3 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #374151;
+        }
+
+        .meal-count-input {
+            width: 100px;
+            padding: 8px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .days-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .day-checkbox {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .day-checkbox input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+            accent-color: #10b981;
+        }
+
+        .day-checkbox label {
+            font-size: 14px;
+            cursor: pointer;
+            margin: 0;
+        }
+
+        .price-section {
+            background: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 24px 0;
+        }
+
+        .price-section label {
+            font-size: 16px;
+            font-weight: 600;
+            color: #065f46;
+        }
+
+        .price-input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #10b981;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            margin-top: 8px;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 12px;
+            margin-top: 24px;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-cancel {
+            background: #f3f4f6;
+            color: #374151;
+        }
+
+        .btn-cancel:hover {
+            background: #e5e7eb;
+        }
+
+        .btn-save {
+            background: #10b981;
+            color: white;
+        }
+
+        .btn-save:hover {
+            background: #059669;
+        }
+
+        .packages-list {
+            margin-top: 32px;
+            padding-top: 24px;
+            border-top: 2px solid #e5e7eb;
+        }
+
+        .packages-list h2 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: #374151;
+        }
+
+        .package-card {
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .package-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .package-card h3 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #374151;
+        }
+
+        .package-price {
+            font-size: 18px;
+            font-weight: 700;
+            color: #10b981;
+        }
+
+        .package-details {
+            font-size: 13px;
+            color: #6b7280;
+            line-height: 1.6;
+        }
+
+        .btn-delete {
+            background: #ef4444;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+            margin-top: 12px;
+        }
+
+        .btn-delete:hover {
+            background: #dc2626;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .alert {
+            padding: 12px 16px;
+            border-radius: 6px;
+            margin-bottom: 16px;
+            font-size: 14px;
+        }
+
+        .alert-success {
+            background: #d1fae5;
+            color: #065f46;
+            border: 1px solid #6ee7b7;
+        }
+
+        .alert-error {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fca5a5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h1>Meal Packages</h1>
+                <p>Manage meal packages for students</p>
+            </div>
+            <button class="btn-primary" onclick="toggleForm()">+ Add Package</button>
+        </div>
+
+        <div class="content">
+            <div id="alertBox" class="hidden"></div>
+
+            <div id="packageForm" class="hidden">
+                <div class="form-group">
+                    <label>Select Student <span class="required">*</span></label>
+                    <select class="form-control" id="studentSelect" onchange="onStudentChange()">
+                        <option value="">-- Select a student --</option>
+                        <option value="student1">Ahmed Hassan</option>
+                        <option value="student2">Fatima Ali</option>
+                        <option value="student3">Mohammed Ismail</option>
+                        <option value="student4">Aisha Ibrahim</option>
+                        <option value="student5">Yusuf Ahmed</option>
+                        <option value="student6">Mariam Hassan</option>
+                        <option value="student7">Ibrahim Mohamed</option>
+                        <option value="student8">Zainab Ali</option>
+                    </select>
+                </div>
+
+                <div id="studentStatusBox" class="hidden">
+                    <div class="student-status">
+                        <h3>Current Meal Check-ins</h3>
+                        <div class="meal-status" id="mealStatus"></div>
+                    </div>
+                </div>
+
+                <div id="mealsConfiguration" class="hidden">
+                    <h2 style="margin: 24px 0 16px; font-size: 18px; color: #374151;">Configure Meal Schedule</h2>
+
+                    <!-- Breakfast Section -->
+                    <div class="meal-section" id="breakfastSection">
+                        <div class="meal-header">
+                            <h3>🍳 Breakfast</h3>
+                            <div>
+                                <label style="display: inline; margin-right: 8px; font-size: 14px;">Meals per day:</label>
+                                <input type="number" class="meal-count-input" id="breakfastCount" min="0" max="10" value="1">
+                            </div>
+                        </div>
+                        <div class="days-grid" id="breakfastDays"></div>
+                    </div>
+
+                    <!-- Lunch Section -->
+                    <div class="meal-section" id="lunchSection">
+                        <div class="meal-header">
+                            <h3>🍛 Lunch</h3>
+                            <div>
+                                <label style="display: inline; margin-right: 8px; font-size: 14px;">Meals per day:</label>
+                                <input type="number" class="meal-count-input" id="lunchCount" min="0" max="10" value="1">
+                            </div>
+                        </div>
+                        <div class="days-grid" id="lunchDays"></div>
+                    </div>
+
+                    <!-- Dinner Section -->
+                    <div class="meal-section" id="dinnerSection">
+                        <div class="meal-header">
+                            <h3>🍝 Dinner</h3>
+                            <div>
+                                <label style="display: inline; margin-right: 8px; font-size: 14px;">Meals per day:</label>
+                                <input type="number" class="meal-count-input" id="dinnerCount" min="0" max="10" value="1">
+                            </div>
+                        </div>
+                        <div class="days-grid" id="dinnerDays"></div>
+                    </div>
+
+                    <!-- Price Section -->
+                    <div class="price-section">
+                        <label>Package Price (PKR) <span class="required">*</span></label>
+                        <input type="number" class="price-input" id="packagePrice" placeholder="e.g., 3000" min="0">
+                    </div>
+
+                    <!-- Buttons -->
+                    <div class="button-group">
+                        <button class="btn btn-cancel" onclick="cancelForm()">Cancel</button>
+                        <button class="btn btn-save" onclick="savePackage()">Save Package</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Saved Packages List -->
+            <div class="packages-list">
+                <h2>Saved Packages</h2>
+                <div id="packagesList"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Student meal check-in data (hardcoded)
+        const studentsData = {
+            student1: { name: 'Ahmed Hassan', meals: { breakfast: true, lunch: true, dinner: true } },
+            student2: { name: 'Fatima Ali', meals: { breakfast: true, lunch: false, dinner: true } },
+            student3: { name: 'Mohammed Ismail', meals: { breakfast: false, lunch: true, dinner: true } },
+            student4: { name: 'Aisha Ibrahim', meals: { breakfast: true, lunch: true, dinner: false } },
+            student5: { name: 'Yusuf Ahmed', meals: { breakfast: true, lunch: false, dinner: false } },
+            student6: { name: 'Mariam Hassan', meals: { breakfast: false, lunch: true, dinner: false } },
+            student7: { name: 'Ibrahim Mohamed', meals: { breakfast: true, lunch: true, dinner: true } },
+            student8: { name: 'Zainab Ali', meals: { breakfast: false, lunch: false, dinner: true } }
+        };
+
+        const daysOfWeek = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+        let currentStudent = null;
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            loadPackages();
+        });
+
+        function toggleForm() {
+            const form = document.getElementById('packageForm');
+            form.classList.toggle('hidden');
+        }
+
+        function onStudentChange() {
+            const studentId = document.getElementById('studentSelect').value;
+
+            if (!studentId) {
+                document.getElementById('studentStatusBox').classList.add('hidden');
+                document.getElementById('mealsConfiguration').classList.add('hidden');
+                return;
+            }
+
+            currentStudent = studentsData[studentId];
+
+            // Show student status
+            document.getElementById('studentStatusBox').classList.remove('hidden');
+            const mealStatusDiv = document.getElementById('mealStatus');
+            mealStatusDiv.innerHTML = `
+                <div class="meal-badge ${currentStudent.meals.breakfast ? 'active' : 'inactive'}">
+                    🍳 Breakfast: ${currentStudent.meals.breakfast ? 'Checked In' : 'Not Active'}
+                </div>
+                <div class="meal-badge ${currentStudent.meals.lunch ? 'active' : 'inactive'}">
+                    🍛 Lunch: ${currentStudent.meals.lunch ? 'Checked In' : 'Not Active'}
+                </div>
+                <div class="meal-badge ${currentStudent.meals.dinner ? 'active' : 'inactive'}">
+                    🍝 Dinner: ${currentStudent.meals.dinner ? 'Checked In' : 'Not Active'}
+                </div>
+            `;
+
+            // Show meals configuration
+            document.getElementById('mealsConfiguration').classList.remove('hidden');
+
+            // Generate day checkboxes for each meal type
+            generateDayCheckboxes('breakfast', currentStudent.meals.breakfast);
+            generateDayCheckboxes('lunch', currentStudent.meals.lunch);
+            generateDayCheckboxes('dinner', currentStudent.meals.dinner);
+
+            // Enable/disable sections based on meal status
+            document.getElementById('breakfastSection').classList.toggle('disabled', !currentStudent.meals.breakfast);
+            document.getElementById('lunchSection').classList.toggle('disabled', !currentStudent.meals.lunch);
+            document.getElementById('dinnerSection').classList.toggle('disabled', !currentStudent.meals.dinner);
+        }
+
+        function generateDayCheckboxes(mealType, isActive) {
+            const container = document.getElementById(`${mealType}Days`);
+            container.innerHTML = '';
+
+            // Auto-check weekdays for active meals, uncheck weekends
+            daysOfWeek.forEach((day, index) => {
+                const isWeekend = index >= 5; // Saturday and Sunday
+                const isChecked = isActive && !isWeekend;
+
+                const dayDiv = document.createElement('div');
+                dayDiv.className = 'day-checkbox';
+                dayDiv.innerHTML = `
+                    <input type="checkbox" id="${mealType}_${day}" ${isChecked ? 'checked' : ''}>
+                    <label for="${mealType}_${day}">${day}</label>
+                `;
+                container.appendChild(dayDiv);
+            });
+        }
+
+        function getSelectedDays(mealType) {
+            const days = [];
+            daysOfWeek.forEach(day => {
+                const checkbox = document.getElementById(`${mealType}_${day}`);
+                if (checkbox && checkbox.checked) {
+                    days.push(day);
+                }
+            });
+            return days;
+        }
+
+        function savePackage() {
+            const studentId = document.getElementById('studentSelect').value;
+            const price = document.getElementById('packagePrice').value;
+
+            if (!studentId) {
+                showAlert('Please select a student', 'error');
+                return;
+            }
+
+            if (!price || price <= 0) {
+                showAlert('Please enter a valid price', 'error');
+                return;
+            }
+
+            const packageData = {
+                id: Date.now(),
+                studentId: studentId,
+                studentName: currentStudent.name,
+                meals: {
+                    breakfast: {
+                        active: currentStudent.meals.breakfast,
+                        count: parseInt(document.getElementById('breakfastCount').value) || 0,
+                        days: getSelectedDays('breakfast')
+                    },
+                    lunch: {
+                        active: currentStudent.meals.lunch,
+                        count: parseInt(document.getElementById('lunchCount').value) || 0,
+                        days: getSelectedDays('lunch')
+                    },
+                    dinner: {
+                        active: currentStudent.meals.dinner,
+                        count: parseInt(document.getElementById('dinnerCount').value) || 0,
+                        days: getSelectedDays('dinner')
+                    }
+                },
+                price: parseFloat(price),
+                createdAt: new Date().toISOString()
+            };
+
+            // Save to localStorage
+            const packages = getPackages();
+            packages.push(packageData);
+            localStorage.setItem('mealPackages', JSON.stringify(packages));
+
+            showAlert('Package saved successfully!', 'success');
+            cancelForm();
+            loadPackages();
+        }
+
+        function getPackages() {
+            const packages = localStorage.getItem('mealPackages');
+            return packages ? JSON.parse(packages) : [];
+        }
+
+        function loadPackages() {
+            const packages = getPackages();
+            const container = document.getElementById('packagesList');
+
+            if (packages.length === 0) {
+                container.innerHTML = '<p style="color: #9ca3af; text-align: center; padding: 40px;">No packages saved yet. Create your first package!</p>';
+                return;
+            }
+
+            container.innerHTML = packages.map(pkg => {
+                const totalMeals =
+                    (pkg.meals.breakfast.active ? pkg.meals.breakfast.days.length * pkg.meals.breakfast.count : 0) +
+                    (pkg.meals.lunch.active ? pkg.meals.lunch.days.length * pkg.meals.lunch.count : 0) +
+                    (pkg.meals.dinner.active ? pkg.meals.dinner.days.length * pkg.meals.dinner.count : 0);
+
+                const pricePerMeal = totalMeals > 0 ? (pkg.price / totalMeals).toFixed(2) : 0;
+
+                let mealDetails = [];
+                if (pkg.meals.breakfast.active && pkg.meals.breakfast.days.length > 0) {
+                    mealDetails.push(`🍳 Breakfast: ${pkg.meals.breakfast.count}x on ${pkg.meals.breakfast.days.join(', ')}`);
+                }
+                if (pkg.meals.lunch.active && pkg.meals.lunch.days.length > 0) {
+                    mealDetails.push(`🍛 Lunch: ${pkg.meals.lunch.count}x on ${pkg.meals.lunch.days.join(', ')}`);
+                }
+                if (pkg.meals.dinner.active && pkg.meals.dinner.days.length > 0) {
+                    mealDetails.push(`🍝 Dinner: ${pkg.meals.dinner.count}x on ${pkg.meals.dinner.days.join(', ')}`);
+                }
+
+                return `
+                    <div class="package-card">
+                        <div class="package-card-header">
+                            <h3>${pkg.studentName}</h3>
+                            <div class="package-price">PKR ${pkg.price.toFixed(2)}</div>
+                        </div>
+                        <div class="package-details">
+                            <p><strong>Total Meals:</strong> ${totalMeals} meals/week</p>
+                            <p><strong>Price per Meal:</strong> PKR ${pricePerMeal}</p>
+                            <p style="margin-top: 8px;">${mealDetails.join('<br>')}</p>
+                            <p style="margin-top: 8px; font-size: 12px; color: #9ca3af;">Created: ${new Date(pkg.createdAt).toLocaleString()}</p>
+                        </div>
+                        <button class="btn-delete" onclick="deletePackage(${pkg.id})">Delete Package</button>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function deletePackage(packageId) {
+            if (!confirm('Are you sure you want to delete this package?')) {
+                return;
+            }
+
+            let packages = getPackages();
+            packages = packages.filter(pkg => pkg.id !== packageId);
+            localStorage.setItem('mealPackages', JSON.stringify(packages));
+
+            showAlert('Package deleted successfully', 'success');
+            loadPackages();
+        }
+
+        function cancelForm() {
+            document.getElementById('packageForm').classList.add('hidden');
+            document.getElementById('studentSelect').value = '';
+            document.getElementById('studentStatusBox').classList.add('hidden');
+            document.getElementById('mealsConfiguration').classList.add('hidden');
+            document.getElementById('packagePrice').value = '';
+        }
+
+        function showAlert(message, type) {
+            const alertBox = document.getElementById('alertBox');
+            alertBox.className = `alert alert-${type}`;
+            alertBox.textContent = message;
+            alertBox.classList.remove('hidden');
+
+            setTimeout(() => {
+                alertBox.classList.add('hidden');
+            }, 3000);
+        }
+    </script>
+</body>
+</html>

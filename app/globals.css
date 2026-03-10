@@ -1,0 +1,248 @@
+@import "tailwindcss";
+
+/* Clean CSS Variables for Theme Manager */
+:root {
+  --theme-bg: #ffffff;
+  --theme-card: #ffffff;
+  --theme-text: #1f2937;
+  --theme-text-secondary: #6b7280;
+  --theme-border: #e5e7eb;
+}
+
+/* Dark Mode Variables */
+.dark {
+  --theme-bg: #0f172a;
+  --theme-card: #1e293b;
+  --theme-text: #f1f5f9;
+  --theme-text-secondary: #cbd5e1;
+  --theme-border: #334155;
+}
+
+/* Base Styles - Minimal and Clean */
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Scrollbar Styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #475569;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+/* Custom Scrollbar for specific elements */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 10px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #a855f7, #9333ea);
+  border-radius: 10px;
+  box-shadow: 0 2px 6px rgba(168, 85, 247, 0.3);
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #9333ea, #7c3aed);
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #7c3aed, #6d28d9);
+  box-shadow: 0 2px 6px rgba(124, 58, 237, 0.3);
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #8b5cf6, #7c3aed);
+}
+
+/* Glass Effect for Login */
+.glass-effect {
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* Selection Colors */
+::selection {
+  background: rgb(147 51 234 / 0.3);
+}
+
+.dark ::selection {
+  background: rgb(147 51 234 / 0.5);
+}
+
+/* Print Styles */
+@media print {
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+}
+
+/* Reduced Motion Support */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Theme Manager Utility Classes - Only what's needed */
+.theme-bg {
+  background-color: var(--theme-bg);
+}
+
+.theme-card {
+  background-color: var(--theme-card);
+}
+
+.theme-text {
+  color: var(--theme-text);
+}
+
+.theme-text-secondary {
+  color: var(--theme-text-secondary);
+}
+
+.theme-border {
+  border-color: var(--theme-border);
+}
+
+/* Custom Backgrounds for Theme Manager */
+.bg-theme-gradient-default {
+  background: linear-gradient(135deg, #faf0e6 0%, #e6e6fa 50%, #f0e6ff 100%);
+}
+
+.dark .bg-theme-gradient-default {
+  background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #312e81 100%);
+}
+
+.bg-theme-gradient-ocean {
+  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 50%, #1e40af 100%);
+}
+
+.bg-theme-gradient-sunset {
+  background: linear-gradient(135deg, #f97316 0%, #ef4444 50%, #ec4899 100%);
+}
+
+.bg-theme-gradient-forest {
+  background: linear-gradient(135deg, #22c55e 0%, #16a34a 50%, #059669 100%);
+}
+
+.bg-theme-gradient-purple {
+  background: linear-gradient(135deg, #a855f7 0%, #9333ea 50%, #7c3aed 100%);
+}
+
+.bg-theme-gradient-midnight {
+  background: linear-gradient(135deg, #1e293b 0%, #0f172a 50%, #020617 100%);
+}
+
+.bg-theme-gradient-gradient1 {
+  background: linear-gradient(135deg, #f9a8d4 0%, #c084fc 50%, #a78bfa 100%);
+}
+
+.bg-theme-gradient-gradient2 {
+  background: linear-gradient(135deg, #fef3c7 0%, #bbf7d0 50%, #a7f3d0 100%);
+}
+
+.bg-theme-gradient-gradient3 {
+  background: linear-gradient(135deg, #fecaca 0%, #fca5a5 50%, #fde047 100%);
+}
+
+/* Animation Classes */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { 
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to { 
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.fade-in {
+  animation: fadeIn 0.3s ease-in-out;
+}
+
+.slide-up {
+  animation: slideUp 0.3s ease-out;
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+}
+
+/* Focus Ring Utility */
+.focus-ring {
+  @apply focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800;
+}
+
+/* Mobile Optimizations */
+@media (max-width: 768px) {
+  html {
+    font-size: 14px;
+  }
+}
+
+/* High Contrast Support */
+@media (prefers-contrast: high) {
+  :root {
+    --theme-border: #000000;
+  }
+  
+  .dark {
+    --theme-border: #ffffff;
+  }
+}
