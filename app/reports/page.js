@@ -634,17 +634,19 @@ const fetchCOGS = async () => {
 
     const { startTime: bizStart, endTime: bizEnd } = dailySerialManager.getBusinessHours()
 
+    // Query order_stock_deductions which stores the pre-computed total_cogs per order.
+    // This is more reliable than summing stock_history records which may have duplicates
+    // or note-pattern mismatches that inflate the total.
     let query = supabase
-      .from('stock_history')
-      .select('quantity, cost_per_unit, total_cost, created_at')
+      .from('order_stock_deductions')
+      .select('deducted_at, deduction_result')
       .eq('user_id', user.id)
-      .eq('transaction_type', 'order_deduction')
 
     if (dateFrom) {
-      query = query.gte('created_at', new Date(`${dateFrom}T${bizStart}:00`).toISOString())
+      query = query.gte('deducted_at', new Date(`${dateFrom}T${bizStart}:00`).toISOString())
     }
     if (dateTo) {
-      query = query.lte('created_at', new Date(`${dateTo}T${bizEnd}:00`).toISOString())
+      query = query.lte('deducted_at', new Date(`${dateTo}T${bizEnd}:00`).toISOString())
     }
 
     const { data, error } = await query
@@ -654,9 +656,9 @@ const fetchCOGS = async () => {
     const dailyCogs = new Map()
 
     ;(data || []).forEach(item => {
-      const cost = Math.abs(parseFloat(item.total_cost || 0))
+      const cost = Math.abs(parseFloat(item.deduction_result?.total_cogs || 0))
       totalCogs += cost
-      const date = getBusinessDate(item.created_at, bizStart, bizEnd)
+      const date = getBusinessDate(item.deducted_at, bizStart, bizEnd)
       dailyCogs.set(date, (dailyCogs.get(date) || 0) + cost)
     })
 
