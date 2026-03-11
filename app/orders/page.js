@@ -1714,7 +1714,7 @@ export default function OrdersPage() {
         orderNumber: selectedOrder.order_number,
         dailySerial: selectedOrder.daily_serial || null,
         orderType: selectedOrder.order_type,
-        customerName: selectedOrder.customers?.name || "",
+        customerName: selectedOrder.customers?.full_name || "",
         customerPhone: selectedOrder.customers?.phone || "",
         totalAmount: selectedOrder.total_amount,
         subtotal: selectedOrder.subtotal,

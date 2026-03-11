@@ -314,11 +314,18 @@ const loadPrinters = async (userId = user?.id) => {
     console.log('Loaded printers from database:', data)
 
     // Map database fields to UI fields
-    const mappedPrinters = (data || []).map(printer => ({
-      ...printer,
-      usb_port: printer.usb_device_path || printer.usb_port,
-      printer_type: printer.connection_type === 'usb' ? 'usb' : 'ip'
-    }))
+    // Windows USB printers are stored with usb_device_path='WINUSB:<name>' in Supabase
+    const mappedPrinters = (data || []).map(printer => {
+      const usbPath = printer.usb_device_path || printer.usb_port
+      const isWindowsUSB = usbPath && usbPath.startsWith('WINUSB:')
+      return {
+        ...printer,
+        connection_type: isWindowsUSB ? 'windows_usb' : printer.connection_type,
+        usb_printer_name: isWindowsUSB ? usbPath.replace(/^WINUSB:/, '') : (printer.usb_printer_name || null),
+        usb_port: isWindowsUSB ? null : usbPath,
+        printer_type: isWindowsUSB ? 'windows_usb' : (printer.connection_type === 'usb' ? 'usb' : 'ip')
+      }
+    })
 
     setPrinters(mappedPrinters)
     
@@ -399,14 +406,20 @@ const handleSubmit = async (e) => {
   try {
     console.log('Submitting printer form...')
 
-    const printerData = {
+    const winPrinterName = formData.printer_type === 'windows_usb' ? formData.usb_printer_name : null
+
+    // Supabase payload: connection_type CHECK only allows 'ethernet' or 'usb'.
+    // Windows USB printers are stored as connection_type='usb' with usb_device_path='WINUSB:<name>'
+    // so they satisfy the schema constraints without any DB migration.
+    const supabaseData = {
       name: formData.name,
-      connection_type: formData.printer_type === 'ip' ? 'ethernet' : formData.printer_type === 'windows_usb' ? 'windows_usb' : 'usb',
+      connection_type: formData.printer_type === 'ip' ? 'ethernet' : 'usb',
       ip_address: formData.printer_type === 'ip' ? formData.ip_address : null,
       port: formData.printer_type === 'ip' ? parseInt(formData.port) : null,
-      usb_device_path: formData.printer_type === 'usb' ? formData.usb_port : null,
+      usb_device_path: formData.printer_type === 'windows_usb'
+        ? `WINUSB:${winPrinterName}`
+        : (formData.printer_type === 'usb' ? formData.usb_port : null),
       usb_device_name: formData.printer_type === 'usb' ? formData.name : null,
-      usb_printer_name: formData.printer_type === 'windows_usb' ? formData.usb_printer_name : null,
       is_default: formData.is_default,
       created_by: user.id,
       updated_at: new Date().toISOString()
@@ -419,7 +432,7 @@ const handleSubmit = async (e) => {
       console.log('Updating printer:', editingPrinter.id)
       const { data, error } = await supabase
         .from('printers')
-        .update(printerData)
+        .update(supabaseData)
         .eq('id', editingPrinter.id)
         .select()
         .single()
@@ -429,8 +442,8 @@ const handleSubmit = async (e) => {
       notify.success(`${formData.name} updated successfully`)
     } else {
       // Create new printer
-      console.log('Creating new printer with data:', printerData)
-      
+      console.log('Creating new printer with data:', supabaseData)
+
       // If this is set as default, first unset all other defaults for this user
       if (formData.is_default) {
         await supabase
@@ -442,7 +455,7 @@ const handleSubmit = async (e) => {
       const { data, error } = await supabase
         .from('printers')
         .insert([{
-          ...printerData,
+          ...supabaseData,
           is_active: true,
           created_at: new Date().toISOString()
         }])
@@ -454,9 +467,17 @@ const handleSubmit = async (e) => {
       notify.success(`${formData.name} added successfully`)
     }
 
+    // Merge usb_printer_name back for local storage (not in Supabase schema)
+    const localResult = { ...result, usb_printer_name: winPrinterName }
+
     // Save to localStorage using printerManager
-    console.log('Saving printer to localStorage:', result)
-    await printerManager.savePrinterConfig(result)
+    console.log('Saving printer to localStorage:', localResult)
+    await printerManager.savePrinterConfig(localResult)
+
+    // Save full config (including usb_printer_name) to Electron local storage
+    if (printerManager.isElectron()) {
+      await window.electronAPI.printerSave({ ...localResult, user_id: user.id })
+    }
 
     // Reload printers from database
     await loadPrinters(user.id)

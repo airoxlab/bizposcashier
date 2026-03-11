@@ -701,9 +701,10 @@ async function sendToWindowsPrinter(printerName, data) {
 
       fs.writeFileSync(receiptFile, data);
 
-      // Escape single quotes in names for PowerShell
+      // PowerShell single-quoted strings treat backslashes literally — no escaping needed.
+      // Only escape single quotes (by doubling them).
       const safePrinter = printerName.replace(/'/g, "''");
-      const safeFile = receiptFile.replace(/\\/g, '\\\\').replace(/'/g, "''");
+      const safeFile = receiptFile.replace(/'/g, "''"); // backslashes stay as-is
 
       const psScript = `
 Add-Type -TypeDefinition @'

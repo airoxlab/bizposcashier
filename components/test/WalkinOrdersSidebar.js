@@ -196,7 +196,8 @@ export default function WalkinOrdersSidebar({
               total_price,
               is_deal,
               deal_id,
-              deal_products
+              deal_products,
+              item_instructions
             )
           `)
           .eq('user_id', user.id)

@@ -42,7 +42,8 @@ import {
   Sun,
   Moon,
   WifiOff,
-  BookOpen
+  BookOpen,
+  Package
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
@@ -111,6 +112,9 @@ export default function ReportsPage() {
   })
 
   const [profitData, setProfitData] = useState({
+    totalCogs: 0,
+    grossProfit: 0,
+    grossMargin: 0,
     netProfit: 0,
     profitMargin: 0,
     dailyProfitLoss: [],
@@ -269,11 +273,12 @@ const fetchInitialData = async (userId) => {
     setLoading(true)
     try {
       // Fetch all reports data in parallel
-      const [salesResult, expenseResult, productPerformanceResult, peakHoursResult] = await Promise.all([
+      const [salesResult, expenseResult, productPerformanceResult, peakHoursResult, cogsResult] = await Promise.all([
         fetchSalesData(),
         fetchExpenseData(),
         fetchProductPerformanceData(),
-        fetchPeakHoursData()
+        fetchPeakHoursData(),
+        fetchCOGS()
       ])
 
       // Process the data after both are fetched (even if there are errors, use empty data)
@@ -304,7 +309,7 @@ const fetchInitialData = async (userId) => {
       // Product performance data is already set in the fetch function
       // No need to process it here as it's not used in other calculations
 
-      calculateProfitData(salesData, expenseData)
+      calculateProfitData(salesData, expenseData, cogsResult || { totalCogs: 0, dailyCogs: new Map() })
     } catch (error) {
       console.error('Error fetching reports data:', error)
       console.error('Error stack:', error?.stack)
@@ -332,6 +337,9 @@ const fetchInitialData = async (userId) => {
         topExpenseCategories: []
       })
       setProfitData({
+        totalCogs: 0,
+        grossProfit: 0,
+        grossMargin: 0,
         netProfit: 0,
         profitMargin: 0,
         dailyProfitLoss: []
@@ -617,6 +625,45 @@ const fetchExpenseData = async () => {
     }
     setExpenseData(emptyExpenseData)
     return { expenseData: emptyExpenseData, isOffline: false }
+  }
+}
+
+const fetchCOGS = async () => {
+  try {
+    if (!user?.id) return { totalCogs: 0, dailyCogs: new Map() }
+
+    const { startTime: bizStart, endTime: bizEnd } = dailySerialManager.getBusinessHours()
+
+    let query = supabase
+      .from('stock_history')
+      .select('quantity, cost_per_unit, total_cost, created_at')
+      .eq('user_id', user.id)
+      .eq('transaction_type', 'order_deduction')
+
+    if (dateFrom) {
+      query = query.gte('created_at', new Date(`${dateFrom}T${bizStart}:00`).toISOString())
+    }
+    if (dateTo) {
+      query = query.lte('created_at', new Date(`${dateTo}T${bizEnd}:00`).toISOString())
+    }
+
+    const { data, error } = await query
+    if (error) throw error
+
+    let totalCogs = 0
+    const dailyCogs = new Map()
+
+    ;(data || []).forEach(item => {
+      const cost = Math.abs(parseFloat(item.total_cost || 0))
+      totalCogs += cost
+      const date = getBusinessDate(item.created_at, bizStart, bizEnd)
+      dailyCogs.set(date, (dailyCogs.get(date) || 0) + cost)
+    })
+
+    return { totalCogs, dailyCogs }
+  } catch (error) {
+    console.error('Error fetching COGS:', error?.message || error)
+    return { totalCogs: 0, dailyCogs: new Map() }
   }
 }
 
@@ -1129,32 +1176,42 @@ const fetchExpenseData = async () => {
   }
 
  // Also replace the calculateProfitData function to ensure it uses correct revenue data
-const calculateProfitData = (salesDataParam, expenseDataParam) => {
-  const netProfit = salesDataParam.totalRevenue - expenseDataParam.totalExpenses
+const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = { totalCogs: 0, dailyCogs: new Map() }) => {
+  const { totalCogs, dailyCogs: dailyCogsMap } = cogsDataParam
+
+  const grossProfit = salesDataParam.totalRevenue - totalCogs
+  const grossMargin = salesDataParam.totalRevenue > 0 ? (grossProfit / salesDataParam.totalRevenue) * 100 : 0
+  const netProfit = salesDataParam.totalRevenue - expenseDataParam.totalExpenses - totalCogs
   const profitMargin = salesDataParam.totalRevenue > 0 ? (netProfit / salesDataParam.totalRevenue) * 100 : 0
 
-  // Combine daily revenue and expenses for profit/loss analysis
-  const dailyProfitLoss = []
+  // Combine daily revenue, expenses, and COGS for profit/loss analysis
   const allDates = new Set([
     ...salesDataParam.dailyTrends.map(d => d.date),
-    ...expenseDataParam.dailyExpenses.map(d => d.date)
+    ...expenseDataParam.dailyExpenses.map(d => d.date),
+    ...dailyCogsMap.keys()
   ])
 
+  const dailyProfitLoss = []
   Array.from(allDates).sort().forEach(date => {
     const revenue = salesDataParam.dailyTrends.find(d => d.date === date)?.revenue || 0
     const expenses = expenseDataParam.dailyExpenses.find(d => d.date === date)?.amount || 0
-    const profit = revenue - expenses
+    const cogs = dailyCogsMap.get(date) || 0
+    const profit = revenue - expenses - cogs
 
     dailyProfitLoss.push({
       date,
       revenue,
       expenses,
+      cogs,
       profit,
       profitMargin: revenue > 0 ? (profit / revenue) * 100 : 0
     })
   })
 
   const calculatedProfitData = {
+    totalCogs,
+    grossProfit,
+    grossMargin,
     netProfit,
     profitMargin,
     dailyProfitLoss
@@ -1208,9 +1265,12 @@ const calculateProfitData = (salesDataParam, expenseDataParam) => {
           { 'Metric': 'Total Orders', 'Value': salesData.totalOrders },
           { 'Metric': 'Average Order Value', 'Value': salesData.averageOrderValue.toFixed(2) },
           { 'Metric': 'Total Customers', 'Value': salesData.totalCustomers },
+          { 'Metric': 'COGS (Cost of Goods Sold)', 'Value': profitData.totalCogs.toFixed(2) },
+          { 'Metric': 'Gross Profit', 'Value': profitData.grossProfit.toFixed(2) },
+          { 'Metric': 'Gross Margin %', 'Value': profitData.grossMargin.toFixed(2) },
           { 'Metric': 'Total Expenses', 'Value': expenseData.totalExpenses.toFixed(2) },
           { 'Metric': 'Net Profit', 'Value': profitData.netProfit.toFixed(2) },
-          { 'Metric': 'Profit Margin %', 'Value': profitData.profitMargin.toFixed(2) }
+          { 'Metric': 'Net Profit Margin %', 'Value': profitData.profitMargin.toFixed(2) }
         ]
         break
 
@@ -1219,6 +1279,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam) => {
         csvData = profitData.dailyProfitLoss.map(day => ({
           'Date': day.date || '',
           'Revenue': (day.revenue || 0).toFixed(2),
+          'COGS': (day.cogs || 0).toFixed(2),
           'Expenses': (day.expenses || 0).toFixed(2),
           'Net Profit': (day.profit || 0).toFixed(2),
           'Profit Margin %': (day.profitMargin || 0).toFixed(2)
@@ -1712,6 +1773,22 @@ const calculateProfitData = (salesDataParam, expenseDataParam) => {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.1 }}
+                      className="bg-gradient-to-r from-orange-500 to-amber-600 rounded-3xl p-6 text-white shadow-xl"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-orange-100 text-sm">COGS</p>
+                          <p className="text-3xl font-bold">{formatCurrency(profitData.totalCogs)}</p>
+                          <p className="text-orange-200 text-xs mt-1">Cost of Goods Sold</p>
+                        </div>
+                        <Package className="w-12 h-12 text-orange-100" />
+                      </div>
+                    </motion.div>
+
+                    <motion.div
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.2 }}
                       className="bg-gradient-to-r from-red-500 to-pink-600 rounded-3xl p-6 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
@@ -1727,13 +1804,14 @@ const calculateProfitData = (salesDataParam, expenseDataParam) => {
                     <motion.div
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: 0.2 }}
+                      transition={{ delay: 0.3 }}
                       className={`bg-gradient-to-r ${profitData.netProfit >= 0 ? 'from-blue-500 to-cyan-600' : 'from-orange-500 to-red-600'} rounded-3xl p-6 text-white shadow-xl`}
                     >
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-blue-100 text-sm">Net Profit</p>
                           <p className="text-3xl font-bold">{formatCurrency(profitData.netProfit)}</p>
+                          <p className="text-blue-100 text-xs mt-1">After COGS + expenses</p>
                         </div>
                         {profitData.netProfit >= 0 ?
                           <TrendingUp className="w-12 h-12 text-blue-100" /> :
@@ -1745,13 +1823,14 @@ const calculateProfitData = (salesDataParam, expenseDataParam) => {
                     <motion.div
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: 0.3 }}
+                      transition={{ delay: 0.4 }}
                       className="bg-gradient-to-r from-purple-500 to-indigo-600 rounded-3xl p-6 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-purple-100 text-sm">Profit Margin</p>
                           <p className="text-3xl font-bold">{profitData.profitMargin.toFixed(1)}%</p>
+                          <p className="text-purple-100 text-xs mt-1">Gross: {profitData.grossMargin.toFixed(1)}%</p>
                         </div>
                         <Percent className="w-12 h-12 text-purple-100" />
                       </div>
@@ -1762,7 +1841,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam) => {
                   <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6 mb-8`}>
                     <h3 className={`text-xl font-bold ${themeClasses.textPrimary} mb-6 flex items-center`}>
                       <Activity className="w-5 h-5 mr-2 text-purple-600" />
-                      Revenue vs Expenses Overview
+                      Revenue vs COGS vs Expenses Overview
                     </h3>
                     <div className="h-80">
                       <ResponsiveContainer width="100%" height="100%">
@@ -1785,11 +1864,13 @@ const calculateProfitData = (salesDataParam, expenseDataParam) => {
                             formatter={(value, name) => [
                               formatCurrency(value),
                               name === 'revenue' ? 'Revenue' :
-                                name === 'expenses' ? 'Expenses' : 'Profit'
+                                name === 'cogs' ? 'COGS' :
+                                  name === 'expenses' ? 'Expenses' : 'Net Profit'
                             ]}
                             labelFormatter={(value) => new Date(value).toLocaleDateString()}
                           />
                           <Bar dataKey="revenue" fill={chartColors.success} name="revenue" />
+                          <Bar dataKey="cogs" fill={chartColors.expense} name="cogs" />
                           <Bar dataKey="expenses" fill={chartColors.danger} name="expenses" />
                           <Line
                             type="monotone"
@@ -1870,66 +1951,86 @@ const calculateProfitData = (salesDataParam, expenseDataParam) => {
               {activeReportTab === 'profit-loss' && (
                 <>
                   {/* Profit Metrics */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+                    {/* Revenue */}
                     <motion.div
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className={`bg-gradient-to-r ${profitData.netProfit >= 0 ? 'from-green-500 to-emerald-600' : 'from-red-500 to-pink-600'} rounded-3xl p-6 text-white shadow-xl`}
+                      className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-3xl p-5 text-white shadow-xl"
                     >
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-white/80 text-sm">Net Profit/Loss</p>
-                          <p className="text-3xl font-bold">{formatCurrency(profitData.netProfit)}</p>
-                          <p className="text-white/80 text-xs mt-1">
-                            {profitData.netProfit >= 0 ? 'Profitable' : 'Loss Making'}
-                          </p>
-                        </div>
-                        {profitData.netProfit >= 0 ?
-                          <TrendingUp className="w-12 h-12 text-white/80" /> :
-                          <TrendingDown className="w-12 h-12 text-white/80" />
-                        }
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-green-100 text-xs">Total Revenue</p>
+                        <DollarSign className="w-6 h-6 text-green-100" />
                       </div>
+                      <p className="text-2xl font-bold">{formatCurrency(salesData.totalRevenue)}</p>
+                      <p className="text-green-100 text-xs mt-1">{salesData.totalOrders} orders</p>
                     </motion.div>
 
+                    {/* COGS */}
+                    <motion.div
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.05 }}
+                      className="bg-gradient-to-r from-orange-500 to-amber-600 rounded-3xl p-5 text-white shadow-xl"
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-orange-100 text-xs">Cost of Goods Sold</p>
+                        <Package className="w-6 h-6 text-orange-100" />
+                      </div>
+                      <p className="text-2xl font-bold">{formatCurrency(profitData.totalCogs)}</p>
+                      <p className="text-orange-100 text-xs mt-1">Inventory consumed</p>
+                    </motion.div>
+
+                    {/* Gross Profit */}
                     <motion.div
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.1 }}
-                      className="bg-gradient-to-r from-blue-500 to-cyan-600 rounded-3xl p-6 text-white shadow-xl"
+                      className={`bg-gradient-to-r ${profitData.grossProfit >= 0 ? 'from-teal-500 to-cyan-600' : 'from-red-500 to-pink-600'} rounded-3xl p-5 text-white shadow-xl`}
                     >
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-blue-100 text-sm">Profit Margin</p>
-                          <p className="text-3xl font-bold">{profitData.profitMargin.toFixed(2)}%</p>
-                          <p className="text-blue-100 text-xs mt-1">
-                            {profitData.profitMargin > 20 ? 'Excellent' :
-                              profitData.profitMargin > 10 ? 'Good' :
-                                profitData.profitMargin > 0 ? 'Fair' : 'Poor'}
-                          </p>
-                        </div>
-                        <Percent className="w-12 h-12 text-blue-100" />
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-teal-100 text-xs">Gross Profit</p>
+                        <TrendingUp className="w-6 h-6 text-teal-100" />
                       </div>
+                      <p className="text-2xl font-bold">{formatCurrency(profitData.grossProfit)}</p>
+                      <p className="text-teal-100 text-xs mt-1">Margin: {profitData.grossMargin.toFixed(1)}%</p>
                     </motion.div>
 
+                    {/* Net Profit */}
+                    <motion.div
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.15 }}
+                      className={`bg-gradient-to-r ${profitData.netProfit >= 0 ? 'from-blue-500 to-indigo-600' : 'from-red-600 to-pink-700'} rounded-3xl p-5 text-white shadow-xl`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-blue-100 text-xs">Net Profit/Loss</p>
+                        {profitData.netProfit >= 0 ?
+                          <TrendingUp className="w-6 h-6 text-blue-100" /> :
+                          <TrendingDown className="w-6 h-6 text-red-100" />
+                        }
+                      </div>
+                      <p className="text-2xl font-bold">{formatCurrency(profitData.netProfit)}</p>
+                      <p className="text-blue-100 text-xs mt-1">After COGS + expenses</p>
+                    </motion.div>
+
+                    {/* Net Margin */}
                     <motion.div
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.2 }}
-                      className="bg-gradient-to-r from-purple-500 to-indigo-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-purple-500 to-indigo-600 rounded-3xl p-5 text-white shadow-xl"
                     >
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-purple-100 text-sm">Revenue:Expense Ratio</p>
-                          <p className="text-3xl font-bold">
-                            {expenseData.totalExpenses > 0 ?
-                              (salesData.totalRevenue / expenseData.totalExpenses).toFixed(1) :
-                              '∞'
-                            }:1
-                          </p>
-                          <p className="text-purple-100 text-xs mt-1">Revenue per expense</p>
-                        </div>
-                        <Calculator className="w-12 h-12 text-purple-100" />
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-purple-100 text-xs">Net Margin</p>
+                        <Percent className="w-6 h-6 text-purple-100" />
                       </div>
+                      <p className="text-2xl font-bold">{profitData.profitMargin.toFixed(1)}%</p>
+                      <p className="text-purple-100 text-xs mt-1">
+                        {profitData.profitMargin > 20 ? 'Excellent' :
+                          profitData.profitMargin > 10 ? 'Good' :
+                            profitData.profitMargin > 0 ? 'Fair' : 'Poor'}
+                      </p>
                     </motion.div>
                   </div>
 
@@ -1937,7 +2038,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam) => {
                   <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6 mb-8`}>
                     <h3 className={`text-xl font-bold ${themeClasses.textPrimary} mb-6 flex items-center`}>
                       <LineChart className="w-5 h-5 mr-2 text-purple-600" />
-                      Daily Profit & Loss Analysis
+                      Daily Profit & Loss Analysis (with COGS)
                     </h3>
                     <div className="h-96">
                       <ResponsiveContainer width="100%" height="100%">
@@ -1960,13 +2061,15 @@ const calculateProfitData = (salesDataParam, expenseDataParam) => {
                             formatter={(value, name) => [
                               name === 'profitMargin' ? `${value.toFixed(2)}%` : formatCurrency(value),
                               name === 'revenue' ? 'Revenue' :
-                                name === 'expenses' ? 'Expenses' :
-                                  name === 'profit' ? 'Net Profit' :
-                                    'Profit Margin'
+                                name === 'cogs' ? 'COGS' :
+                                  name === 'expenses' ? 'Expenses' :
+                                    name === 'profit' ? 'Net Profit' :
+                                      'Profit Margin'
                             ]}
                             labelFormatter={(value) => `Date: ${new Date(value).toLocaleDateString()}`}
                           />
                           <Bar dataKey="revenue" fill={chartColors.success} name="revenue" />
+                          <Bar dataKey="cogs" fill={chartColors.expense} name="cogs" />
                           <Bar dataKey="expenses" fill={chartColors.danger} name="expenses" />
                           <Line
                             type="monotone"
@@ -1975,15 +2078,6 @@ const calculateProfitData = (salesDataParam, expenseDataParam) => {
                             strokeWidth={4}
                             name="profit"
                             dot={{ fill: chartColors.primary, strokeWidth: 2, r: 6 }}
-                          />
-                          <Line
-                            type="monotone"
-                            dataKey="profitMargin"
-                            stroke={chartColors.warning}
-                            strokeWidth={3}
-                            name="profitMargin"
-                            yAxisId="right"
-                            dot={{ fill: chartColors.warning, strokeWidth: 2, r: 4 }}
                           />
                         </ComposedChart>
                       </ResponsiveContainer>
@@ -2002,6 +2096,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam) => {
                           <tr className={`${themeClasses.border} border-b`}>
                             <th className={`text-left py-3 px-4 font-semibold ${themeClasses.textPrimary}`}>Date</th>
                             <th className={`text-right py-3 px-4 font-semibold ${themeClasses.textPrimary}`}>Revenue</th>
+                            <th className={`text-right py-3 px-4 font-semibold text-orange-600`}>COGS</th>
                             <th className={`text-right py-3 px-4 font-semibold ${themeClasses.textPrimary}`}>Expenses</th>
                             <th className={`text-right py-3 px-4 font-semibold ${themeClasses.textPrimary}`}>Net Profit</th>
                             <th className={`text-right py-3 px-4 font-semibold ${themeClasses.textPrimary}`}>Margin %</th>
@@ -2016,6 +2111,9 @@ const calculateProfitData = (salesDataParam, expenseDataParam) => {
                               </td>
                               <td className="py-3 px-4 text-right font-semibold text-green-600">
                                 {formatCurrency(day.revenue)}
+                              </td>
+                              <td className="py-3 px-4 text-right font-semibold text-orange-600">
+                                {formatCurrency(day.cogs || 0)}
                               </td>
                               <td className="py-3 px-4 text-right font-semibold text-red-600">
                                 {formatCurrency(day.expenses)}

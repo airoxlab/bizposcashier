@@ -306,14 +306,17 @@ export default function KDSPage() {
             .select(`
               id,
               order_number,
+              daily_serial,
               order_type,
               order_status,
               order_time,
               total_amount,
               subtotal,
+              discount_amount,
               created_at,
               order_instructions,
               delivery_charges,
+              delivery_address,
               cashier_id,
               updated_at,
               order_items (
@@ -811,6 +814,8 @@ export default function KDSPage() {
         deliveryCharges: order.delivery_charges || 0,
         discountAmount: order.discount_amount || 0,
         specialNotes: order.order_instructions || '',
+        tableName: order.tables?.table_name || (order.tables?.table_number ? `Table ${order.tables.table_number}` : null) || null,
+        deliveryAddress: order.delivery_address || order.customers?.addressline || order.customers?.address || '',
         items: mappedItems,
       }
 
