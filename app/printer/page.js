@@ -81,6 +81,13 @@ export default function PrinterPage() {
   const [testingPrinter, setTestingPrinter] = useState(null)
   const [connectionResults, setConnectionResults] = useState({})
 
+  // Category/Deal → Printer routing
+  const [categories, setCategories] = useState([])
+  const [deals, setDeals] = useState([])
+  const [categoryMappings, setCategoryMappings] = useState({}) // { 'category:<id>' | 'deal:<id>' : printerId }
+  const [savingMappings, setSavingMappings] = useState(false)
+  const [routingTab, setRoutingTab] = useState('categories') // 'categories' | 'deals'
+
   // Network Printing states
   const [sharePrinterMode, setSharePrinterMode] = useState(false)
   const [isServer, setIsServer] = useState(false)
@@ -117,6 +124,9 @@ useEffect(() => {
 
     // NOW load printers (after user ID is set and user state is set)
     await loadPrinters(userData.id)
+
+    // Load categories, deals and existing routing mappings
+    await loadRoutingData(userData.id)
 
     // Load network printing settings from database
     await loadNetworkPrintingSettings(userData)
@@ -870,6 +880,108 @@ const autoDiscoverPrinters = async () => {
     }
   }
 
+  const loadRoutingData = async (userId) => {
+    try {
+      // Load categories, deals, and existing mappings in parallel
+      const [catRes, dealRes, mappingRes] = await Promise.all([
+        supabase.from('categories').select('id, name').eq('user_id', userId).order('name'),
+        supabase.from('deals').select('id, name').eq('user_id', userId).eq('is_active', true).order('name'),
+        supabase.from('printer_category_mappings').select('type, entity_id, printer_id').eq('user_id', userId)
+      ])
+      // Deduplicate by id in case the DB returns duplicate rows
+      if (catRes.data) {
+        const seen = new Set()
+        setCategories(catRes.data.filter(c => seen.has(c.id) ? false : seen.add(c.id)))
+      }
+      if (dealRes.data) {
+        const seen = new Set()
+        setDeals(dealRes.data.filter(d => seen.has(d.id) ? false : seen.add(d.id)))
+      }
+
+      if (mappingRes.data && mappingRes.data.length > 0) {
+        // Supabase is the source of truth when online
+        const map = {}
+        mappingRes.data.forEach(m => { map[`${m.type}:${m.entity_id}`] = m.printer_id })
+        setCategoryMappings(map)
+        // Sync down to local cache for offline use
+        if (printerManager.isElectron()) {
+          const localMappings = mappingRes.data.map(m => ({ type: m.type, id: m.entity_id, printer_id: m.printer_id }))
+          window.electronAPI.printerMappingsSave(localMappings).catch(() => {})
+        }
+      } else if (printerManager.isElectron()) {
+        // Offline fallback: load from local file
+        const res = await window.electronAPI.printerMappingsLoad()
+        if (res.success && res.mappings?.length > 0) {
+          const map = {}
+          res.mappings.forEach(m => { map[`${m.type}:${m.id}`] = m.printer_id })
+          setCategoryMappings(map)
+        }
+      }
+    } catch (err) {
+      console.error('Error loading routing data:', err)
+      // On any error, fall back to local cache
+      if (printerManager.isElectron()) {
+        try {
+          const res = await window.electronAPI.printerMappingsLoad()
+          if (res.success && res.mappings?.length > 0) {
+            const map = {}
+            res.mappings.forEach(m => { map[`${m.type}:${m.id}`] = m.printer_id })
+            setCategoryMappings(map)
+          }
+        } catch {}
+      }
+    }
+  }
+
+  const saveRoutingMappings = async () => {
+    setSavingMappings(true)
+
+    // Build the local mappings array (always needed for both paths)
+    const localMappings = Object.entries(categoryMappings)
+      .filter(([, printerId]) => printerId)
+      .map(([key, printer_id]) => {
+        const [type, ...rest] = key.split(':')
+        return { type, id: rest.join(':'), printer_id }
+      })
+
+    // Always save to local file first so offline works regardless
+    if (printerManager.isElectron()) {
+      try { await window.electronAPI.printerMappingsSave(localMappings) } catch {}
+    }
+
+    try {
+      const supabaseMappings = localMappings.map(m => ({
+        type: m.type,
+        entity_id: m.id,
+        printer_id: m.printer_id,
+        user_id: user.id
+      }))
+
+      // Delete existing rows for this user then re-insert
+      const { error: delErr } = await supabase
+        .from('printer_category_mappings')
+        .delete()
+        .eq('user_id', user.id)
+      if (delErr) throw new Error(delErr.message || JSON.stringify(delErr))
+
+      if (supabaseMappings.length > 0) {
+        const { error: insErr } = await supabase
+          .from('printer_category_mappings')
+          .insert(supabaseMappings)
+        if (insErr) throw new Error(insErr.message || JSON.stringify(insErr))
+      }
+
+      notify.success('Printer routing saved!')
+    } catch (err) {
+      const msg = err?.message || String(err)
+      console.error('Failed to sync routing to Supabase:', msg)
+      // Local save already done above — show warning not error
+      notify.warning('Saved locally. Supabase sync failed: ' + msg)
+    } finally {
+      setSavingMappings(false)
+    }
+  }
+
   const loadWindowsPrinters = async () => {
     if (!printerManager.isElectron()) return
     setIsLoadingWindowsPrinters(true)
@@ -1599,6 +1711,95 @@ const autoDiscoverPrinters = async () => {
                   </div>
                 </div>
               </div>
+
+              {/* Kitchen Token Routing */}
+              {(categories.length > 0 || deals.length > 0) && (
+                <div className={`${classes.card} rounded-2xl ${classes.shadow} shadow-lg ${classes.border} border p-6`}>
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h2 className={`text-xl font-bold ${classes.textPrimary} flex items-center space-x-2`}>
+                        <Settings className="w-5 h-5 text-orange-500" />
+                        <span>Kitchen Token Routing</span>
+                      </h2>
+                      <p className={`text-xs ${classes.textSecondary} mt-1`}>
+                        Map categories & deals to specific printers. Unmapped items go to the default printer.
+                      </p>
+                    </div>
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={saveRoutingMappings}
+                      disabled={savingMappings}
+                      className="px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-semibold rounded-xl text-sm flex items-center space-x-2 transition-colors"
+                    >
+                      {savingMappings ? (
+                        <><RefreshCw className="w-4 h-4 animate-spin" /><span>Saving…</span></>
+                      ) : (
+                        <><Check className="w-4 h-4" /><span>Save Routing</span></>
+                      )}
+                    </motion.button>
+                  </div>
+
+                  {/* Tabs */}
+                  <div className={`flex space-x-1 ${isDark ? 'bg-gray-800' : 'bg-gray-100'} rounded-xl p-1 mb-4`}>
+                    {['categories', 'deals'].map(tab => (
+                      <button
+                        key={tab}
+                        onClick={() => setRoutingTab(tab)}
+                        className={`flex-1 py-2 text-sm font-medium rounded-lg transition-all capitalize ${
+                          routingTab === tab
+                            ? 'bg-orange-500 text-white shadow'
+                            : `${classes.textSecondary} hover:${classes.textPrimary}`
+                        }`}
+                      >
+                        {tab}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Rows */}
+                  <div className="space-y-2 max-h-72 overflow-y-auto">
+                    {routingTab === 'categories' && (
+                      categories.length === 0 ? (
+                        <p className={`text-sm ${classes.textSecondary} text-center py-6`}>No categories found</p>
+                      ) : categories.map(cat => (
+                        <div key={cat.id} className={`flex items-center justify-between p-3 rounded-xl ${isDark ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                          <span className={`text-sm font-medium ${classes.textPrimary} truncate flex-1 mr-3`}>{cat.name}</span>
+                          <select
+                            value={categoryMappings[`category:${cat.id}`] || ''}
+                            onChange={e => setCategoryMappings(prev => ({ ...prev, [`category:${cat.id}`]: e.target.value || null }))}
+                            className={`text-sm px-3 py-1.5 rounded-lg ${classes.border} border ${classes.card} ${classes.textPrimary} focus:outline-none focus:ring-2 focus:ring-orange-400 min-w-[160px]`}
+                          >
+                            <option value="">Default printer</option>
+                            {printers.map(p => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      ))
+                    )}
+                    {routingTab === 'deals' && (
+                      deals.length === 0 ? (
+                        <p className={`text-sm ${classes.textSecondary} text-center py-6`}>No active deals found</p>
+                      ) : deals.map(deal => (
+                        <div key={deal.id} className={`flex items-center justify-between p-3 rounded-xl ${isDark ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                          <span className={`text-sm font-medium ${classes.textPrimary} truncate flex-1 mr-3`}>{deal.name}</span>
+                          <select
+                            value={categoryMappings[`deal:${deal.id}`] || ''}
+                            onChange={e => setCategoryMappings(prev => ({ ...prev, [`deal:${deal.id}`]: e.target.value || null }))}
+                            className={`text-sm px-3 py-1.5 rounded-lg ${classes.border} border ${classes.card} ${classes.textPrimary} focus:outline-none focus:ring-2 focus:ring-orange-400 min-w-[160px]`}
+                          >
+                            <option value="">Default printer</option>
+                            {printers.map(p => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

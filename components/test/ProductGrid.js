@@ -1,8 +1,9 @@
 'use client'
 
-import { Plus, Coffee, Search, X } from 'lucide-react'
+import { Plus, Coffee, Search, X, BarChart2 } from 'lucide-react'
 import { useRef, forwardRef, useImperativeHandle, useMemo, useState, useEffect } from 'react'
 import { cacheManager } from '../../lib/cacheManager'
+import CashierAnalytics from '../pos/CashierAnalytics'
 
 const ProductGrid = forwardRef(({
   categories = [],
@@ -21,6 +22,7 @@ const ProductGrid = forwardRef(({
   const searchInputRef = useRef(null)
   const gridContainerRef = useRef(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const [showAnalytics, setShowAnalytics] = useState(false)
 
   // Auto-focus search on mount
   useEffect(() => {
@@ -155,6 +157,7 @@ const ProductGrid = forwardRef(({
   const isSearchActive = searchQuery.trim().length > 0
 
   return (
+    <>
     <div className={`flex-1 flex flex-col overflow-hidden ${isDark ? 'bg-gray-900' : 'bg-gray-50'}`}>
       <div className={`${classes.card} ${classes.shadow} shadow-sm ${classes.border} border-b p-4`}>
         <div className="flex items-center justify-between mb-3">
@@ -176,12 +179,21 @@ const ProductGrid = forwardRef(({
               {headerCenter}
             </div>
           )}
-          <div className="text-right">
-            <div className={`text-xs ${classes.textSecondary}`}>
-              {new Date().toLocaleDateString()}
-            </div>
-            <div className={`text-sm font-semibold ${classes.textPrimary}`}>
-              {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowAnalytics(true)}
+              title="My Shift Analytics"
+              className={`p-2 rounded-xl transition-all ${isDark ? 'hover:bg-indigo-900/40 text-indigo-400' : 'hover:bg-indigo-50 text-indigo-500'}`}
+            >
+              <BarChart2 className="w-4.5 h-4.5" style={{ width: 18, height: 18 }} />
+            </button>
+            <div className="text-right">
+              <div className={`text-xs ${classes.textSecondary}`}>
+                {new Date().toLocaleDateString()}
+              </div>
+              <div className={`text-sm font-semibold ${classes.textPrimary}`}>
+                {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}
+              </div>
             </div>
           </div>
         </div>
@@ -508,6 +520,15 @@ const ProductGrid = forwardRef(({
         )}
       </div>
     </div>
+
+    {showAnalytics && (
+      <CashierAnalytics
+        isOpen={showAnalytics}
+        onClose={() => setShowAnalytics(false)}
+        isDark={isDark}
+      />
+    )}
+    </>
   )
 })
 

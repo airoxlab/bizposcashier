@@ -629,9 +629,12 @@ export default function NewOrderPage() {
       }
       if (!orderItems.length) orderItems = order.order_items || order.items || []
 
+      const productCategoryMap = {}
+      cacheManager.cache?.products?.forEach(p => { productCategoryMap[p.id] = p.category_id })
+
       const mappedItems = orderItems.map(item => item.is_deal
-        ? { isDeal: true, name: item.product_name, quantity: item.quantity, dealProducts: (() => { try { return typeof item.deal_products === 'string' ? JSON.parse(item.deal_products) : (item.deal_products || []) } catch(e) { return [] } })(), instructions: item.item_instructions || '' }
-        : { isDeal: false, name: item.product_name, size: item.variant_name, quantity: item.quantity, instructions: item.item_instructions || '' }
+        ? { isDeal: true, name: item.product_name, quantity: item.quantity, dealProducts: (() => { try { return typeof item.deal_products === 'string' ? JSON.parse(item.deal_products) : (item.deal_products || []) } catch(e) { return [] } })(), instructions: item.item_instructions || '', category_id: null, deal_id: item.deal_id || null }
+        : { isDeal: false, name: item.product_name, size: item.variant_name, quantity: item.quantity, instructions: item.item_instructions || '', category_id: item.category_id || productCategoryMap[item.product_id] || null, deal_id: null }
       )
 
       const orderData = {
@@ -654,8 +657,17 @@ export default function NewOrderPage() {
         customer_name: !order.cashier_id ? cashierName : null,
       }
 
-      const result = await printerManager.printKitchenToken(orderData, userProfile, printer)
-      if (!result.success) throw new Error(result.error || 'Print failed')
+      const results = await printerManager.printKitchenTokens(orderData, userProfile, printer)
+      const allOk = results.every(r => r?.success)
+      const anyOk = results.some(r => r?.success)
+      if (allOk) {
+        // success
+      } else if (anyOk) {
+        const failed = results.filter(r => !r?.success).map(r => r?.printerName || r?.printerId).join(', ')
+        console.warn(`Kitchen token partial: failed for ${failed}`)
+      } else {
+        throw new Error(results[0]?.error || 'Print failed')
+      }
     } catch (error) {
       console.error('Kitchen token print error:', error)
       toast.error(`Print failed: ${error.message}`)
@@ -831,6 +843,7 @@ export default function NewOrderPage() {
         const totalPaid = paymentData.reduce((sum, p) => sum + parseFloat(p.amount), 0)
         const transactions = paymentData.map(payment => ({
           order_id: order.id,
+          user_id: user?.id || order.user_id,
           payment_method: payment.method,
           amount: parseFloat(payment.amount),
           reference_number: payment.reference || null,

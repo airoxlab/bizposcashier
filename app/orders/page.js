@@ -1432,6 +1432,12 @@ export default function OrdersPage() {
       localStorage.setItem("takeaway_time", order.takeaway_time);
     }
 
+    // 🔥 FIX: Save table for walkin orders so it's restored on the walkin page
+    if (order.order_type === "walkin" && order.table_id) {
+      const tableObj = order.tables || { id: order.table_id };
+      localStorage.setItem("walkin_table", JSON.stringify(tableObj));
+    }
+
     // Get the name of who is reopening
     const reopenedBy =
       currentRole === "cashier" && currentCashier?.name
@@ -1652,6 +1658,9 @@ export default function OrdersPage() {
       }
 
       // Prepare order data for kitchen token
+      const productCategoryMap = {}
+      cacheManager.cache?.products?.forEach(p => { productCategoryMap[p.id] = p.category_id })
+
       let mappedItems = orderItems.map((item) => {
         // DEBUG: Log ALL items to see what we're getting from database
         console.log('🍳 Kitchen - Raw item from DB:', JSON.stringify(item, null, 2));
@@ -1687,7 +1696,9 @@ export default function OrdersPage() {
             variantId: item.variant_id,
             productName: item.product_name,
             variantName: item.variant_name,
-            instructions: item.item_instructions || ''
+            instructions: item.item_instructions || '',
+            category_id: null,
+            deal_id: item.deal_id || null,
           };
         }
         // Handle regular items
@@ -1701,7 +1712,9 @@ export default function OrdersPage() {
           variantId: item.variant_id,
           productName: item.product_name,
           variantName: item.variant_name,
-          instructions: item.item_instructions || ''
+          instructions: item.item_instructions || '',
+          category_id: item.category_id || productCategoryMap[item.product_id] || null,
+          deal_id: null,
         };
       })
 
@@ -1746,14 +1759,20 @@ export default function OrdersPage() {
       };
 
       // Use printerManager to print kitchen token (routes to USB or IP automatically)
-      const result = await printerManager.printKitchenToken(
+      const results = await printerManager.printKitchenTokens(
         orderData,
         userProfile,
         printer
       );
-
-      if (!result.success) {
-        console.error("Kitchen token print failed:", result.error);
+      const allOk = results.every(r => r?.success)
+      const anyOk = results.some(r => r?.success)
+      if (allOk) {
+        // success
+      } else if (anyOk) {
+        const failed = results.filter(r => !r?.success).map(r => r?.printerName || r?.printerId).join(', ')
+        console.warn(`Kitchen token partial: failed for ${failed}`)
+      } else {
+        console.error("Kitchen token print failed:", results[0]?.error);
       }
     } catch (error) {
       console.error("Kitchen token print error:", error);

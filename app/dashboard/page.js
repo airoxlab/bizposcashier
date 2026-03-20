@@ -45,6 +45,7 @@ import { authManager } from '../../lib/authManager'
 import { webOrderNotificationManager } from '../../lib/webOrderNotification'
 import { networkPrintListener } from '../../lib/networkPrintListener'
 import ProtectedPage from '../../components/ProtectedPage'
+import CashierAnalytics from '../../components/pos/CashierAnalytics'
 import { usePermissions, permissionManager } from '../../lib/permissionManager'
 
 export default function Dashboard() {
@@ -422,6 +423,7 @@ export default function Dashboard() {
   // Get theme classes from theme manager
   const themeClasses = themeManager.getClasses()
   const isDark = themeManager.isDark()
+  const [showAnalytics, setShowAnalytics] = useState(false)
 
   // Get role badge color
   const getRoleBadge = () => {
@@ -522,6 +524,19 @@ export default function Dashboard() {
                   <RefreshCw className="w-4 h-4 text-blue-500 animate-spin" />
                 )}
               </div>
+
+              {/* Analytics Button */}
+              {permissions.canViewSalesAnalytics() && (
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => setShowAnalytics(true)}
+                  className={`p-3 rounded-xl ${themeClasses.button} transition-all`}
+                  title="My Shift Analytics"
+                >
+                  <BarChart3 className="w-5 h-5 text-indigo-500" />
+                </motion.button>
+              )}
 
               {/* Refresh Button */}
               <motion.button
@@ -955,6 +970,12 @@ export default function Dashboard() {
         </motion.div>
       </main>
       </div>
+
+      <CashierAnalytics
+        isOpen={showAnalytics}
+        onClose={() => setShowAnalytics(false)}
+        isDark={isDark}
+      />
     </ProtectedPage>
   )
 }

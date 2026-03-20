@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { Table2, Users, MapPin, Check, RefreshCw } from 'lucide-react'
 import { cacheManager } from '../../lib/cacheManager'
+import { isInTodaysBusinessDay } from '../../lib/utils/businessDayUtils'
 
 export default function TableSelectionPanel({
   onSelectTable,
@@ -31,11 +32,18 @@ export default function TableSelectionPanel({
 
   // Overlay occupied status from active orders so the table grid is always accurate
   // even if updateTableStatus() was missed or ran out of order.
+  // Only considers orders from the current business day to avoid stale pending
+  // orders from previous sessions blocking tables.
   const applyActiveOrderOccupancy = (tableList) => {
+    const userProfile = (() => { try { return JSON.parse(localStorage.getItem('user_profile') || '{}') } catch { return {} } })()
+    const startTime = userProfile.business_start_time || '10:00'
+    const endTime = userProfile.business_end_time || '03:00'
+
     const activeOrders = (cacheManager.cache?.orders || []).filter(o =>
       o.table_id &&
       o.order_type === 'walkin' &&
-      !['completed', 'cancelled', 'Completed', 'Cancelled'].includes(o.order_status)
+      !['completed', 'cancelled', 'Completed', 'Cancelled'].includes(o.order_status) &&
+      isInTodaysBusinessDay(o.created_at, startTime, endTime)
     )
     const occupiedTableIds = new Set(activeOrders.map(o => o.table_id))
     return tableList.map(t => ({
@@ -49,30 +57,29 @@ export default function TableSelectionPanel({
     setError(null)
 
     try {
-      // Get tables from cache first (fast)
-      let cachedTables = cacheManager.getAllTables()
-
+      // Show cached tables immediately for fast render, then refresh in background
+      const cachedTables = cacheManager.getAllTables()
       if (cachedTables.length > 0 && !forceRefresh) {
         setTables(applyActiveOrderOccupancy(cachedTables))
         setIsLoading(false)
-        console.log(`📦 [Tables] Loaded ${cachedTables.length} tables from cache`)
-        return
       }
 
-      // If no cached tables or force refresh, fetch from database
-      console.log('🔄 [Tables] Refreshing tables from database...')
-      const refreshedTables = await cacheManager.refreshTables()
-      setTables(applyActiveOrderOccupancy(refreshedTables || []))
-      console.log(`✅ [Tables] Loaded ${refreshedTables?.length || 0} tables from database`)
+      // Always fetch fresh orders + tables from DB to get accurate occupancy
+      // (stale cache can show a table as occupied even after the order is completed)
+      if (navigator.onLine !== false) {
+        await cacheManager.fetchRecentOrders()
+        const refreshedTables = await cacheManager.refreshTables()
+        setTables(applyActiveOrderOccupancy(refreshedTables || []))
+      }
     } catch (err) {
       console.error('Error fetching tables:', err)
-      setError(err.message)
 
       // Try to use cached tables as fallback
       const fallbackTables = cacheManager.getAllTables()
       if (fallbackTables.length > 0) {
         setTables(applyActiveOrderOccupancy(fallbackTables))
-        setError(null)
+      } else {
+        setError(err.message)
       }
     } finally {
       setIsLoading(false)

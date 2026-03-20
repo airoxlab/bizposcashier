@@ -1035,5 +1035,7 @@ function registerUSBPrinter(ipcMain) {
 module.exports = {
   registerUSBPrinter,
   printReceiptToUSB,
-  printKitchenTokenToUSB
+  printKitchenTokenToUSB,
+  generateReceiptESCPOS,
+  generateKitchenTokenESCPOS
 };

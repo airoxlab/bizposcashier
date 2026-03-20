@@ -1,10 +1,32 @@
-const { app, BrowserWindow, ipcMain, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, globalShortcut, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const url = require('url');
 const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
+
+// Suppress non-critical file-system errors (EPERM on logo/QR temp files)
+// so they never pop up an Electron error dialog during login or printing.
+process.on('uncaughtException', (err) => {
+  const isFilePermissionError = err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'EBUSY';
+  const isPrinterAsset = err.message && (
+    err.message.includes('logo.png') ||
+    err.message.includes('qr.png') ||
+    err.message.includes('printer-assets') ||
+    err.message.includes('printing') ||
+    err.message.includes('temp')
+  );
+
+  if (isFilePermissionError && isPrinterAsset) {
+    log.warn('[BizPOS] Suppressed non-critical file error during asset download:', err.message);
+    return; // Don't crash — logo/QR is optional, printing still works without it
+  }
+
+  // For all other uncaught exceptions, log and show dialog as usual
+  log.error('[BizPOS] Uncaught exception:', err);
+  dialog.showErrorBox('BizPOS Error', `An unexpected error occurred:\n\n${err.message}`);
+});
 
 // Enable hot reload for Electron in development
 const isDev = process.env.ELECTRON_IS_DEV === '1';
@@ -199,8 +221,12 @@ function createWindow() {
 
     server.on('error', (err) => {
       if (err.code === 'EADDRINUSE') {
-        log.warn(`[BizPOS] Fixed port ${FIXED_PORT} is already in use — falling back to random port. WARNING: Offline orders will NOT persist across restarts in this session.`);
-        server.listen(0, '127.0.0.1', loadAppFromServer);
+        log.error(`[BizPOS] Fixed port ${FIXED_PORT} is already in use. Another instance may already be running.`);
+        dialog.showErrorBox(
+          'BizPOS — Port In Use',
+          `Port ${FIXED_PORT} is already in use.\n\nAnother instance of BizPOS may already be running.\n\nOffline orders cannot be saved if BizPOS starts on a different port each time.\n\nPlease close any other BizPOS windows and restart the app.`
+        );
+        app.quit();
       } else {
         log.error('[BizPOS] HTTP server error:', err.message);
       }
@@ -347,8 +373,8 @@ app.whenReady().then(() => {
         }
         console.log('🖨️ Routing to IP printer:', ipAddress);
         const port = parseInt(printerConfig.port || '9100');
-        const result = await printKitchenToken(ipAddress, port, orderData, userProfile);
-        return result;
+        await printKitchenToken(ipAddress, port, orderData, userProfile);
+        return { success: true };
       }
     } catch (error) {
       console.error('❌ Kitchen token print error:', error);

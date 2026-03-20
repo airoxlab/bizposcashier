@@ -769,6 +769,9 @@ export default function KDSPage() {
       let orderItems = order.order_items || []
 
       // Prepare order data for kitchen token - must match expected format
+      const productCategoryMap = {}
+      cacheManager.cache?.products?.forEach(p => { productCategoryMap[p.id] = p.category_id })
+
       let mappedItems = orderItems.map((item) => {
         if (item.is_deal) {
           let dealProducts = []
@@ -787,6 +790,8 @@ export default function KDSPage() {
             quantity: item.quantity,
             dealProducts: dealProducts,
             instructions: item.item_instructions || item.instructions || '',
+            category_id: null,
+            deal_id: item.deal_id || null,
           }
         }
         return {
@@ -795,6 +800,8 @@ export default function KDSPage() {
           size: item.variant_name || '',
           quantity: item.quantity,
           instructions: item.item_instructions || item.instructions || '',
+          category_id: item.category_id || productCategoryMap[item.product_id] || null,
+          deal_id: null,
         }
       })
 
@@ -841,14 +848,18 @@ export default function KDSPage() {
       console.log('🖨️ Printing docket for order:', orderData.orderNumber)
       console.log('🖨️ Final printer config:', JSON.stringify(printerConfig, null, 2))
 
-      const result = await printerManager.printKitchenToken(orderData, userProfile, printerConfig)
-
-      if (result.success) {
+      const results = await printerManager.printKitchenTokens(orderData, userProfile, printerConfig)
+      const allOk = results.every(r => r?.success)
+      const anyOk = results.some(r => r?.success)
+      if (allOk) {
         console.log('✅ Docket printed successfully')
         notify.success('Docket printed successfully')
+      } else if (anyOk) {
+        const failed = results.filter(r => !r?.success).map(r => r?.printerName || r?.printerId).join(', ')
+        console.warn(`Kitchen token partial: failed for ${failed}`)
       } else {
-        console.error('❌ Print failed:', result.error)
-        notify.error(`Failed to print docket: ${result.error || 'Unknown error'}`)
+        console.error('❌ Print failed:', results[0]?.error)
+        notify.error(`Failed to print docket: ${results[0]?.error || 'Unknown error'}`)
       }
     } catch (error) {
       console.error('❌ Error printing docket:', error)

@@ -778,6 +778,7 @@ export default function TakeawayPage() {
         // Prepare payment transactions
         const transactions = paymentData.map(payment => ({
           order_id: order.id,
+          user_id: user?.id || order.user_id,
           payment_method: payment.method,
           amount: parseFloat(payment.amount),
           reference_number: payment.reference || null,
@@ -1751,6 +1752,9 @@ export default function TakeawayPage() {
         orderItems = order.items || order.order_items || []
       }
 
+      const productCategoryMap = {}
+      cacheManager.cache?.products?.forEach(p => { productCategoryMap[p.id] = p.category_id })
+
       let mappedItems = orderItems.map((item) => {
         if (item.is_deal) {
           let dealProducts = []
@@ -1774,7 +1778,9 @@ export default function TakeawayPage() {
             variantId: item.variant_id,
             productName: item.product_name,
             variantName: item.variant_name,
-            instructions: item.item_instructions || ''
+            instructions: item.item_instructions || '',
+            category_id: null,
+            deal_id: item.deal_id || null,
           }
         }
         return {
@@ -1787,7 +1793,9 @@ export default function TakeawayPage() {
           variantId: item.variant_id,
           productName: item.product_name,
           variantName: item.variant_name,
-          instructions: item.item_instructions || ''
+          instructions: item.item_instructions || '',
+          category_id: item.category_id || productCategoryMap[item.product_id] || null,
+          deal_id: null,
         }
       })
 
@@ -1833,12 +1841,16 @@ export default function TakeawayPage() {
         customer_name: !order.cashier_id ? cashierName : null,
       }
 
-      const result = await printerManager.printKitchenToken(orderData, userProfile, printer)
-
-      if (result.success) {
+      const results = await printerManager.printKitchenTokens(orderData, userProfile, printer)
+      const allOk = results.every(r => r?.success)
+      const anyOk = results.some(r => r?.success)
+      if (allOk) {
         toast.success('Kitchen token printed successfully', { id: 'print-token' })
+      } else if (anyOk) {
+        const failed = results.filter(r => !r?.success).map(r => r?.printerName || r?.printerId).join(', ')
+        console.warn(`Kitchen token partial: failed for ${failed}`)
       } else {
-        throw new Error(result.message || result.error || 'Print failed')
+        throw new Error(results[0]?.error || 'Print failed')
       }
     } catch (error) {
       console.error('Kitchen token print error:', error)
@@ -2181,6 +2193,7 @@ export default function TakeawayPage() {
         onCustomerChange={setCustomer}
         orderData={orderData}
         onOrderDataChange={setOrderData}
+        onInstructionsChange={setOrderInstructions}
       />
 
       <TakeawayCustomerForm

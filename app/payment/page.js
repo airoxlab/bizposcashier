@@ -389,16 +389,21 @@ useEffect(() => {
 
     // Fetch customer ledger balance if Account payment method is selected
     if (method.id === 'account' && orderData.customer?.id) {
-      setLoadingLedgerBalance(true)
-      try {
-        const balance = await customerLedgerManager.getCustomerBalance(orderData.customer.id)
-        setCustomerLedgerBalance(balance)
-        console.log(`📊 [Payment] Customer current balance: Rs ${balance}`)
-      } catch (error) {
-        console.error('Failed to fetch customer ledger balance:', error)
+      if (!networkStatus.isOnline) {
+        console.log('📊 [Payment] Offline — skipping ledger balance fetch')
         setCustomerLedgerBalance(0)
-      } finally {
-        setLoadingLedgerBalance(false)
+      } else {
+        setLoadingLedgerBalance(true)
+        try {
+          const balance = await customerLedgerManager.getCustomerBalance(orderData.customer.id)
+          setCustomerLedgerBalance(balance)
+          console.log(`📊 [Payment] Customer current balance: Rs ${balance}`)
+        } catch (error) {
+          console.error('Failed to fetch customer ledger balance:', error)
+          setCustomerLedgerBalance(0)
+        } finally {
+          setLoadingLedgerBalance(false)
+        }
       }
     }
   }
@@ -814,11 +819,13 @@ const processOrder = async () => {
     localStorage.removeItem('walkin_original_payment_method')
     localStorage.removeItem('walkin_can_decrease_qty')
     localStorage.removeItem('walkin_table')
+    localStorage.removeItem('walkin_reopened')
     localStorage.removeItem('delivery_cart')
     localStorage.removeItem('delivery_customer')
     localStorage.removeItem('delivery_instructions')
     localStorage.removeItem('delivery_time')
     localStorage.removeItem('delivery_charges')
+    localStorage.removeItem('delivery_boy_id')
     localStorage.removeItem('delivery_reopened')
     localStorage.removeItem('delivery_original_order')
     localStorage.removeItem('delivery_modifying_order')
@@ -844,6 +851,7 @@ const processOrder = async () => {
     localStorage.removeItem('takeaway_original_amount_paid')
     localStorage.removeItem('takeaway_original_payment_method')
     localStorage.removeItem('takeaway_can_decrease_qty')
+    localStorage.removeItem('takeaway_reopened')
 
     // Clear new-order page shared cart/customer/instructions
     if (orderData?.sourcePage === 'new-order') {
@@ -1131,6 +1139,10 @@ const handlePrintKitchenToken = async () => {
     const finalOrderDataStr = localStorage.getItem('final_order_data')
     const finalOrderData = finalOrderDataStr ? JSON.parse(finalOrderDataStr) : null
 
+    // Build a product lookup for category_id fallback (cart items may not carry it)
+    const productCategoryMap = {}
+    cacheManager.cache?.products?.forEach(p => { productCategoryMap[p.id] = p.category_id })
+
     // Map cart items
     let mappedItems = orderData.cart?.map(item => ({
       name: item.isDeal ? item.dealName : (item.productName || item.name),
@@ -1139,7 +1151,9 @@ const handlePrintKitchenToken = async () => {
       notes: item.notes || '',
       isDeal: item.isDeal || false,
       dealProducts: item.isDeal ? item.dealProducts : null,
-      instructions: item.itemInstructions || ''
+      instructions: item.itemInstructions || '',
+      category_id: item.isDeal ? null : (item.category_id || productCategoryMap[item.productId] || null),
+      deal_id: item.isDeal ? (item.dealId || item.deal_id || null) : null
     })) || []
 
     // 🆕 Check for order changes
@@ -1216,17 +1230,23 @@ const handlePrintKitchenToken = async () => {
       items: mappedItems
     }
 
-    // Use printerManager to print kitchen token (supports network printing)
-    const result = await printerManager.printKitchenToken(
+    // Use printerManager to print kitchen token(s) with category/deal-based routing
+    const results = await printerManager.printKitchenTokens(
       kitchenTokenData,
       userProfileData,
       printerConfig
     )
 
-    if (result.success) {
+    const allOk = results.every(r => r.success)
+    const anyOk = results.some(r => r.success)
+    if (allOk) {
       notify.success('Kitchen token printed successfully!')
+    } else if (anyOk) {
+      const failed = results.filter(r => !r.success).map(r => r.printerName || r.printerId).join(', ')
+      notify.warning(`Kitchen token partial: failed for ${failed}`)
     } else {
-      throw new Error(result.error || result.message || 'Kitchen token print failed')
+      const firstErr = results[0]?.error || results[0]?.message || 'Kitchen token print failed'
+      throw new Error(firstErr)
     }
 
   } catch (error) {
@@ -1465,16 +1485,27 @@ const handlePrintKitchenToken = async () => {
       localStorage.removeItem('walkin_cart')
       localStorage.removeItem('walkin_customer')
       localStorage.removeItem('walkin_instructions')
+      localStorage.removeItem('walkin_modifying_order')
+      localStorage.removeItem('walkin_modifying_order_number')
+      localStorage.removeItem('walkin_original_state')
+      localStorage.removeItem('walkin_original_order_status')
       localStorage.removeItem('walkin_original_payment_status')
       localStorage.removeItem('walkin_original_amount_paid')
       localStorage.removeItem('walkin_original_payment_method')
       localStorage.removeItem('walkin_can_decrease_qty')
       localStorage.removeItem('walkin_table')
+      localStorage.removeItem('walkin_reopened')
       localStorage.removeItem('delivery_cart')
       localStorage.removeItem('delivery_customer')
       localStorage.removeItem('delivery_instructions')
       localStorage.removeItem('delivery_time')
       localStorage.removeItem('delivery_charges')
+      localStorage.removeItem('delivery_boy_id')
+      localStorage.removeItem('delivery_reopened')
+      localStorage.removeItem('delivery_original_order')
+      localStorage.removeItem('delivery_modifying_order')
+      localStorage.removeItem('delivery_modifying_order_number')
+      localStorage.removeItem('delivery_original_state')
       localStorage.removeItem('delivery_order_data')
       localStorage.removeItem('delivery_discount')
       localStorage.removeItem('delivery_original_order_status')
@@ -1486,12 +1517,16 @@ const handlePrintKitchenToken = async () => {
       localStorage.removeItem('takeaway_customer')
       localStorage.removeItem('takeaway_instructions')
       localStorage.removeItem('takeaway_pickup_time')
+      localStorage.removeItem('takeaway_modifying_order')
+      localStorage.removeItem('takeaway_modifying_order_number')
+      localStorage.removeItem('takeaway_original_state')
       localStorage.removeItem('takeaway_discount')
       localStorage.removeItem('takeaway_original_order_status')
       localStorage.removeItem('takeaway_original_payment_status')
       localStorage.removeItem('takeaway_original_amount_paid')
       localStorage.removeItem('takeaway_original_payment_method')
       localStorage.removeItem('takeaway_can_decrease_qty')
+      localStorage.removeItem('takeaway_reopened')
 
       // Clear new-order page shared cart/customer/instructions
       if (orderData?.sourcePage === 'new-order') {

@@ -61,6 +61,10 @@ const api = {
 
   // Kitchen token printer (IP)
   printKitchenToken: (orderData, userProfile, printerConfig) => ipcRenderer.invoke('print-kitchen-token', { orderData, userProfile, printerConfig }),
+
+  // Category/Deal → Printer mappings
+  printerMappingsLoad: () => ipcRenderer.invoke('printer-mappings-load'),
+  printerMappingsSave: (mappings) => ipcRenderer.invoke('printer-mappings-save', mappings),
   
   customerFindByPhone: (data) => ipcRenderer.invoke('customer-find-by-phone', data),
   customerCreate: (data) => ipcRenderer.invoke('customer-create', data),

@@ -8,17 +8,34 @@ const { app } = require('electron');
  * Downloads logo/QR only when needed for printing (if not cached)
  */
 
-// Use app.getPath('userData') for writable temp directory (not inside asar)
-const TEMP_DIR = app ? path.join(app.getPath('userData'), 'printer-assets') : path.join(__dirname, '..', 'printing', 'temp');
-const LOGO_PATH = path.join(TEMP_DIR, 'logo.png');
-const QR_PATH = path.join(TEMP_DIR, 'qr.png');
-const META_PATH = path.join(TEMP_DIR, 'download_meta.json');
+// Compute TEMP_DIR lazily so it is never evaluated before app.ready
+function getTempDir() {
+  try {
+    if (app && app.isReady()) {
+      return path.join(app.getPath('userData'), 'printer-assets');
+    }
+  } catch { /* app not ready yet */ }
+  // Fallback to a writable location relative to this file
+  return path.join(require('os').tmpdir(), 'bizpos-printer-assets');
+}
 
-// Ensure temp directory exists
+// Ensure temp directory exists and return its path
 function ensureTempDir() {
-  if (!fs.existsSync(TEMP_DIR)) {
-    fs.mkdirSync(TEMP_DIR, { recursive: true });
+  const dir = getTempDir();
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
+  return dir;
+}
+
+// Dynamic paths — evaluated at call time, not module load time
+function getPaths() {
+  const dir = getTempDir();
+  return {
+    LOGO_PATH: path.join(dir, 'logo.png'),
+    QR_PATH:   path.join(dir, 'qr.png'),
+    META_PATH: path.join(dir, 'download_meta.json'),
+  };
 }
 
 // Save base64 data to file
@@ -57,18 +74,29 @@ function downloadFile(url, destPath) {
       return saveBase64ToFile(url, destPath).then(resolve).catch(reject);
     }
 
-    const file = fs.createWriteStream(destPath);
+    // Try to delete any stale/locked file before writing
+    if (fs.existsSync(destPath)) {
+      try { fs.unlinkSync(destPath); } catch { /* ignore — stream error handler will catch below */ }
+    }
+
+    let file;
+    try {
+      file = fs.createWriteStream(destPath);
+    } catch (streamErr) {
+      console.error('❌ Cannot open write stream (EPERM?):', streamErr.message);
+      return reject(streamErr);
+    }
 
     https.get(url, (response) => {
       if (response.statusCode === 301 || response.statusCode === 302) {
         file.close();
-        if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+        if (fs.existsSync(destPath)) try { fs.unlinkSync(destPath); } catch {}
         return downloadFile(response.headers.location, destPath).then(resolve).catch(reject);
       }
 
       if (response.statusCode !== 200) {
         file.close();
-        if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+        if (fs.existsSync(destPath)) try { fs.unlinkSync(destPath); } catch {}
         return reject(new Error(`HTTP ${response.statusCode}`));
       }
 
@@ -79,12 +107,12 @@ function downloadFile(url, destPath) {
       });
       file.on('error', (err) => {
         file.close();
-        if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+        if (fs.existsSync(destPath)) try { fs.unlinkSync(destPath); } catch {}
         reject(err);
       });
     }).on('error', (err) => {
       file.close();
-      if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+      if (fs.existsSync(destPath)) try { fs.unlinkSync(destPath); } catch {}
       reject(err);
     });
   });
@@ -92,6 +120,7 @@ function downloadFile(url, destPath) {
 
 // Check if assets are fresh (downloaded today AND URLs haven't changed)
 function areAssetsFresh(logoUrl, qrUrl) {
+  const { META_PATH } = getPaths();
   if (!fs.existsSync(META_PATH)) return false;
 
   try {
@@ -99,20 +128,13 @@ function areAssetsFresh(logoUrl, qrUrl) {
     const lastDownload = new Date(meta.lastDownload);
     const today = new Date();
 
-    // Check if it's the same day
     const isSameDay = (
       lastDownload.getDate() === today.getDate() &&
       lastDownload.getMonth() === today.getMonth() &&
       lastDownload.getFullYear() === today.getFullYear()
     );
 
-    // Check if URLs have changed
-    const urlsChanged = (
-      meta.logoUrl !== logoUrl ||
-      meta.qrUrl !== qrUrl
-    );
-
-    // Assets are fresh only if same day AND URLs haven't changed
+    const urlsChanged = (meta.logoUrl !== logoUrl || meta.qrUrl !== qrUrl);
     return isSameDay && !urlsChanged;
   } catch {
     return false;
@@ -121,12 +143,16 @@ function areAssetsFresh(logoUrl, qrUrl) {
 
 // Save download timestamp and URLs
 function saveDownloadMeta(logoUrl, qrUrl) {
-  const meta = {
-    lastDownload: new Date().toISOString(),
-    logoUrl: logoUrl || null,
-    qrUrl: qrUrl || null
-  };
-  fs.writeFileSync(META_PATH, JSON.stringify(meta, null, 2));
+  const { META_PATH } = getPaths();
+  try {
+    fs.writeFileSync(META_PATH, JSON.stringify({
+      lastDownload: new Date().toISOString(),
+      logoUrl: logoUrl || null,
+      qrUrl: qrUrl || null
+    }, null, 2));
+  } catch (err) {
+    console.error('❌ Could not save download meta:', err.message);
+  }
 }
 
 /**
@@ -140,6 +166,7 @@ async function ensureAssets(logoUrl, qrUrl) {
   console.log('  - qrUrl:', qrUrl ? (qrUrl.length > 100 ? `${qrUrl.substring(0, 50)}...` : qrUrl) : 'NULL');
 
   ensureTempDir();
+  const { LOGO_PATH, QR_PATH } = getPaths();
 
   // Quick synchronous check - return immediately if cached
   const isFresh = areAssetsFresh(logoUrl, qrUrl);
@@ -150,7 +177,6 @@ async function ensureAssets(logoUrl, qrUrl) {
   console.log('  - logoExists:', logoExists);
   console.log('  - qrExists:', qrExists);
 
-  // Check if we can use cached assets (only need the ones that are requested)
   const needsLogo = !!logoUrl;
   const needsQr = !!qrUrl;
   const hasLogoIfNeeded = !needsLogo || logoExists;
@@ -165,21 +191,10 @@ async function ensureAssets(logoUrl, qrUrl) {
     };
   }
 
-  // Assets need refresh - download in parallel for speed
   console.log('📥 Processing assets (first print or updated)...');
-  console.log('  - Will process logo:', needsLogo);
-  console.log('  - Will process QR:', needsQr);
-
-  // Only delete and re-download assets that need updating
   const downloads = [];
 
   if (logoUrl) {
-    // Delete old logo if exists
-    if (fs.existsSync(LOGO_PATH)) {
-      console.log('  - Deleting old logo file');
-      fs.unlinkSync(LOGO_PATH);
-    }
-
     downloads.push(
       downloadFile(logoUrl, LOGO_PATH)
         .then(() => {
@@ -194,12 +209,6 @@ async function ensureAssets(logoUrl, qrUrl) {
   }
 
   if (qrUrl) {
-    // Delete old QR if exists
-    if (fs.existsSync(QR_PATH)) {
-      console.log('  - Deleting old QR file');
-      fs.unlinkSync(QR_PATH);
-    }
-
     downloads.push(
       downloadFile(qrUrl, QR_PATH)
         .then(() => {

@@ -1037,6 +1037,9 @@ function WebOrdersPage() {
       if (itemsError) throw itemsError;
 
       // Transform database items to printer format (kitchen token uses 'items')
+      const productCategoryMap = {}
+      cacheManager.cache?.products?.forEach(p => { productCategoryMap[p.id] = p.category_id })
+
       const transformedItems = (items || []).map(item => ({
         name: item.product_name,
         size: item.variant_name || null,
@@ -1045,6 +1048,8 @@ function WebOrdersPage() {
         total: item.total_price,
         notes: item.notes || null,
         isDeal: item.is_deal || false,
+        category_id: item.is_deal ? null : (item.category_id || productCategoryMap[item.product_id] || null),
+        deal_id: item.is_deal ? (item.deal_id || null) : null,
       }));
 
       // Get user profile
@@ -1070,16 +1075,20 @@ function WebOrdersPage() {
       };
 
       console.log("🖨️ [Web Orders] Printing token to:", printer.name);
-      const result = await printerManager.printKitchenToken(
+      const results = await printerManager.printKitchenTokens(
         completeOrderData,
         userProfile,
         printer
       );
-
-      if (result.success) {
+      const allOk = results.every(r => r?.success)
+      const anyOk = results.some(r => r?.success)
+      if (allOk) {
         notify.success("Kitchen token printed successfully");
+      } else if (anyOk) {
+        const failed = results.filter(r => !r?.success).map(r => r?.printerName || r?.printerId).join(', ')
+        console.warn(`Kitchen token partial: failed for ${failed}`)
       } else {
-        notify.error(result.error || "Failed to print kitchen token");
+        notify.error(results[0]?.error || "Failed to print kitchen token");
       }
     } catch (error) {
       console.error("❌ [Web Orders] Print token error:", error);

@@ -272,14 +272,16 @@ const fetchInitialData = async (userId) => {
   const fetchAllReportsData = async () => {
     setLoading(true)
     try {
-      // Fetch all reports data in parallel
-      const [salesResult, expenseResult, productPerformanceResult, peakHoursResult, cogsResult] = await Promise.all([
+      // Fetch sales data first so COGS uses the exact same filtered orders
+      const [salesResult, expenseResult, productPerformanceResult, peakHoursResult] = await Promise.all([
         fetchSalesData(),
         fetchExpenseData(),
         fetchProductPerformanceData(),
         fetchPeakHoursData(),
-        fetchCOGS()
       ])
+
+      // COGS uses the filtered orders from salesResult — respects all filters automatically
+      const cogsResult = await fetchCOGS(salesResult?.orders || [])
 
       // Process the data after both are fetched (even if there are errors, use empty data)
       const salesData = salesResult?.salesData || {
@@ -477,7 +479,7 @@ const fetchSalesData = async () => {
 
     setRawOrders(orders)
     const processedSalesData = processSalesData(orders)
-    return { salesData: processedSalesData }
+    return { salesData: processedSalesData, orders }
   } catch (error) {
     console.error('Error fetching sales data:', error)
     console.error('Error message:', error?.message)
@@ -628,38 +630,42 @@ const fetchExpenseData = async () => {
   }
 }
 
-const fetchCOGS = async () => {
+const fetchCOGS = async (completedOrders = []) => {
   try {
-    if (!user?.id) return { totalCogs: 0, dailyCogs: new Map() }
+    if (!completedOrders || completedOrders.length === 0) return { totalCogs: 0, dailyCogs: new Map() }
 
     const { startTime: bizStart, endTime: bizEnd } = dailySerialManager.getBusinessHours()
 
-    // Query order_stock_deductions which stores the pre-computed total_cogs per order.
-    // This is more reliable than summing stock_history records which may have duplicates
-    // or note-pattern mismatches that inflate the total.
-    let query = supabase
-      .from('order_stock_deductions')
-      .select('deducted_at, deduction_result')
-      .eq('user_id', user.id)
+    // Only completed orders have stock deductions
+    const ordersWithDeductions = completedOrders.filter(o => o.order_status === 'Completed')
+    if (ordersWithDeductions.length === 0) return { totalCogs: 0, dailyCogs: new Map() }
 
-    if (dateFrom) {
-      query = query.gte('deducted_at', new Date(`${dateFrom}T${bizStart}:00`).toISOString())
-    }
-    if (dateTo) {
-      query = query.lte('deducted_at', new Date(`${dateTo}T${bizEnd}:00`).toISOString())
-    }
+    // Build map of order_id → business date (from order's created_at)
+    const orderDateMap = {}
+    ordersWithDeductions.forEach(o => {
+      orderDateMap[o.id] = getBusinessDate(o.created_at, bizStart, bizEnd)
+    })
 
-    const { data, error } = await query
+    const orderIds = ordersWithDeductions.map(o => o.id)
+
+    // Fetch stock_history for all filtered orders — same logic as admin orders page
+    // Uses stored total_cost directly (historically accurate, not recalculated)
+    const { data: stockHistory, error } = await supabase
+      .from('stock_history')
+      .select('reference_id, total_cost')
+      .in('reference_id', orderIds)
+      .eq('transaction_type', 'order_deduction')
+
     if (error) throw error
 
     let totalCogs = 0
     const dailyCogs = new Map()
 
-    ;(data || []).forEach(item => {
-      const cost = Math.abs(parseFloat(item.deduction_result?.total_cogs || 0))
+    ;(stockHistory || []).forEach(record => {
+      const cost = Math.abs(parseFloat(record.total_cost || 0))
       totalCogs += cost
-      const date = getBusinessDate(item.deducted_at, bizStart, bizEnd)
-      dailyCogs.set(date, (dailyCogs.get(date) || 0) + cost)
+      const date = orderDateMap[record.reference_id]
+      if (date) dailyCogs.set(date, (dailyCogs.get(date) || 0) + cost)
     })
 
     return { totalCogs, dailyCogs }
@@ -1564,7 +1570,17 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                     <input
                       type="date"
                       value={dateFrom}
-                      onChange={(e) => setDateFrom(e.target.value)}
+                      onChange={(e) => {
+                        const newFrom = e.target.value
+                        setDateFrom(newFrom)
+                        // For overnight businesses, auto-set To Date = From Date + 1 day
+                        const { startTime: s, endTime: en } = dailySerialManager.getBusinessHours()
+                        if (en < s && newFrom) {
+                          const d = new Date(newFrom + 'T12:00:00')
+                          d.setDate(d.getDate() + 1)
+                          setDateTo(d.toISOString().split('T')[0])
+                        }
+                      }}
                       className={`w-full px-3 py-2 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm`}
                     />
                   </div>

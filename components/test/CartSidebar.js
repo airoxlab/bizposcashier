@@ -2,10 +2,12 @@
 
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { User, ShoppingCart, Plus, Minus, Trash2, WifiOff, Gift, X, Sun, Moon, Wifi, Table2, FileText, MessageSquare, ChevronDown, ChevronUp } from 'lucide-react'
+import { User, ShoppingCart, Plus, Minus, Trash2, WifiOff, Gift, X, Sun, Moon, Wifi, Table2, FileText, MessageSquare, ChevronDown, ChevronUp, BarChart2 } from 'lucide-react'
 import LoyaltyPointsDisplay from '@/components/pos/LoyaltyPointsDisplay'
 import { notify } from '../ui/NotificationSystem'
 import InlineCustomerPanel from '../pos/InlineCustomerPanel'
+import CashierAnalytics from '../pos/CashierAnalytics'
+import { permissionManager } from '@/lib/permissionManager'
 
 export default function CartSidebar({
   cart = [],
@@ -37,6 +39,7 @@ export default function CartSidebar({
   const [draftInstruction, setDraftInstruction] = useState('')
   const [expandedItemId, setExpandedItemId] = useState(null)
   const [custMode, setCustMode] = useState('idle') // 'idle' | 'searching' | 'expanded'
+  const [showAnalytics, setShowAnalytics] = useState(false)
 
   // Reset customer panel when customer is cleared externally
   useEffect(() => {
@@ -96,6 +99,7 @@ export default function CartSidebar({
   }
 
   return (
+    <>
     <div className={`w-80 ${classes.card} ${classes.shadow} shadow-xl ${classes.border} border-l flex flex-col`}>
       <div className={`p-3 ${classes.border} border-b ${classes.card}`}>
         <div className="flex items-center justify-between">
@@ -444,12 +448,14 @@ export default function CartSidebar({
                       )}
                     </div>
                     <div className="flex items-center gap-0.5">
-                      <button
-                        onClick={() => onRemoveItem(item.id)}
-                        className={`p-0.5 text-red-400 hover:text-red-600 rounded transition-all`}
-                      >
-                        <Trash2 className="w-2.5 h-2.5" />
-                      </button>
+                      {permissionManager.canDeleteOrderItem() && (
+                        <button
+                          onClick={() => onRemoveItem(item.id)}
+                          className={`p-0.5 text-red-400 hover:text-red-600 rounded transition-all`}
+                        >
+                          <Trash2 className="w-2.5 h-2.5" />
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -609,5 +615,13 @@ export default function CartSidebar({
       )}
 
     </div>
+
+    {/* Analytics popup — self-contained, no props needed from parent */}
+    <CashierAnalytics
+      isOpen={showAnalytics}
+      onClose={() => setShowAnalytics(false)}
+      isDark={isDark}
+    />
+    </>
   )
 }

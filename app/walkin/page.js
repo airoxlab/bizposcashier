@@ -987,6 +987,7 @@ export default function WalkInPage() {
         // Prepare payment transactions
         const transactions = paymentData.map(payment => ({
           order_id: order.id,
+          user_id: user?.id || order.user_id,
           payment_method: payment.method,
           amount: parseFloat(payment.amount),
           reference_number: payment.reference || null,
@@ -2192,6 +2193,10 @@ export default function WalkInPage() {
       }
 
       // Prepare order data for kitchen token
+      // Build product→category lookup for routing
+      const productCategoryMap = {}
+      cacheManager.cache?.products?.forEach(p => { productCategoryMap[p.id] = p.category_id })
+
       let mappedItems = orderItems.map((item) => {
         if (item.is_deal) {
           let dealProducts = []
@@ -2213,7 +2218,9 @@ export default function WalkInPage() {
             variantId: item.variant_id,
             productName: item.product_name,
             variantName: item.variant_name,
-            instructions: item.item_instructions || ''
+            instructions: item.item_instructions || '',
+            category_id: null,
+            deal_id: item.deal_id || null
           }
         }
         return {
@@ -2225,7 +2232,9 @@ export default function WalkInPage() {
           variantId: item.variant_id,
           productName: item.product_name,
           variantName: item.variant_name,
-          instructions: item.item_instructions || ''
+          instructions: item.item_instructions || '',
+          category_id: item.category_id || productCategoryMap[item.product_id] || null,
+          deal_id: null
         }
       })
 
@@ -2312,13 +2321,17 @@ export default function WalkInPage() {
         customer_name: !order.cashier_id ? cashierName : null,
       }
 
-      const result = await printerManager.printKitchenToken(orderData, userProfile, printer)
+      const results = await printerManager.printKitchenTokens(orderData, userProfile, printer)
 
-      if (result.success) {
-        // Removed toast notification - blocks UI for 3 seconds
-        console.log(`✅ Kitchen token printed to ${printer.name}`)
+      const allOk = results.every(r => r?.success)
+      const anyOk = results.some(r => r?.success)
+      if (allOk) {
+        console.log(`✅ Kitchen token printed`)
+      } else if (anyOk) {
+        const failed = results.filter(r => !r?.success).map(r => r?.printerName || r?.printerId).join(', ')
+        toast.warning(`Kitchen token partial: failed for ${failed}`)
       } else {
-        throw new Error(result.error || 'Print failed')
+        throw new Error(results[0]?.error || 'Print failed')
       }
     } catch (error) {
       console.error('Kitchen token print error:', error)

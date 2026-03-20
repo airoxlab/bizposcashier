@@ -4,6 +4,7 @@ const net = require('net');
 const { app } = require('electron');
 
 const PRINTERS_FILE = path.join(app.getPath('userData'), 'printers.json');
+const MAPPINGS_FILE = path.join(app.getPath('userData'), 'category_mappings.json');
 
 async function ensureDataDirectory() {
   const dataDir = path.dirname(PRINTERS_FILE);
@@ -214,6 +215,24 @@ function registerPrinterHandlers(ipcMain) {
     }
   });
 
+  ipcMain.handle('printer-mappings-load', async () => {
+    try {
+      const mappings = await loadMappings();
+      return { success: true, mappings };
+    } catch (error) {
+      return { success: false, error: error.message, mappings: [] };
+    }
+  });
+
+  ipcMain.handle('printer-mappings-save', async (event, mappings) => {
+    try {
+      await saveMappings(mappings);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
   ipcMain.handle('printer-delete', async (event, printerId) => {
     try {
       const printers = await loadPrinters();
@@ -239,6 +258,20 @@ function registerPrinterHandlers(ipcMain) {
       };
     }
   });
+}
+
+async function loadMappings() {
+  try {
+    const data = await fs.promises.readFile(MAPPINGS_FILE, 'utf8');
+    return JSON.parse(data);
+  } catch {
+    return [];
+  }
+}
+
+async function saveMappings(mappings) {
+  await ensureDataDirectory();
+  await fs.promises.writeFile(MAPPINGS_FILE, JSON.stringify(mappings, null, 2));
 }
 
 module.exports = { registerPrinterHandlers };

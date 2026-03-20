@@ -29,8 +29,29 @@ function downloadFile(url, destPath) {
     console.log(`📡 [Download] Starting download from: ${url}`);
     console.log(`📁 [Download] Destination: ${destPath}`);
 
+    // Ensure parent directory exists before writing
+    try {
+      const dir = path.dirname(destPath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    } catch (dirErr) {
+      console.error(`❌ [Download] Cannot create directory:`, dirErr.message);
+      return reject(dirErr);
+    }
+
+    // If file is locked from a previous crashed session, try to remove it first
+    if (fs.existsSync(destPath)) {
+      try { fs.unlinkSync(destPath); } catch { /* ignore — createWriteStream will overwrite or fail below */ }
+    }
+
+    let file;
+    try {
+      file = fs.createWriteStream(destPath);
+    } catch (streamErr) {
+      console.error(`❌ [Download] Cannot open write stream (EPERM?):`, streamErr.message);
+      return reject(streamErr);
+    }
+
     const protocol = url.startsWith('https') ? https : http;
-    const file = fs.createWriteStream(destPath);
 
     const request = protocol.get(url, (response) => {
       console.log(`📊 [Download] Response status: ${response.statusCode}`);
