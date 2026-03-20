@@ -85,6 +85,7 @@ export default function PrinterPage() {
   const [categories, setCategories] = useState([])
   const [deals, setDeals] = useState([])
   const [categoryMappings, setCategoryMappings] = useState({}) // { 'category:<id>' | 'deal:<id>' : printerId }
+  const [broadcastPrinterIds, setBroadcastPrinterIds] = useState([]) // printers that receive ALL items
   const [savingMappings, setSavingMappings] = useState(false)
   const [routingTab, setRoutingTab] = useState('categories') // 'categories' | 'deals'
 
@@ -901,11 +902,19 @@ const autoDiscoverPrinters = async () => {
       if (mappingRes.data && mappingRes.data.length > 0) {
         // Supabase is the source of truth when online
         const map = {}
-        mappingRes.data.forEach(m => { map[`${m.type}:${m.entity_id}`] = m.printer_id })
+        const broadcasts = []
+        mappingRes.data.forEach(m => {
+          if (m.type === 'broadcast') broadcasts.push(m.printer_id)
+          else map[`${m.type}:${m.entity_id}`] = m.printer_id
+        })
         setCategoryMappings(map)
+        setBroadcastPrinterIds(broadcasts)
         // Sync down to local cache for offline use
         if (printerManager.isElectron()) {
-          const localMappings = mappingRes.data.map(m => ({ type: m.type, id: m.entity_id, printer_id: m.printer_id }))
+          const localMappings = [
+            ...mappingRes.data.filter(m => m.type !== 'broadcast').map(m => ({ type: m.type, id: m.entity_id, printer_id: m.printer_id })),
+            ...broadcasts.map(pid => ({ type: 'broadcast', id: pid, printer_id: pid }))
+          ]
           window.electronAPI.printerMappingsSave(localMappings).catch(() => {})
         }
       } else if (printerManager.isElectron()) {
@@ -913,20 +922,29 @@ const autoDiscoverPrinters = async () => {
         const res = await window.electronAPI.printerMappingsLoad()
         if (res.success && res.mappings?.length > 0) {
           const map = {}
-          res.mappings.forEach(m => { map[`${m.type}:${m.id}`] = m.printer_id })
+          const broadcasts = []
+          res.mappings.forEach(m => {
+            if (m.type === 'broadcast') broadcasts.push(m.printer_id)
+            else map[`${m.type}:${m.id}`] = m.printer_id
+          })
           setCategoryMappings(map)
+          setBroadcastPrinterIds(broadcasts)
         }
       }
     } catch (err) {
       console.error('Error loading routing data:', err)
-      // On any error, fall back to local cache
       if (printerManager.isElectron()) {
         try {
           const res = await window.electronAPI.printerMappingsLoad()
           if (res.success && res.mappings?.length > 0) {
             const map = {}
-            res.mappings.forEach(m => { map[`${m.type}:${m.id}`] = m.printer_id })
+            const broadcasts = []
+            res.mappings.forEach(m => {
+              if (m.type === 'broadcast') broadcasts.push(m.printer_id)
+              else map[`${m.type}:${m.id}`] = m.printer_id
+            })
             setCategoryMappings(map)
+            setBroadcastPrinterIds(broadcasts)
           }
         } catch {}
       }
@@ -936,13 +954,16 @@ const autoDiscoverPrinters = async () => {
   const saveRoutingMappings = async () => {
     setSavingMappings(true)
 
-    // Build the local mappings array (always needed for both paths)
-    const localMappings = Object.entries(categoryMappings)
-      .filter(([, printerId]) => printerId)
-      .map(([key, printer_id]) => {
-        const [type, ...rest] = key.split(':')
-        return { type, id: rest.join(':'), printer_id }
-      })
+    // Build the local mappings array (category/deal + broadcast)
+    const localMappings = [
+      ...Object.entries(categoryMappings)
+        .filter(([, printerId]) => printerId)
+        .map(([key, printer_id]) => {
+          const [type, ...rest] = key.split(':')
+          return { type, id: rest.join(':'), printer_id }
+        }),
+      ...broadcastPrinterIds.map(pid => ({ type: 'broadcast', id: pid, printer_id: pid }))
+    ]
 
     // Always save to local file first so offline works regardless
     if (printerManager.isElectron()) {
@@ -1106,7 +1127,7 @@ const autoDiscoverPrinters = async () => {
     <ProtectedPage permissionKey="PRINTERS" pageName="Printer Management">
       <div className={`h-screen flex ${classes.background} overflow-hidden transition-all duration-500`}>
       {/* Left Sidebar */}
-      <div className={`w-80 ${classes.card} ${classes.shadow} shadow-xl ${classes.border} border-r flex flex-col`}>
+      <div className={`w-[420px] ${classes.card} ${classes.shadow} shadow-xl ${classes.border} border-r flex flex-col`}>
         {/* Header */}
         <div className="p-4 border-b border-gray-200 bg-gradient-to-r from-purple-600 to-blue-600">
           <div className="flex items-center justify-between mb-3">
@@ -1609,120 +1630,17 @@ const autoDiscoverPrinters = async () => {
             </div>
           ) : (
             <div className="space-y-6">
-              {/* Enhanced Status Overview */}
-              <div className={`${classes.card} rounded-2xl ${classes.shadow} shadow-lg ${classes.border} border p-6`}>
-                <div className="flex items-center justify-between mb-6">
-                  <h2 className={`text-xl font-bold ${classes.textPrimary} flex items-center space-x-2`}>
-                    <Monitor className="w-5 h-5 text-blue-500" />
-                    <span>Printer Status Overview</span>
-                  </h2>
-                  <motion.button
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={loadPrinters}
-                    className={`p-2 rounded-lg ${classes.button} hover:${classes.shadow} transition-all`}
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                  </motion.button>
-                </div>
-                
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <motion.div
-                    whileHover={{ scale: 1.02 }}
-                    className={`p-6 rounded-xl ${isDark ? 'bg-blue-900/20 border-blue-500/30' : 'bg-blue-50 border-blue-200'} border`}
-                  >
-                    <div className="flex items-center space-x-3">
-                      <div className="w-12 h-12 bg-blue-500 rounded-xl flex items-center justify-center">
-                        <Printer className="w-6 h-6 text-white" />
-                      </div>
-                      <div>
-                        <div className={`text-2xl font-bold ${isDark ? 'text-blue-300' : 'text-blue-600'}`}>
-                          {printers.length}
-                        </div>
-                        <div className={`text-sm ${classes.textSecondary}`}>Total Printers</div>
-                      </div>
-                    </div>
-                  </motion.div>
-
-                  <motion.div
-                    whileHover={{ scale: 1.02 }}
-                    className={`p-6 rounded-xl ${isDark ? 'bg-green-900/20 border-green-500/30' : 'bg-green-50 border-green-200'} border`}
-                  >
-                    <div className="flex items-center space-x-3">
-                      <div className="w-12 h-12 bg-green-500 rounded-xl flex items-center justify-center">
-                        <CheckCircle2 className="w-6 h-6 text-white" />
-                      </div>
-                      <div>
-                        <div className={`text-2xl font-bold ${isDark ? 'text-green-300' : 'text-green-600'}`}>
-                          {Object.values(connectionResults).filter(r => r.success).length}
-                        </div>
-                        <div className={`text-sm ${classes.textSecondary}`}>Connected</div>
-                      </div>
-                    </div>
-                  </motion.div>
-
-                  <motion.div
-                    whileHover={{ scale: 1.02 }}
-                    className={`p-6 rounded-xl ${isDark ? 'bg-purple-900/20 border-purple-500/30' : 'bg-purple-50 border-purple-200'} border`}
-                  >
-                    <div className="flex items-center space-x-3">
-                      <div className="w-12 h-12 bg-purple-500 rounded-xl flex items-center justify-center">
-                        <Star className="w-6 h-6 text-white" />
-                      </div>
-                      <div>
-                        <div className={`text-2xl font-bold ${isDark ? 'text-purple-300' : 'text-purple-600'}`}>
-                          {printers.filter(p => p.is_default).length}
-                        </div>
-                        <div className={`text-sm ${classes.textSecondary}`}>Default Set</div>
-                      </div>
-                    </div>
-                  </motion.div>
-                </div>
-              </div>
-
-              {/* Network Status & Tips */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className={`${classes.card} rounded-xl ${classes.shadow} shadow-lg ${classes.border} border p-6`}>
-                  <h3 className={`text-lg font-bold ${classes.textPrimary} mb-4 flex items-center space-x-2`}>
-                    <Network className="w-5 h-5 text-blue-500" />
-                    <span>Network Status</span>
-                  </h3>
-                  <div className="flex items-center justify-between">
-                    <span className={classes.textSecondary}>Internet Connection</span>
-                    <div className={`flex items-center space-x-2 ${networkStatus.isOnline ? 'text-green-600' : 'text-red-600'}`}>
-                      {networkStatus.isOnline ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4" />}
-                      <span className="text-sm font-medium">
-                        {networkStatus.isOnline ? 'Connected' : 'Disconnected'}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className={`${classes.card} rounded-xl ${classes.shadow} shadow-lg ${classes.border} border p-6`}>
-                  <h3 className={`text-lg font-bold ${classes.textPrimary} mb-4 flex items-center space-x-2`}>
-                    <Info className="w-5 h-5 text-blue-500" />
-                    <span>Quick Tips</span>
-                  </h3>
-                  <div className="space-y-2 text-sm">
-                    <p className={classes.textSecondary}>• Set up static IP addresses for reliable connections</p>
-                    <p className={classes.textSecondary}>• Test printer connections before setting as default</p>
-                    <p className={classes.textSecondary}>• Use port 9100 for most thermal printers</p>
-                    <p className={classes.textSecondary}>• Keep printers on the same network as your POS system</p>
-                  </div>
-                </div>
-              </div>
-
               {/* Kitchen Token Routing */}
-              {(categories.length > 0 || deals.length > 0) && (
+              {printers.length > 0 && (categories.length > 0 || deals.length > 0) && (
                 <div className={`${classes.card} rounded-2xl ${classes.shadow} shadow-lg ${classes.border} border p-6`}>
-                  <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center justify-between mb-2">
                     <div>
                       <h2 className={`text-xl font-bold ${classes.textPrimary} flex items-center space-x-2`}>
                         <Settings className="w-5 h-5 text-orange-500" />
                         <span>Kitchen Token Routing</span>
                       </h2>
                       <p className={`text-xs ${classes.textSecondary} mt-1`}>
-                        Map categories & deals to specific printers. Unmapped items go to the default printer.
+                        Per printer: toggle <strong>All Items</strong> to receive every order item, or pick specific categories/deals.
                       </p>
                     </div>
                     <motion.button
@@ -1740,63 +1658,99 @@ const autoDiscoverPrinters = async () => {
                     </motion.button>
                   </div>
 
-                  {/* Tabs */}
-                  <div className={`flex space-x-1 ${isDark ? 'bg-gray-800' : 'bg-gray-100'} rounded-xl p-1 mb-4`}>
-                    {['categories', 'deals'].map(tab => (
-                      <button
-                        key={tab}
-                        onClick={() => setRoutingTab(tab)}
-                        className={`flex-1 py-2 text-sm font-medium rounded-lg transition-all capitalize ${
-                          routingTab === tab
-                            ? 'bg-orange-500 text-white shadow'
-                            : `${classes.textSecondary} hover:${classes.textPrimary}`
-                        }`}
-                      >
-                        {tab}
-                      </button>
-                    ))}
-                  </div>
+                  <div className="space-y-3 mt-4">
+                    {printers.map(printer => {
+                      const isBroadcast = broadcastPrinterIds.includes(printer.id)
+                      const connInfo = printer.ip_address || printer.usb_port || printer.connection_type || ''
+                      return (
+                        <div key={printer.id} className={`rounded-xl border ${classes.border} overflow-hidden`}>
+                          {/* Printer header */}
+                          <div className={`flex items-center justify-between px-4 py-3 ${isDark ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className={`text-sm font-semibold ${classes.textPrimary} truncate`}>{printer.name}</span>
+                              {connInfo && <span className={`text-xs ${classes.textSecondary} shrink-0`}>{connInfo}</span>}
+                            </div>
+                            <button
+                              onClick={() => setBroadcastPrinterIds(prev =>
+                                isBroadcast ? prev.filter(id => id !== printer.id) : [...prev, printer.id]
+                              )}
+                              className={`ml-3 shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                                isBroadcast
+                                  ? 'bg-green-500 hover:bg-green-600 text-white'
+                                  : `${isDark ? 'bg-gray-700 hover:bg-gray-600 text-gray-300' : 'bg-white hover:bg-gray-100 text-gray-600 border border-gray-300'}`
+                              }`}
+                            >
+                              {isBroadcast ? '✓ All Items' : 'All Items'}
+                            </button>
+                          </div>
 
-                  {/* Rows */}
-                  <div className="space-y-2 max-h-72 overflow-y-auto">
-                    {routingTab === 'categories' && (
-                      categories.length === 0 ? (
-                        <p className={`text-sm ${classes.textSecondary} text-center py-6`}>No categories found</p>
-                      ) : categories.map(cat => (
-                        <div key={cat.id} className={`flex items-center justify-between p-3 rounded-xl ${isDark ? 'bg-gray-800' : 'bg-gray-50'}`}>
-                          <span className={`text-sm font-medium ${classes.textPrimary} truncate flex-1 mr-3`}>{cat.name}</span>
-                          <select
-                            value={categoryMappings[`category:${cat.id}`] || ''}
-                            onChange={e => setCategoryMappings(prev => ({ ...prev, [`category:${cat.id}`]: e.target.value || null }))}
-                            className={`text-sm px-3 py-1.5 rounded-lg ${classes.border} border ${classes.card} ${classes.textPrimary} focus:outline-none focus:ring-2 focus:ring-orange-400 min-w-[160px]`}
-                          >
-                            <option value="">Default printer</option>
-                            {printers.map(p => (
-                              <option key={p.id} value={p.id}>{p.name}</option>
-                            ))}
-                          </select>
+                          {/* Categories / Deals — hidden when broadcast is on */}
+                          {isBroadcast ? (
+                            <div className={`px-4 py-2.5 ${isDark ? 'bg-gray-900/40' : 'bg-green-50'}`}>
+                              <p className="text-xs text-green-600 font-medium">Receives every item from every order — no need to select categories.</p>
+                            </div>
+                          ) : (
+                            <div className={`px-4 py-3 ${isDark ? 'bg-gray-900/20' : 'bg-white'}`}>
+                              {categories.length > 0 && (
+                                <div className="mb-2">
+                                  <p className={`text-xs font-medium ${classes.textSecondary} mb-1.5`}>Categories</p>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {categories.map(cat => {
+                                      const isChecked = categoryMappings[`category:${cat.id}`] === printer.id
+                                      return (
+                                        <button
+                                          key={cat.id}
+                                          onClick={() => setCategoryMappings(prev => ({
+                                            ...prev,
+                                            [`category:${cat.id}`]: isChecked ? null : printer.id
+                                          }))}
+                                          className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                                            isChecked
+                                              ? 'bg-orange-500 text-white'
+                                              : `${isDark ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`
+                                          }`}
+                                        >
+                                          {cat.name}
+                                        </button>
+                                      )
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+                              {deals.length > 0 && (
+                                <div>
+                                  <p className={`text-xs font-medium ${classes.textSecondary} mb-1.5`}>Deals</p>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {deals.map(deal => {
+                                      const isChecked = categoryMappings[`deal:${deal.id}`] === printer.id
+                                      return (
+                                        <button
+                                          key={deal.id}
+                                          onClick={() => setCategoryMappings(prev => ({
+                                            ...prev,
+                                            [`deal:${deal.id}`]: isChecked ? null : printer.id
+                                          }))}
+                                          className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
+                                            isChecked
+                                              ? 'bg-orange-500 text-white'
+                                              : `${isDark ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`
+                                          }`}
+                                        >
+                                          {deal.name}
+                                        </button>
+                                      )
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+                              {categories.length === 0 && deals.length === 0 && (
+                                <p className={`text-xs ${classes.textSecondary}`}>No categories or deals found.</p>
+                              )}
+                            </div>
+                          )}
                         </div>
-                      ))
-                    )}
-                    {routingTab === 'deals' && (
-                      deals.length === 0 ? (
-                        <p className={`text-sm ${classes.textSecondary} text-center py-6`}>No active deals found</p>
-                      ) : deals.map(deal => (
-                        <div key={deal.id} className={`flex items-center justify-between p-3 rounded-xl ${isDark ? 'bg-gray-800' : 'bg-gray-50'}`}>
-                          <span className={`text-sm font-medium ${classes.textPrimary} truncate flex-1 mr-3`}>{deal.name}</span>
-                          <select
-                            value={categoryMappings[`deal:${deal.id}`] || ''}
-                            onChange={e => setCategoryMappings(prev => ({ ...prev, [`deal:${deal.id}`]: e.target.value || null }))}
-                            className={`text-sm px-3 py-1.5 rounded-lg ${classes.border} border ${classes.card} ${classes.textPrimary} focus:outline-none focus:ring-2 focus:ring-orange-400 min-w-[160px]`}
-                          >
-                            <option value="">Default printer</option>
-                            {printers.map(p => (
-                              <option key={p.id} value={p.id}>{p.name}</option>
-                            ))}
-                          </select>
-                        </div>
-                      ))
-                    )}
+                      )
+                    })}
                   </div>
                 </div>
               )}
