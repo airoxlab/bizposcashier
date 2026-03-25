@@ -824,6 +824,10 @@ export default function KDSPage() {
         tableName: order.tables?.table_name || (order.tables?.table_number ? `Table ${order.tables.table_number}` : null) || null,
         deliveryAddress: order.delivery_address || order.customers?.addressline || order.customers?.address || '',
         items: mappedItems,
+        order_taker_name: order.order_takers?.name ||
+          (order.order_taker_id
+            ? (cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null)
+            : null)
       }
 
       // Get user profile

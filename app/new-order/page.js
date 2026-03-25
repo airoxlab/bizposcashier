@@ -114,6 +114,11 @@ export default function NewOrderPage() {
   // Table selection (walkin only)
   const [selectedTable, setSelectedTable] = useState(null)
 
+  // Order taker (walkin only)
+  const [orderTakers, setOrderTakers] = useState([])
+  const [selectedOrderTaker, setSelectedOrderTaker] = useState(null)
+  const [requireOrderTaker, setRequireOrderTaker] = useState(false)
+
   // Persist shared cart/instructions to localStorage
   useEffect(() => {
     if (!isInitialized.current) return
@@ -320,6 +325,13 @@ export default function NewOrderPage() {
     setMenus(cacheManager.getMenus())
     setAllProducts(cacheManager.getProducts())
     setDeals(cacheManager.getDeals())
+
+    // Load order takers and require setting
+    setOrderTakers(cacheManager.getOrderTakers())
+    try {
+      const req = localStorage.getItem('pos_require_order_taker')
+      if (req !== null) setRequireOrderTaker(JSON.parse(req))
+    } catch {}
   }
 
   const handleTabSwitch = (tabId) => {
@@ -484,6 +496,10 @@ export default function NewOrderPage() {
       notify.error(`You don't have permission to place ${activeTabDef.label} orders`)
       return
     }
+    if (activeOrderType === 'walkin' && requireOrderTaker && !selectedOrderTaker) {
+      notify.warning('Please select an order taker before proceeding')
+      return
+    }
     const tab = ORDER_TABS.find(t => t.id === activeOrderType)
     const extras = orderExtras[activeOrderType] || {}
     const orderData = {
@@ -496,6 +512,8 @@ export default function NewOrderPage() {
       cashierId: cashierData?.id || null,
       userId: user?.id,
       sessionId,
+      orderTakerId: activeOrderType === 'walkin' ? (selectedOrderTaker?.id || null) : null,
+      orderTakerName: activeOrderType === 'walkin' ? (selectedOrderTaker?.name || null) : null,
       tableId: activeOrderType === 'walkin' ? (selectedTable?.id || null) : null,
       tableName: activeOrderType === 'walkin' ? (selectedTable?.table_name || selectedTable?.table_number || null) : null,
       sourceStorageKey: tab?.storageKey || null,
@@ -583,11 +601,18 @@ export default function NewOrderPage() {
         loyaltyDiscountAmount: 0,
         loyaltyPointsRedeemed: 0,
         discountType: 'amount',
+        serviceChargeAmount: parseFloat(order.service_charge_amount || 0),
+        serviceChargeType: parseFloat(order.service_charge_percentage || 0) > 0 ? 'percentage' : 'fixed',
+        serviceChargeValue: parseFloat(order.service_charge_percentage || 0),
         cart: orderItems.map(item => item.is_deal
           ? { isDeal: true, dealId: item.deal_id, dealName: item.product_name, dealProducts: (() => { try { return typeof item.deal_products === 'string' ? JSON.parse(item.deal_products) : (item.deal_products || []) } catch(e) { return [] } })(), quantity: item.quantity, totalPrice: item.total_price, itemInstructions: item.item_instructions || null }
           : { isDeal: false, productName: item.product_name, variantName: item.variant_name, quantity: item.quantity, totalPrice: item.total_price, itemInstructions: item.item_instructions || null }
         ),
         paymentMethod: order.payment_method || 'Unpaid',
+        order_taker_name: order.order_takers?.name ||
+          (order.order_taker_id
+            ? (cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null)
+            : null)
       }
 
       const userProfileRaw = JSON.parse(localStorage.getItem('user_profile') || localStorage.getItem('user') || '{}')
@@ -647,6 +672,10 @@ export default function NewOrderPage() {
         specialNotes: order.order_instructions || '',
         deliveryAddress: order.delivery_address || order.customers?.addressline || order.customers?.address || '',
         items: mappedItems,
+        order_taker_name: order.order_takers?.name ||
+          (order.order_taker_id
+            ? (cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null)
+            : null)
       }
 
       const userProfileRaw = JSON.parse(localStorage.getItem('user_profile') || localStorage.getItem('user') || '{}')
@@ -894,6 +923,8 @@ export default function NewOrderPage() {
             discount_amount: paymentData.discountAmount || 0,
             discount_percentage: paymentData.discountType === 'percentage' ? paymentData.discountValue : 0,
             total_amount: paymentData.newTotal,
+            service_charge_amount: paymentData.serviceChargeAmount || 0,
+            service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0,
             updated_at: new Date().toISOString()
           })
           .eq('id', order.id)
@@ -956,6 +987,8 @@ export default function NewOrderPage() {
             amount_paid: paymentData.newTotal,
             discount_amount: paymentData.discountAmount || 0,
             total_amount: paymentData.newTotal,
+            service_charge_amount: paymentData.serviceChargeAmount || 0,
+            service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0,
             updated_at: new Date().toISOString(),
             _isSynced: false
           }
@@ -1117,6 +1150,10 @@ export default function NewOrderPage() {
         onOrderDataChange={(data) => setOrderExtras(prev => ({ ...prev, [activeOrderType]: data }))}
         selectedTable={activeOrderType === 'walkin' ? selectedTable : null}
         onChangeTable={handleTableClick}
+        orderTakers={activeOrderType === 'walkin' ? orderTakers : []}
+        selectedOrderTaker={activeOrderType === 'walkin' ? selectedOrderTaker : null}
+        onOrderTakerChange={(taker) => activeOrderType === 'walkin' && setSelectedOrderTaker(taker)}
+        requireOrderTaker={activeOrderType === 'walkin' ? requireOrderTaker : false}
       />
 
       </div>{/* end flex flex-1 overflow-hidden */}

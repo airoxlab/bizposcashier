@@ -970,6 +970,11 @@ function WebOrdersPage() {
         return;
       }
 
+      // Resolve order taker name from cache
+      const receiptOrderTakerName = orderData.order_taker_id
+        ? (cacheManager.getOrderTakers().find(t => t.id === orderData.order_taker_id)?.name || null)
+        : null
+
       // Build complete order data for printing (receipt printer expects 'cart' property)
       const completeOrderData = {
         ...orderData,
@@ -984,6 +989,7 @@ function WebOrdersPage() {
         total: orderData.total_amount,
         paymentMethod: orderData.payment_method || 'Cash',
         orderType: orderData.order_type || 'delivery',
+        order_taker_name: receiptOrderTakerName
       };
 
       console.log("🖨️ [Web Orders] Complete order data:", completeOrderData);
@@ -1065,6 +1071,11 @@ function WebOrdersPage() {
         return;
       }
 
+      // Resolve order taker name from cache
+      const tokenOrderTakerName = orderData.order_taker_id
+        ? (cacheManager.getOrderTakers().find(t => t.id === orderData.order_taker_id)?.name || null)
+        : null
+
       // Build complete order data for printing (kitchen token uses 'items')
       const completeOrderData = {
         ...orderData,
@@ -1072,6 +1083,7 @@ function WebOrdersPage() {
         items: transformedItems,
         customer: orderData.customers,
         orderType: orderData.order_type || 'delivery',
+        order_taker_name: tokenOrderTakerName
       };
 
       console.log("🖨️ [Web Orders] Printing token to:", printer.name);

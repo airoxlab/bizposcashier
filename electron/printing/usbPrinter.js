@@ -248,6 +248,12 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
   const cashierName = userProfile?.cashier_name || userProfile?.customer_name || 'N/A';
   commands.push(leftRight('Cashier:', cashierName));
 
+  // Order taker name (only shown if set on the order)
+  const orderTakerName = orderData?.order_taker_name || null;
+  if (orderTakerName) {
+    commands.push(leftRight('Order Taker:', orderTakerName));
+  }
+
   // ========================================
   // CUSTOMER INFO
   // ========================================
@@ -335,10 +341,11 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
   const discountAmount = parseFloat(orderData.discountAmount || 0); // Smart discount only
   const loyaltyDiscountAmount = parseFloat(orderData.loyaltyDiscountAmount || 0);
   const loyaltyPointsRedeemed = parseInt(orderData.loyaltyPointsRedeemed || 0);
+  const serviceChargeAmount = parseFloat(orderData.serviceChargeAmount || 0);
 
-  // Calculate grand total with both discounts applied
+  // Calculate grand total
   const totalDiscounts = discountAmount + loyaltyDiscountAmount;
-  const grandTotal = subtotal - totalDiscounts + deliveryCharges;
+  const grandTotal = subtotal - totalDiscounts + serviceChargeAmount + deliveryCharges;
 
   commands.push(leftRight('Subtotal:', `Rs ${subtotal.toFixed(0)}`));
 
@@ -356,6 +363,14 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
       ? `Loyalty (${loyaltyPointsRedeemed} pts):`
       : 'Loyalty Discount:';
     commands.push(leftRight(loyaltyText, `-Rs ${loyaltyDiscountAmount.toFixed(0)}`));
+  }
+
+  // Show service charge if applicable
+  if (serviceChargeAmount > 0) {
+    const scText = orderData.serviceChargeType === 'percentage'
+      ? `Service Charge (${orderData.serviceChargeValue}%):`
+      : 'Service Charge:';
+    commands.push(leftRight(scText, `+Rs ${serviceChargeAmount.toFixed(0)}`));
   }
 
   if (orderData.orderType === 'delivery' && deliveryCharges > 0) {
@@ -517,6 +532,12 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
   // Cashier name (admin's customer_name or cashier's name)
   const cashierName = userProfile?.cashier_name || userProfile?.customer_name || 'N/A';
   commands.push(leftRight('Cashier:', cashierName));
+
+  // Order taker name (only shown if set on the order)
+  const kitchenOrderTakerName = orderData?.order_taker_name || null;
+  if (kitchenOrderTakerName) {
+    commands.push(leftRight('Order Taker:', kitchenOrderTakerName));
+  }
 
   commands.push(drawLine('-'));
 

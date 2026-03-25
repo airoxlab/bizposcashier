@@ -547,6 +547,7 @@ export default function InlineCustomerPanel({
       {/* ── WALKIN ── */}
       {orderType === 'walkin' && (
         <div className={`text-xs space-y-0.5 ${isDark ? 'text-gray-300' : 'text-gray-600'}`}>
+          {customer?.full_name?.trim() && <div><span className="font-medium">Name:</span> {customer.full_name.trim()}</div>}
           {customer?.phone && <div><span className="font-medium">Phone:</span> {customer.phone}</div>}
           {customer?.email && <div><span className="font-medium">Email:</span> {customer.email}</div>}
         </div>

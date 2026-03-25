@@ -41,6 +41,7 @@ import {
   Globe,
   Gift,
   BarChart2,
+  UserCheck,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabase";
@@ -456,6 +457,9 @@ export default function OrdersPage() {
               total_amount,
               subtotal,
               discount_amount,
+              discount_percentage,
+              service_charge_amount,
+              service_charge_percentage,
               delivery_charges,
               delivery_address,
               order_instructions,
@@ -464,6 +468,7 @@ export default function OrdersPage() {
               customer_id,
               cashier_id,
               delivery_boy_id,
+              order_taker_id,
               order_source,
               original_order_source,
               is_approved,
@@ -487,6 +492,10 @@ export default function OrdersPage() {
                 customer_name
               ),
               delivery_boys (
+                id,
+                name
+              ),
+              order_takers (
                 id,
                 name
               )
@@ -993,6 +1002,8 @@ export default function OrdersPage() {
               discount_amount: paymentData.discountAmount || 0,
               discount_percentage: paymentData.discountType === 'percentage' ? paymentData.discountValue : 0,
               total_amount: paymentData.newTotal,
+              service_charge_amount: paymentData.serviceChargeAmount || 0,
+              service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0,
               updated_at: new Date().toISOString()
             })
             .eq('id', selectedOrder.id);
@@ -1030,7 +1041,9 @@ export default function OrdersPage() {
           payment_status: 'Paid',
           discount_amount: paymentData.discountAmount || 0,
           discount_percentage: paymentData.discountType === 'percentage' ? paymentData.discountValue : 0,
-          total_amount: paymentData.newTotal
+          total_amount: paymentData.newTotal,
+          service_charge_amount: paymentData.serviceChargeAmount || 0,
+          service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0,
         });
 
         notify.success('Payment completed successfully!');
@@ -1392,6 +1405,11 @@ export default function OrdersPage() {
       `${orderTypePrefix}_modifying_order_number`,
       order.order_number
     );
+    // Save daily_serial so it can be preserved on the receipt after modification
+    localStorage.setItem(
+      `${orderTypePrefix}_modifying_daily_serial`,
+      order.daily_serial?.toString() || ''
+    );
     localStorage.setItem(
       `${orderTypePrefix}_original_state`,
       JSON.stringify(orderData.originalState)
@@ -1507,6 +1525,9 @@ export default function OrdersPage() {
         loyaltyDiscountAmount: loyaltyRedemption?.discount_applied || 0,
         loyaltyPointsRedeemed: loyaltyRedemption?.points_used || 0,
         discountType: "amount",
+        serviceChargeAmount: parseFloat(selectedOrder.service_charge_amount || 0),
+        serviceChargeType: parseFloat(selectedOrder.service_charge_percentage || 0) > 0 ? 'percentage' : 'fixed',
+        serviceChargeValue: parseFloat(selectedOrder.service_charge_percentage || 0),
         tableName: selectedOrder.tables?.table_name || (selectedOrder.tables?.table_number ? `Table ${selectedOrder.tables.table_number}` : '') || '',
         cart: orderItems.map((item) => {
           // DEBUG: Log ALL items to see what we're getting from database
@@ -1556,6 +1577,10 @@ export default function OrdersPage() {
           };
         }),
         paymentMethod: selectedOrder.payment_method || "Cash",
+        order_taker_name: selectedOrder.order_takers?.name ||
+          (selectedOrder.order_taker_id
+            ? (cacheManager.getOrderTakers().find(t => t.id === selectedOrder.order_taker_id)?.name || null)
+            : null)
       };
 
       // Add payment transactions for split payment
@@ -1737,6 +1762,10 @@ export default function OrdersPage() {
         deliveryAddress: selectedOrder.delivery_address || selectedOrder.customers?.addressline || selectedOrder.customers?.address || "",
         tableName: selectedOrder.tables?.table_name || (selectedOrder.tables?.table_number ? `Table ${selectedOrder.tables.table_number}` : '') || '',
         items: mappedItems,
+        order_taker_name: selectedOrder.order_takers?.name ||
+          (selectedOrder.order_taker_id
+            ? (cacheManager.getOrderTakers().find(t => t.id === selectedOrder.order_taker_id)?.name || null)
+            : null)
       };
 
       // Get user profile
@@ -2888,7 +2917,26 @@ export default function OrdersPage() {
                             {selectedOrder.customers.email}
                           </p>
                         )}
+                        {(selectedOrder.order_takers?.name || (selectedOrder.order_taker_id && cacheManager.getOrderTakers().find(t => t.id === selectedOrder.order_taker_id)?.name)) && (
+                          <p className={`${isDark ? "text-indigo-300" : "text-indigo-700"} flex items-center gap-2 text-sm`}>
+                            <UserCheck className="w-4 h-4" />
+                            {selectedOrder.order_takers?.name || cacheManager.getOrderTakers().find(t => t.id === selectedOrder.order_taker_id)?.name}
+                          </p>
+                        )}
                       </div>
+                    </div>
+                  )}
+
+                  {/* Order Taker — shown standalone when there's no customer */}
+                  {!selectedOrder.customers && (selectedOrder.order_takers?.name || (selectedOrder.order_taker_id && cacheManager.getOrderTakers().find(t => t.id === selectedOrder.order_taker_id)?.name)) && (
+                    <div className={`${isDark ? "bg-indigo-900/20 border-indigo-700/30" : "bg-indigo-50 border-indigo-200"} rounded-xl p-4 border`}>
+                      <h4 className={`font-semibold ${isDark ? "text-indigo-300" : "text-indigo-900"} mb-2 flex items-center`}>
+                        <UserCheck className="w-5 h-5 mr-2" />
+                        Order Taker
+                      </h4>
+                      <p className={`${isDark ? "text-indigo-200" : "text-indigo-800"} font-semibold`}>
+                        {selectedOrder.order_takers?.name || cacheManager.getOrderTakers().find(t => t.id === selectedOrder.order_taker_id)?.name}
+                      </p>
                     </div>
                   )}
 
@@ -3050,6 +3098,19 @@ export default function OrdersPage() {
                           </span>
                         </div>
                       )}
+                      {parseFloat(selectedOrder.service_charge_amount || 0) > 0 && (
+                        <div
+                          className={`flex justify-between ${
+                            isDark ? "text-orange-400" : "text-orange-600"
+                          }`}
+                        >
+                          <span>Service Charge:</span>
+                          <span>
+                            +Rs{" "}
+                            {parseFloat(selectedOrder.service_charge_amount || 0).toFixed(2)}
+                          </span>
+                        </div>
+                      )}
                       {selectedOrder.order_type === "delivery" &&
                         parseFloat(selectedOrder.delivery_charges || 0) > 0 && (
                           <div
@@ -3080,6 +3141,7 @@ export default function OrdersPage() {
                             parseFloat(selectedOrder.subtotal || 0) -
                             parseFloat(selectedOrder.discount_amount || 0) -
                             parseFloat(loyaltyRedemption?.discount_applied || 0) +
+                            parseFloat(selectedOrder.service_charge_amount || 0) +
                             parseFloat(selectedOrder.delivery_charges || 0)
                           ).toFixed(2)}
                         </span>

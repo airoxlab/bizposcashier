@@ -35,6 +35,12 @@ export default function PaymentModal({
   const [discountAmount, setDiscountAmount] = useState(0)
   const [originalSubtotal, setOriginalSubtotal] = useState(0)
 
+  // Service Charge States
+  const [showServiceChargeSection, setShowServiceChargeSection] = useState(false)
+  const [serviceChargeType, setServiceChargeType] = useState('percentage')
+  const [serviceChargeValue, setServiceChargeValue] = useState(0)
+  const [serviceChargeAmount, setServiceChargeAmount] = useState(0)
+
   const paymentMethods = [
     {
       id: 'cash',
@@ -117,6 +123,38 @@ export default function PaymentModal({
     setDiscountAmount(0)
   }
 
+  // Calculate service charge amount
+  const calculateServiceCharge = (scType, scValue, subtotal, discAmt) => {
+    if (!scValue) return 0
+    const netAfterDiscount = Math.max(0, subtotal - discAmt)
+    if (scType === 'percentage') {
+      return (netAfterDiscount * scValue) / 100
+    } else {
+      return Math.min(scValue, netAfterDiscount * 2) // cap fixed at 2x net as sanity check
+    }
+  }
+
+  // Update service charge when value changes
+  useEffect(() => {
+    const newServiceChargeAmount = calculateServiceCharge(serviceChargeType, serviceChargeValue, originalSubtotal, discountAmount)
+    setServiceChargeAmount(newServiceChargeAmount)
+  }, [serviceChargeType, serviceChargeValue, originalSubtotal, discountAmount])
+
+  const handleServiceChargeValueChange = (value) => {
+    const numValue = Math.max(0, parseFloat(value) || 0)
+    if (serviceChargeType === 'percentage') {
+      setServiceChargeValue(Math.min(100, numValue))
+    } else {
+      setServiceChargeValue(numValue)
+    }
+  }
+
+  const removeServiceCharge = () => {
+    setServiceChargeType('percentage')
+    setServiceChargeValue(0)
+    setServiceChargeAmount(0)
+  }
+
   // Generate smart quick amounts based on total
   const generateQuickAmounts = (total) => {
     const roundedTotal = Math.ceil(total)
@@ -140,7 +178,7 @@ export default function PaymentModal({
   const getCurrentTotal = () => {
     // Get loyalty discount from order
     const loyaltyDiscount = order?.loyalty_discount_amount || order?.loyaltyDiscountAmount || 0
-    return Math.max(0, originalSubtotal - discountAmount - loyaltyDiscount)
+    return Math.max(0, originalSubtotal - discountAmount - loyaltyDiscount) + serviceChargeAmount
   }
 
   const quickAmounts = order ? generateQuickAmounts(getCurrentTotal()) : []
@@ -192,6 +230,9 @@ export default function PaymentModal({
         discountType,
         discountValue,
         discountAmount,
+        serviceChargeType,
+        serviceChargeValue,
+        serviceChargeAmount,
         newTotal: getCurrentTotal()
       }
 
@@ -314,6 +355,65 @@ export default function PaymentModal({
                 )}
               </div>
 
+              {/* Service Charge Section */}
+              <div className={`${classes.card} rounded-lg ${classes.shadow} shadow-sm ${classes.border} border p-3`}>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className={`text-sm font-bold ${classes.textPrimary} flex items-center`}>
+                    <Percent className="w-4 h-4 mr-1.5 text-orange-500" />
+                    Service Charge
+                  </h3>
+                  <button
+                    onClick={() => setShowServiceChargeSection(!showServiceChargeSection)}
+                    className={`px-2 py-1 rounded text-xs font-medium ${classes.button} transition-all`}
+                  >
+                    {showServiceChargeSection ? 'Hide' : 'Add'}
+                  </button>
+                </div>
+
+                {showServiceChargeSection && (
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <label className={`block text-xs font-medium ${classes.textSecondary} mb-1`}>Type</label>
+                        <select
+                          value={serviceChargeType}
+                          onChange={(e) => { setServiceChargeType(e.target.value); setServiceChargeValue(0) }}
+                          className={`w-full px-2 py-1.5 text-xs ${classes.input} rounded focus:ring-1 focus:ring-orange-500`}
+                        >
+                          <option value="percentage">%</option>
+                          <option value="fixed">Rs</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className={`block text-xs font-medium ${classes.textSecondary} mb-1`}>Value</label>
+                        <input
+                          type="number"
+                          value={serviceChargeValue || ''}
+                          onChange={(e) => handleServiceChargeValueChange(e.target.value)}
+                          placeholder="0"
+                          className={`w-full px-2 py-1.5 text-xs ${classes.input} rounded focus:ring-1 focus:ring-orange-500`}
+                        />
+                      </div>
+                      <div>
+                        <label className={`block text-xs font-medium ${classes.textSecondary} mb-1`}>Amount</label>
+                        <div className={`px-2 py-1.5 text-xs ${isDark ? 'bg-orange-900/20' : 'bg-orange-50'} rounded border ${isDark ? 'border-orange-700/30' : 'border-orange-200'} font-bold text-orange-600`}>
+                          +Rs {serviceChargeAmount.toFixed(0)}
+                        </div>
+                      </div>
+                    </div>
+                    {serviceChargeAmount > 0 && (
+                      <button
+                        onClick={removeServiceCharge}
+                        className="flex items-center px-2 py-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded text-xs"
+                      >
+                        <X className="w-3 h-3 mr-1" />
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
               {/* Payment Methods - Compact */}
               <div className={`${classes.card} rounded-lg ${classes.shadow} shadow-sm ${classes.border} border p-3 flex-1 flex flex-col overflow-hidden`}>
                 <h3 className={`text-sm font-bold ${classes.textPrimary} mb-2`}>Select Payment Method</h3>
@@ -419,6 +519,12 @@ export default function PaymentModal({
                     <div className={`flex justify-between text-xs ${isDark ? 'text-green-400' : 'text-green-600'}`}>
                       <span>Discount ({discountType === 'percentage' ? `${discountValue}%` : `Rs ${discountValue}`}):</span>
                       <span className="font-semibold">-Rs {discountAmount.toFixed(2)}</span>
+                    </div>
+                  )}
+                  {serviceChargeAmount > 0 && (
+                    <div className={`flex justify-between text-xs ${isDark ? 'text-orange-400' : 'text-orange-600'}`}>
+                      <span>Service Charge ({serviceChargeType === 'percentage' ? `${serviceChargeValue}%` : `Rs ${serviceChargeValue}`}):</span>
+                      <span className="font-semibold">+Rs {serviceChargeAmount.toFixed(2)}</span>
                     </div>
                   )}
                   <div className={`flex justify-between font-bold ${classes.textPrimary} border-t ${classes.border} pt-1.5 mt-1`}>

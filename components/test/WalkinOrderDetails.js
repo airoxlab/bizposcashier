@@ -23,7 +23,8 @@ import {
   X,
   RefreshCw,
   CreditCard,
-  Table2
+  Table2,
+  UserCheck
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { authManager } from '../../lib/authManager'
@@ -99,9 +100,14 @@ export default function WalkinOrderDetails({
         loyaltyDiscountAmount: loyaltyRedemption?.discount_applied || 0,
         loyaltyPointsRedeemed: loyaltyRedemption?.points_used || 0,
         discountType: 'amount',
+        serviceChargeAmount: parseFloat(order.service_charge_amount || 0),
+        serviceChargeType: parseFloat(order.service_charge_percentage || 0) > 0 ? 'percentage' : 'fixed',
+        serviceChargeValue: parseFloat(order.service_charge_percentage || 0),
         tableName: order.tables?.table_name || (order.tables?.table_number ? `Table ${order.tables.table_number}` : null) || order.table_name || null,
         paymentMethod: order.payment_method || 'Unpaid',
         paymentTransactions: paymentTransactions.length > 0 ? paymentTransactions : undefined,
+        order_taker_name: order.order_takers?.name ||
+          (order.order_taker_id ? (cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null) : null),
         cart: items.map(item => item.is_deal
           ? { isDeal: true, dealId: item.deal_id, dealName: item.product_name, dealProducts: (() => { try { return typeof item.deal_products === 'string' ? JSON.parse(item.deal_products) : (item.deal_products || []) } catch(e) { return [] } })(), quantity: item.quantity, totalPrice: item.total_price, itemInstructions: item.item_instructions || null }
           : { isDeal: false, productName: item.product_name, variantName: item.variant_name, quantity: item.quantity, totalPrice: item.total_price, itemInstructions: item.item_instructions || null }
@@ -175,6 +181,8 @@ export default function WalkinOrderDetails({
         specialNotes: order.order_instructions || '',
         deliveryAddress: order.delivery_address || order.customers?.addressline || order.customers?.address || '',
         tableName: order.tables?.table_name || (order.tables?.table_number ? `Table ${order.tables.table_number}` : null) || order.table_name || null,
+        order_taker_name: order.order_takers?.name ||
+          (order.order_taker_id ? (cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null) : null),
         items: mappedItems,
       }
 
@@ -669,6 +677,8 @@ export default function WalkinOrderDetails({
     localStorage.setItem(`${orderTypePrefix}_discount`, orderData.discount.toString())
     localStorage.setItem(`${orderTypePrefix}_modifying_order`, order.id)
     localStorage.setItem(`${orderTypePrefix}_modifying_order_number`, order.order_number)
+    // Save daily_serial so it can be preserved on the receipt after modification
+    localStorage.setItem(`${orderTypePrefix}_modifying_daily_serial`, order.daily_serial?.toString() || '')
     localStorage.setItem(`${orderTypePrefix}_original_state`, JSON.stringify(orderData.originalState))
     // Save original order status so editing doesn't revert it back to Pending
     localStorage.setItem(`${orderTypePrefix}_original_order_status`, order.order_status || 'Pending')
@@ -1090,6 +1100,14 @@ export default function WalkinOrderDetails({
                     <span className={`text-[10px] ${classes.textSecondary}`}>{order.customers.phone}</span>
                   </div>
                 )}
+                {(order.order_takers?.name || (order.order_taker_id && cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name)) && (
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <UserCheck className={`w-2.5 h-2.5 ${isDark ? 'text-indigo-400' : 'text-indigo-600'}`} />
+                    <span className={`text-[10px] ${isDark ? 'text-indigo-300' : 'text-indigo-700'} font-medium`}>
+                      {order.order_takers?.name || cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1105,6 +1123,12 @@ export default function WalkinOrderDetails({
                   <div className="flex justify-between">
                     <span className={`text-[10px] ${classes.textSecondary}`}>Discount:</span>
                     <span className={`text-[10px] text-red-500`}>-Rs {order.discount_amount}</span>
+                  </div>
+                )}
+                {parseFloat(order.service_charge_amount || 0) > 0 && (
+                  <div className="flex justify-between">
+                    <span className={`text-[10px] ${classes.textSecondary}`}>Service Charge:</span>
+                    <span className={`text-[10px] ${isDark ? 'text-orange-400' : 'text-orange-600'}`}>+Rs {parseFloat(order.service_charge_amount).toFixed(2)}</span>
                   </div>
                 )}
                 {loyaltyRedemption && loyaltyRedemption.discount_applied > 0 && (

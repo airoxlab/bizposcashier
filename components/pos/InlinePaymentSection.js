@@ -34,6 +34,12 @@ export default function InlinePaymentSection({
   const [discountAmount, setDiscountAmount] = useState(0)
   const [originalSubtotal, setOriginalSubtotal] = useState(0)
 
+  // Service Charge States
+  const [showServiceChargeSection, setShowServiceChargeSection] = useState(false)
+  const [serviceChargeType, setServiceChargeType] = useState('percentage')
+  const [serviceChargeValue, setServiceChargeValue] = useState(0)
+  const [serviceChargeAmount, setServiceChargeAmount] = useState(0)
+
   const paymentMethods = [
     {
       id: 'cash',
@@ -149,6 +155,33 @@ export default function InlinePaymentSection({
     setDiscountAmount(0)
   }
 
+  // Service charge helpers
+  const calculateServiceCharge = (scType, scValue, subtotal, discAmt) => {
+    if (!scValue) return 0
+    const netAfterDiscount = Math.max(0, subtotal - discAmt)
+    if (scType === 'percentage') {
+      return (netAfterDiscount * scValue) / 100
+    } else {
+      return scValue
+    }
+  }
+
+  useEffect(() => {
+    const newSC = calculateServiceCharge(serviceChargeType, serviceChargeValue, originalSubtotal, discountAmount)
+    setServiceChargeAmount(newSC)
+  }, [serviceChargeType, serviceChargeValue, originalSubtotal, discountAmount])
+
+  const handleServiceChargeValueChange = (value) => {
+    const numValue = Math.max(0, parseFloat(value) || 0)
+    setServiceChargeValue(serviceChargeType === 'percentage' ? Math.min(100, numValue) : numValue)
+  }
+
+  const removeServiceCharge = () => {
+    setServiceChargeType('percentage')
+    setServiceChargeValue(0)
+    setServiceChargeAmount(0)
+  }
+
   // Generate smart quick amounts based on total
   const generateQuickAmounts = (total) => {
     const roundedTotal = Math.ceil(total)
@@ -172,7 +205,7 @@ export default function InlinePaymentSection({
     // Get loyalty discount from order
     const loyaltyDiscount = order?.loyalty_discount_amount || order?.loyaltyDiscountAmount || 0
     const deliveryCharges = order?.delivery_charges || 0
-    return Math.max(0, originalSubtotal - discountAmount - loyaltyDiscount) + deliveryCharges
+    return Math.max(0, originalSubtotal - discountAmount - loyaltyDiscount) + serviceChargeAmount + deliveryCharges
   }
 
   const quickAmounts = order ? generateQuickAmounts(getCurrentTotal()) : []
@@ -228,6 +261,9 @@ export default function InlinePaymentSection({
         discountType,
         discountValue,
         discountAmount,
+        serviceChargeType,
+        serviceChargeValue,
+        serviceChargeAmount,
         newTotal: getCurrentTotal(),
         completeOrder
       }
@@ -330,6 +366,64 @@ export default function InlinePaymentSection({
               {discountAmount > 0 && (
                 <button
                   onClick={removeDiscount}
+                  className="flex items-center px-2 py-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded text-[10px]"
+                >
+                  <X className="w-3 h-3 mr-1" />
+                  Remove
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Service Charge Section */}
+        <div className={`${classes.card} ${classes.shadow} shadow-sm ${classes.border} border rounded-lg p-3`}>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className={`text-xs font-bold ${classes.textPrimary} flex items-center`}>
+              <Percent className="w-3.5 h-3.5 mr-1.5 text-orange-500" />
+              Service Charge
+            </h3>
+            <button
+              onClick={() => setShowServiceChargeSection(!showServiceChargeSection)}
+              className={`px-2 py-1 rounded text-[10px] font-medium ${classes.button} transition-all`}
+            >
+              {showServiceChargeSection ? 'Hide' : 'Add'}
+            </button>
+          </div>
+          {showServiceChargeSection && (
+            <div className="space-y-2">
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className={`block text-[10px] font-medium ${classes.textSecondary} mb-1`}>Type</label>
+                  <select
+                    value={serviceChargeType}
+                    onChange={(e) => { setServiceChargeType(e.target.value); setServiceChargeValue(0) }}
+                    className={`w-full px-2 py-1.5 text-xs ${classes.input} rounded focus:ring-1 focus:ring-orange-500`}
+                  >
+                    <option value="percentage">%</option>
+                    <option value="fixed">Rs</option>
+                  </select>
+                </div>
+                <div>
+                  <label className={`block text-[10px] font-medium ${classes.textSecondary} mb-1`}>Value</label>
+                  <input
+                    type="number"
+                    value={serviceChargeValue || ''}
+                    onChange={(e) => handleServiceChargeValueChange(e.target.value)}
+                    placeholder="0"
+                    className={`w-full px-2 py-1.5 text-xs ${classes.input} rounded focus:ring-1 focus:ring-orange-500`}
+                  />
+                </div>
+                <div>
+                  <label className={`block text-[10px] font-medium ${classes.textSecondary} mb-1`}>Amount</label>
+                  <div className={`px-2 py-1.5 text-xs ${isDark ? 'bg-orange-900/20' : 'bg-orange-50'} rounded border ${isDark ? 'border-orange-700/30' : 'border-orange-200'} font-bold text-orange-600`}>
+                    +Rs {serviceChargeAmount.toFixed(0)}
+                  </div>
+                </div>
+              </div>
+              {serviceChargeAmount > 0 && (
+                <button
+                  onClick={removeServiceCharge}
                   className="flex items-center px-2 py-1 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded text-[10px]"
                 >
                   <X className="w-3 h-3 mr-1" />
@@ -514,8 +608,14 @@ export default function InlinePaymentSection({
                 <span className="font-semibold">-Rs {(order.loyalty_discount_amount || order.loyaltyDiscountAmount || 0).toFixed(2)}</span>
               </div>
             )}
-            {(order.delivery_charges || 0) > 0 && (
+            {serviceChargeAmount > 0 && (
               <div className={`flex justify-between text-xs ${isDark ? 'text-orange-400' : 'text-orange-600'}`}>
+                <span>Service Charge ({serviceChargeType === 'percentage' ? `${serviceChargeValue}%` : `Rs ${serviceChargeValue}`}):</span>
+                <span className="font-semibold">+Rs {serviceChargeAmount.toFixed(2)}</span>
+              </div>
+            )}
+            {(order.delivery_charges || 0) > 0 && (
+              <div className={`flex justify-between text-xs ${isDark ? 'text-blue-400' : 'text-blue-600'}`}>
                 <span>Delivery Charges:</span>
                 <span className="font-semibold">+Rs {(order.delivery_charges || 0).toFixed(2)}</span>
               </div>

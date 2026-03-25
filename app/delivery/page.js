@@ -1551,10 +1551,18 @@ export default function DeliveryPage() {
         customer_name: !order?.cashier_id ? cashierName : null,
       }
 
+      // Resolve order taker name from completed order
+      const completedOrder = completedOrderData.order
+      const completedOrderTakerName = completedOrder?.order_takers?.name ||
+        (completedOrder?.order_taker_id
+          ? (cacheManager.getOrderTakers().find(t => t.id === completedOrder.order_taker_id)?.name || null)
+          : null)
+
       // Ensure order ID is included at the top level for logo fetching
       const printData = {
         ...completedOrderData,
-        orderId: completedOrderData.order?.id || completedOrderData.orderId
+        orderId: completedOrderData.order?.id || completedOrderData.orderId,
+        order_taker_name: completedOrderTakerName || null
       }
 
       // Print the receipt
@@ -1732,6 +1740,10 @@ export default function DeliveryPage() {
           }
         }),
         paymentMethod: order.payment_method || 'Cash',
+        order_taker_name: order.order_takers?.name ||
+          (order.order_taker_id
+            ? (cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null)
+            : null)
       }
 
       // Get user profile
@@ -1875,6 +1887,10 @@ export default function DeliveryPage() {
         specialNotes: order.order_instructions || '',
         deliveryAddress: order.delivery_address || order.customers?.addressline || order.customers?.address || '',
         items: mappedItems,
+        order_taker_name: order.order_takers?.name ||
+          (order.order_taker_id
+            ? (cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null)
+            : null)
       }
 
       // Get user profile

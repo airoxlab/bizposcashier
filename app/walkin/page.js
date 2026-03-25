@@ -62,6 +62,11 @@ export default function WalkInPage() {
   // Table selection
   const [selectedTable, setSelectedTable] = useState(null)
 
+  // Order taker
+  const [orderTakers, setOrderTakers] = useState([])
+  const [selectedOrderTaker, setSelectedOrderTaker] = useState(null)
+  const [requireOrderTaker, setRequireOrderTaker] = useState(false)
+
   // Orders view
   const [showOrdersView, setShowOrdersView] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState(null)
@@ -357,6 +362,15 @@ export default function WalkInPage() {
     setAllProducts(cachedProducts)
     setDeals(cachedDeals)
 
+    // Load order takers and require setting
+    const takers = cacheManager.getOrderTakers()
+    setOrderTakers(takers)
+    try {
+      const req = localStorage.getItem('pos_require_order_taker')
+      if (req !== null) setRequireOrderTaker(JSON.parse(req))
+    } catch {}
+
+
     console.log('📦 Loaded from cache:', {
       categories: cachedCategories.length,
       products: cachedProducts.length,
@@ -526,10 +540,18 @@ export default function WalkInPage() {
         customer_name: !order?.cashier_id ? cashierName : null,
       }
 
+      // Resolve order taker name from completed order
+      const completedOrder = completedOrderData.order
+      const completedOrderTakerName = completedOrder?.order_takers?.name ||
+        (completedOrder?.order_taker_id
+          ? (cacheManager.getOrderTakers().find(t => t.id === completedOrder.order_taker_id)?.name || null)
+          : null)
+
       // Ensure order ID is included at the top level for logo fetching
       const printData = {
         ...completedOrderData,
-        orderId: completedOrderData.order?.id || completedOrderData.orderId
+        orderId: completedOrderData.order?.id || completedOrderData.orderId,
+        order_taker_name: completedOrderTakerName || null
       }
 
       // Debug log what's being sent to printer
@@ -1251,6 +1273,8 @@ export default function WalkInPage() {
             amount_paid: paymentData.newTotal,
             discount_amount: paymentData.discountAmount || 0,
             discount_percentage: paymentData.discountType === 'percentage' ? paymentData.discountValue : 0,
+            service_charge_amount: paymentData.serviceChargeAmount || 0,
+            service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0,
             total_amount: paymentData.newTotal,
             updated_at: new Date().toISOString()
           })
@@ -1281,6 +1305,8 @@ export default function WalkInPage() {
             amount_paid: paymentData.newTotal,
             discount_amount: paymentData.discountAmount || 0,
             discount_percentage: paymentData.discountType === 'percentage' ? paymentData.discountValue : 0,
+            service_charge_amount: paymentData.serviceChargeAmount || 0,
+            service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0,
             total_amount: paymentData.newTotal,
             updated_at: new Date().toISOString(),
             _isSynced: false
@@ -1405,7 +1431,7 @@ export default function WalkInPage() {
       // Payment-only: update selectedOrder in state and return — no modal, stays in order details
       if (paymentData.completeOrder === false) {
         setSelectedOrder(prev => prev?.id === order.id
-          ? { ...prev, payment_status: 'Paid', payment_method: paymentData.paymentMethod, amount_paid: paymentData.newTotal, total_amount: paymentData.newTotal }
+          ? { ...prev, payment_status: 'Paid', payment_method: paymentData.paymentMethod, amount_paid: paymentData.newTotal, total_amount: paymentData.newTotal, service_charge_amount: paymentData.serviceChargeAmount || 0, service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0 }
           : prev)
         toast.success('Payment recorded successfully')
         setOrdersRefreshTrigger(prev => prev + 1)
@@ -1580,6 +1606,9 @@ export default function WalkInPage() {
         loyaltyPointsRedeemed: loyaltyPointsRedeemed,
         discountType: paymentData.discountType || 'percentage',
         discountValue: paymentData.discountValue || 0,
+        serviceChargeAmount: paymentData.serviceChargeAmount || 0,
+        serviceChargeType: paymentData.serviceChargeType || 'percentage',
+        serviceChargeValue: paymentData.serviceChargeValue || 0,
         changeAmount: paymentData.changeAmount || 0,
         cashReceived: paymentData.cashAmount || null,
         cart: mappedCartItems,
@@ -2030,6 +2059,9 @@ export default function WalkInPage() {
         loyaltyDiscountAmount: loyaltyDiscountAmount,
         loyaltyPointsRedeemed: loyaltyPointsRedeemed,
         discountType: 'amount',
+        serviceChargeAmount: parseFloat(order.service_charge_amount || 0),
+        serviceChargeType: parseFloat(order.service_charge_percentage || 0) > 0 ? 'percentage' : 'fixed',
+        serviceChargeValue: parseFloat(order.service_charge_percentage || 0),
         tableName: resolveTableName(order),
         cart: orderItems.map((item) => {
           if (item.is_deal) {
@@ -2083,6 +2115,10 @@ export default function WalkInPage() {
           }
         }),
         paymentMethod: order.payment_method || 'Unpaid',
+        order_taker_name: order.order_takers?.name ||
+          (order.order_taker_id
+            ? (cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null)
+            : null)
       }
 
       // Fetch payment transactions for split payment
@@ -2300,6 +2336,10 @@ export default function WalkInPage() {
         specialNotes: order.order_instructions || '',
         tableName: resolveTableName(order),
         items: mappedItems,
+        order_taker_name: order.order_takers?.name ||
+          (order.order_taker_id
+            ? (cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null)
+            : null)
       }
 
       // Get user profile
@@ -2411,6 +2451,11 @@ export default function WalkInPage() {
       return
     }
 
+    if (requireOrderTaker && !selectedOrderTaker) {
+      notify.warning('Please select an order taker before proceeding')
+      return
+    }
+
     const orderData = {
       cart,
       customer,
@@ -2421,6 +2466,8 @@ export default function WalkInPage() {
       cashierId: cashierData?.id || null,
       userId: user?.id,
       sessionId: sessionId,
+      orderTakerId: selectedOrderTaker?.id || null,
+      orderTakerName: selectedOrderTaker?.name || null,
       isModifying: isReopenedOrder,
       existingOrderId: originalOrderId,
       existingOrderNumber: localStorage.getItem('walkin_modifying_order_number'),
@@ -2583,7 +2630,7 @@ export default function WalkInPage() {
           onOrdersLoaded={(freshOrders) => {
             if (!selectedOrder) return
             const updated = freshOrders.find(o => o.id === selectedOrder.id)
-            if (updated && updated.daily_serial !== selectedOrder.daily_serial) {
+            if (updated && updated.updated_at !== selectedOrder.updated_at) {
               setSelectedOrder(updated)
             }
           }}
@@ -2709,6 +2756,10 @@ export default function WalkInPage() {
         onCustomerChange={setCustomer}
         orderData={orderData}
         onOrderDataChange={setOrderData}
+        orderTakers={orderTakers}
+        selectedOrderTaker={selectedOrderTaker}
+        onOrderTakerChange={setSelectedOrderTaker}
+        requireOrderTaker={requireOrderTaker}
       />
 
       {/* Customer Form */}

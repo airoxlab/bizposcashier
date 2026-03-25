@@ -183,6 +183,10 @@ export default function WalkinOrdersSidebar({
               id,
               customer_name
             ),
+            order_takers (
+              id,
+              name
+            ),
             order_items (
               id,
               product_id,
@@ -713,6 +717,16 @@ export default function WalkinOrdersSidebar({
                         </span>
                       </>
                     )}
+                  </div>
+                )}
+
+                {/* Show order taker info */}
+                {order.order_takers?.name && (
+                  <div className={`flex items-center gap-1 mt-1.5 pt-1.5 border-t ${isDark ? 'border-gray-600' : 'border-gray-200'}`}>
+                    <User className={`w-3 h-3 ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
+                    <span className={`text-xs ${isDark ? 'text-blue-400' : 'text-blue-600'} font-medium`}>
+                      {order.order_takers.name}
+                    </span>
                   </div>
                 )}
 

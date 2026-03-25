@@ -26,7 +26,8 @@ import {
   Eye,
   MapPin,
   Truck,
-  LayoutGrid
+  LayoutGrid,
+  UserCheck
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { cacheManager } from '../../lib/cacheManager'
@@ -68,6 +69,12 @@ export default function PaymentPage() {
   const [discountValue, setDiscountValue] = useState(0)
   const [discountAmount, setDiscountAmount] = useState(0)
   const [originalSubtotal, setOriginalSubtotal] = useState(0)
+
+  // Service Charge States
+  const [showServiceChargeSection, setShowServiceChargeSection] = useState(false)
+  const [serviceChargeType, setServiceChargeType] = useState('percentage') // 'percentage' or 'fixed'
+  const [serviceChargeValue, setServiceChargeValue] = useState(0)
+  const [serviceChargeAmount, setServiceChargeAmount] = useState(0)
 
   // Loyalty Redemption States
   const [loyaltyRedemption, setLoyaltyRedemption] = useState(null)
@@ -249,6 +256,15 @@ useEffect(() => {
     }
   }
 
+  // Calculate service charge amount
+  const calculateServiceCharge = (netAmount) => {
+    if (!serviceChargeValue) return 0
+    if (serviceChargeType === 'percentage') {
+      return (netAmount * serviceChargeValue) / 100
+    }
+    return serviceChargeValue
+  }
+
   // Update discount when value changes
   useEffect(() => {
     const newDiscountAmount = calculateDiscount()
@@ -258,7 +274,10 @@ useEffect(() => {
       // Calculate total with both smart discount and loyalty redemption
       const totalDiscount = newDiscountAmount + loyaltyDiscountAmount
       const deliveryCharges = parseFloat(orderData.deliveryCharges) || 0
-      const newTotal = Math.max(0, originalSubtotal - totalDiscount + deliveryCharges)
+      const netAfterDiscount = Math.max(0, originalSubtotal - totalDiscount)
+      const newSCAmount = calculateServiceCharge(netAfterDiscount)
+      setServiceChargeAmount(newSCAmount)
+      const newTotal = netAfterDiscount + newSCAmount + deliveryCharges
 
       // 🆕 Recalculate amount due for modified PAID orders
       let calculatedAmountDue = newTotal
@@ -282,7 +301,7 @@ useEffect(() => {
         total: newTotal
       }))
     }
-  }, [discountType, discountValue, originalSubtotal, loyaltyDiscountAmount])
+  }, [discountType, discountValue, originalSubtotal, loyaltyDiscountAmount, serviceChargeType, serviceChargeValue])
 
   const handleSmartDiscount = (discount) => {
     setDiscountType(discount.type)
@@ -520,6 +539,8 @@ const processOrder = async () => {
           subtotal: orderData.subtotal,
           discount_amount: discountAmount || 0,
           discount_percentage: discountType === 'percentage' ? discountValue : 0,
+          service_charge_amount: serviceChargeAmount || 0,
+          service_charge_percentage: serviceChargeType === 'percentage' ? serviceChargeValue : 0,
           delivery_charges: orderData.deliveryCharges || 0,
           delivery_boy_id: orderData.deliveryBoyId || null,
           delivery_address: orderData.deliveryAddress || '',
@@ -652,6 +673,10 @@ const processOrder = async () => {
       setOrderNumber(orderData.existingOrderNumber)
       setIsOfflineOrder(false)
 
+      // Restore daily_serial for printing — it was saved to localStorage when reopening
+      const savedSerial = localStorage.getItem(`${orderData.orderType}_modifying_daily_serial`)
+      if (savedSerial) newDailySerial = parseInt(savedSerial) || null
+
       console.log(`✅ Order ${orderData.existingOrderNumber} modified successfully`)
 
     } else {
@@ -667,10 +692,13 @@ const processOrder = async () => {
         subtotal: orderData.subtotal,
         discount_amount: discountAmount || 0, // Smart discount only (not including loyalty)
         discount_percentage: discountType === 'percentage' ? discountValue : 0,
+        service_charge_amount: serviceChargeAmount || 0,
+        service_charge_percentage: serviceChargeType === 'percentage' ? serviceChargeValue : 0,
         delivery_charges: orderData.deliveryCharges || 0, // FIX: Add delivery charges
         delivery_boy_id: orderData.deliveryBoyId || null, // FIX: Add delivery boy
         delivery_address: orderData.deliveryAddress || '', // Store delivery address
         table_id: orderData.tableId || null, // Add table_id for walkin orders
+        order_taker_id: orderData.orderTakerId || null,
         total_amount: orderData.total,
         payment_method: selectedPaymentMethod.name,
         payment_status: (selectedPaymentMethod.id === 'unpaid' || selectedPaymentMethod.id === 'account') ? 'Pending' : 'Paid',
@@ -799,6 +827,9 @@ const processOrder = async () => {
       discountAmount: discountAmount || 0,
       discountType: discountType,
       discountValue: discountValue,
+      serviceChargeAmount: serviceChargeAmount || 0,
+      serviceChargeType: serviceChargeType,
+      serviceChargeValue: serviceChargeValue || 0,
       tableId: orderData.tableId || null,
       tableName: orderData.tableName || null
     }))
@@ -1039,6 +1070,12 @@ const handleThermalPrint = async () => {
     const finalOrderDataStr = localStorage.getItem('final_order_data')
     const finalOrderData = finalOrderDataStr ? JSON.parse(finalOrderDataStr) : null
 
+    // Resolve order taker name
+    const orderTakerForReceipt = orderData?.orderTakerName ||
+      (orderData?.orderTakerId
+        ? (cacheManager.getOrderTakers().find(t => t.id === orderData.orderTakerId)?.name || null)
+        : null)
+
     // Prepare complete order data
     const completeOrderData = {
       ...orderData,
@@ -1052,8 +1089,12 @@ const handleThermalPrint = async () => {
       discountAmount: discountAmount || 0,
       loyaltyDiscountAmount: loyaltyDiscountAmount || 0,
       loyaltyPointsRedeemed: loyaltyRedemption?.pointsToRedeem || 0,
+      serviceChargeAmount: serviceChargeAmount || 0,
+      serviceChargeType: serviceChargeType || 'percentage',
+      serviceChargeValue: serviceChargeValue || 0,
       orderType: orderData.orderType || 'walkin',
-      tableName: orderData.tableName || finalOrderData?.tableName || null
+      tableName: orderData.tableName || finalOrderData?.tableName || null,
+      order_taker_name: orderTakerForReceipt || null
     }
 
     // If split payment, add the payment transactions
@@ -1217,6 +1258,12 @@ const handlePrintKitchenToken = async () => {
       mappedItems = await getOrderItemsWithChanges(orderData.orderId, mappedItems)
     }
 
+    // Resolve order taker name for kitchen token
+    const orderTakerForToken = orderData?.orderTakerName ||
+      (orderData?.orderTakerId
+        ? (cacheManager.getOrderTakers().find(t => t.id === orderData.orderTakerId)?.name || null)
+        : null)
+
     // Prepare kitchen token data
     const kitchenTokenData = {
       orderNumber,
@@ -1227,7 +1274,8 @@ const handlePrintKitchenToken = async () => {
       customerPhone: orderData.customerPhone || '',
       specialNotes: orderData.orderInstructions || '',
       deliveryAddress: orderData.deliveryAddress || '',
-      items: mappedItems
+      items: mappedItems,
+      order_taker_name: orderTakerForToken || null
     }
 
     // Use printerManager to print kitchen token(s) with category/deal-based routing
@@ -1356,6 +1404,8 @@ const handlePrintKitchenToken = async () => {
         subtotal: orderData.subtotal,
         discount_amount: discountAmount || 0,
         discount_percentage: discountType === 'percentage' ? discountValue : 0,
+        service_charge_amount: serviceChargeAmount || 0,
+        service_charge_percentage: serviceChargeType === 'percentage' ? serviceChargeValue : 0,
         delivery_charges: orderData.deliveryCharges || 0,
         delivery_boy_id: orderData.deliveryBoyId || null,
         delivery_address: orderData.deliveryAddress || '',
@@ -1928,6 +1978,66 @@ if (orderComplete) {
               )}
             </div>
 
+            {/* Service Charge Section */}
+            <div className={`${classes.card} rounded-lg ${classes.border} border p-2`}>
+              <div className="flex items-center justify-between mb-1">
+                <h2 className={`text-sm font-bold ${classes.textPrimary} flex items-center`}>
+                  <span className="w-3.5 h-3.5 mr-1 text-orange-500 font-bold text-xs">%</span>
+                  Service Charge
+                </h2>
+                <button
+                  onClick={() => setShowServiceChargeSection(!showServiceChargeSection)}
+                  className={`px-2 py-1 rounded text-xs ${classes.button} font-medium`}
+                >
+                  {showServiceChargeSection ? 'Hide' : 'Add'}
+                </button>
+              </div>
+
+              {showServiceChargeSection && (
+                <div className="space-y-2">
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className={`block text-xs ${classes.textSecondary} mb-1`}>Type</label>
+                      <select
+                        value={serviceChargeType}
+                        onChange={(e) => { setServiceChargeType(e.target.value); setServiceChargeValue(0) }}
+                        className={`w-full px-2 py-1 text-xs ${classes.input} rounded focus:ring-1 focus:ring-orange-500`}
+                      >
+                        <option value="percentage">%</option>
+                        <option value="fixed">Rs</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className={`block text-xs ${classes.textSecondary} mb-1`}>Value</label>
+                      <input
+                        type="number"
+                        value={serviceChargeValue || ''}
+                        onChange={(e) => setServiceChargeValue(Math.max(0, parseFloat(e.target.value) || 0))}
+                        placeholder="0"
+                        min="0"
+                        className={`w-full px-2 py-1 text-xs ${classes.input} rounded focus:ring-1 focus:ring-orange-500`}
+                      />
+                    </div>
+                    <div>
+                      <label className={`block text-xs ${classes.textSecondary} mb-1`}>Amount</label>
+                      <div className={`px-2 py-1 text-xs ${isDark ? 'bg-orange-900/20' : 'bg-orange-50'} rounded border ${isDark ? 'border-orange-700/30' : 'border-orange-200'} font-bold text-orange-600`}>
+                        Rs {serviceChargeAmount.toFixed(0)}
+                      </div>
+                    </div>
+                  </div>
+                  {serviceChargeAmount > 0 && (
+                    <button
+                      onClick={() => { setServiceChargeValue(0); setServiceChargeAmount(0) }}
+                      className="flex items-center px-2 py-1 text-xs text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded"
+                    >
+                      <X className="w-3 h-3 mr-1" />
+                      Remove
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
             {/* Payment Methods Grid - COMPACT */}
             <div className={`${classes.card} rounded-lg ${classes.border} border p-2 flex-1 overflow-hidden flex flex-col`}>
               <h2 className={`text-sm font-bold ${classes.textPrimary} mb-2`}>Payment Method</h2>
@@ -2299,6 +2409,14 @@ if (orderComplete) {
                   <span className="font-semibold">-Rs {loyaltyDiscountAmount.toFixed(0)}</span>
                 </div>
               )}
+              {serviceChargeAmount > 0 && (
+                <div className={`flex justify-between text-xs ${isDark ? 'text-orange-400' : 'text-orange-600'}`}>
+                  <span>
+                    Service Charge ({serviceChargeType === 'percentage' ? `${serviceChargeValue}%` : `Rs ${serviceChargeValue}`}):
+                  </span>
+                  <span className="font-semibold">+Rs {serviceChargeAmount.toFixed(0)}</span>
+                </div>
+              )}
               {parseFloat(orderData.deliveryCharges) > 0 && (
                 <div className={`flex justify-between text-xs ${isDark ? 'text-blue-400' : 'text-blue-600'}`}>
                   <span>Delivery:</span>
@@ -2347,9 +2465,11 @@ if (orderComplete) {
             {orderData.customer && (
               <div className={`mb-2 p-1.5 ${isDark ? 'bg-blue-900/20 border-blue-700/30' : 'bg-blue-50 border-blue-200'} rounded border`}>
                 <h4 className={`font-semibold text-xs ${isDark ? 'text-blue-300' : 'text-blue-900'} mb-0.5`}>Customer</h4>
-                <p className={`${isDark ? 'text-blue-200' : 'text-blue-700'} text-xs font-medium`}>
-                  {orderData.customer.first_name} {orderData.customer.last_name}
-                </p>
+                {(orderData.customer.full_name?.trim() || orderData.customer.first_name) && (
+                  <p className={`${isDark ? 'text-blue-200' : 'text-blue-700'} text-xs font-medium`}>
+                    {orderData.customer.full_name?.trim() || [orderData.customer.first_name, orderData.customer.last_name].filter(Boolean).join(' ')}
+                  </p>
+                )}
                 <p className={`${isDark ? 'text-blue-300' : 'text-blue-600'} text-[10px]`}>{orderData.customer.phone}</p>
                 {orderData.orderType === 'delivery' && orderData.deliveryAddress && (
                   <div className="flex items-start mt-1">
@@ -2377,6 +2497,22 @@ if (orderComplete) {
                 </p>
               </div>
             )}
+
+            {/* Order Taker Info - Compact */}
+            {(orderData.orderTakerName || orderData.orderTakerId) && (() => {
+              const takerName = orderData.orderTakerName ||
+                (orderData.orderTakerId ? cacheManager.getOrderTakers().find(t => t.id === orderData.orderTakerId)?.name : null)
+              if (!takerName) return null
+              return (
+                <div className={`mb-2 p-1.5 ${isDark ? 'bg-indigo-900/20 border-indigo-700/30' : 'bg-indigo-50 border-indigo-200'} rounded border`}>
+                  <div className="flex items-center mb-0.5">
+                    <UserCheck className={`w-3 h-3 mr-1 ${isDark ? 'text-indigo-400' : 'text-indigo-600'}`} />
+                    <h4 className={`font-semibold text-xs ${isDark ? 'text-indigo-300' : 'text-indigo-900'}`}>Order Taker</h4>
+                  </div>
+                  <p className={`${isDark ? 'text-indigo-200' : 'text-indigo-700'} text-[10px]`}>{takerName}</p>
+                </div>
+              )
+            })()}
 
             {/* Time Info - Compact */}
             {(orderData.takeawayTime || orderData.deliveryTime) && (
