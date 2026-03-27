@@ -1410,6 +1410,14 @@ export default function OrdersPage() {
       `${orderTypePrefix}_modifying_daily_serial`,
       order.daily_serial?.toString() || ''
     );
+    // Save order taker so it is restored when the page loads
+    if (order.order_type === 'walkin' && order.order_taker_id) {
+      const takerName = order.order_takers?.name ||
+        cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null;
+      localStorage.setItem('walkin_order_taker', JSON.stringify({ id: order.order_taker_id, name: takerName }));
+    } else if (order.order_type === 'walkin') {
+      localStorage.removeItem('walkin_order_taker');
+    }
     localStorage.setItem(
       `${orderTypePrefix}_original_state`,
       JSON.stringify(orderData.originalState)
@@ -2346,6 +2354,7 @@ export default function OrdersPage() {
             {showPaymentView && selectedOrder.payment_status === 'Pending' ? (
               <InlinePaymentSection
                 order={selectedOrder}
+                defaultServiceCharge={(() => { try { return JSON.parse(localStorage.getItem('pos_default_service_charge') || '{}') } catch(e) { return null } })()}
                 onPaymentComplete={handlePaymentComplete}
                 onCancel={() => setShowPaymentView(false)}
                 classes={themeClasses}

@@ -151,6 +151,28 @@ useEffect(() => {
   setCashAmount(calculatedAmountDue.toString())
   setChangeAmount(0)
 
+  // Pre-populate service charge:
+  // - If modifying and order already has service charge → restore it
+  // - Otherwise apply the admin default (works for new orders AND reopened orders with no SC)
+  try {
+    const existingSC = parseFloat(parsedOrderData.originalState?.service_charge_amount || parsedOrderData.serviceChargeAmount || 0)
+    const existingSCPct = parseFloat(parsedOrderData.originalState?.service_charge_percentage || parsedOrderData.serviceChargePercentage || 0)
+    if (existingSC > 0) {
+      setServiceChargeType(existingSCPct > 0 ? 'percentage' : 'fixed')
+      setServiceChargeValue(existingSCPct > 0 ? existingSCPct : existingSC)
+      setShowServiceChargeSection(true)
+    } else {
+      const defaultSC = JSON.parse(localStorage.getItem('pos_default_service_charge') || '{}')
+      if (defaultSC.value > 0) {
+        setServiceChargeType(defaultSC.type || 'percentage')
+        setServiceChargeValue(defaultSC.value)
+        setShowServiceChargeSection(true)
+      }
+    }
+  } catch (e) {
+    // ignore parse errors
+  }
+
   // Update network status
   const statusInterval = setInterval(() => {
     setNetworkStatus(cacheManager.getNetworkStatus())
@@ -291,14 +313,15 @@ useEffect(() => {
       setAmountDue(calculatedAmountDue)
       setCashAmount(calculatedAmountDue.toString())
 
-      // Update order data with new totals
+      // Update order data with new totals (also fix detailedChanges.newTotal to include service charge)
       setOrderData(prev => ({
         ...prev,
         discountType,
         discountValue,
         discountAmount: newDiscountAmount,
         loyaltyDiscountAmount,
-        total: newTotal
+        total: newTotal,
+        detailedChanges: prev?.detailedChanges ? { ...prev.detailedChanges, newTotal } : prev?.detailedChanges
       }))
     }
   }, [discountType, discountValue, originalSubtotal, loyaltyDiscountAmount, serviceChargeType, serviceChargeValue])

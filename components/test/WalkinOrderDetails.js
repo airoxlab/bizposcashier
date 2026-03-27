@@ -542,6 +542,7 @@ export default function WalkinOrderDetails({
     return (
       <InlinePaymentSection
         order={order}
+        defaultServiceCharge={(() => { try { return JSON.parse(localStorage.getItem('pos_default_service_charge') || '{}') } catch(e) { return null } })()}
         onPaymentComplete={async (paymentData) => {
           await onPaymentRequired?.(order, paymentData)
           if (paymentData.completeOrder === false) {
@@ -666,7 +667,9 @@ export default function WalkinOrderDetails({
         subtotal: order.subtotal,
         discountAmount: order.discount_amount,
         total: order.total_amount,
-        itemCount: orderItems.length
+        itemCount: orderItems.length,
+        service_charge_amount: order.service_charge_amount || 0,
+        service_charge_percentage: order.service_charge_percentage || 0
       }
     }
 
@@ -679,6 +682,14 @@ export default function WalkinOrderDetails({
     localStorage.setItem(`${orderTypePrefix}_modifying_order_number`, order.order_number)
     // Save daily_serial so it can be preserved on the receipt after modification
     localStorage.setItem(`${orderTypePrefix}_modifying_daily_serial`, order.daily_serial?.toString() || '')
+    // Save order taker so it is restored when the page loads
+    if (order.order_type === 'walkin' && order.order_taker_id) {
+      const takerName = order.order_takers?.name ||
+        cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null
+      localStorage.setItem('walkin_order_taker', JSON.stringify({ id: order.order_taker_id, name: takerName }))
+    } else if (order.order_type === 'walkin') {
+      localStorage.removeItem('walkin_order_taker')
+    }
     localStorage.setItem(`${orderTypePrefix}_original_state`, JSON.stringify(orderData.originalState))
     // Save original order status so editing doesn't revert it back to Pending
     localStorage.setItem(`${orderTypePrefix}_original_order_status`, order.order_status || 'Pending')

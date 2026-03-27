@@ -11,7 +11,8 @@ import {
   AlertTriangle,
   Tag,
   X,
-  ArrowLeft
+  ArrowLeft,
+  Percent
 } from 'lucide-react'
 import Image from 'next/image'
 
@@ -20,7 +21,8 @@ export default function InlinePaymentSection({
   onPaymentComplete,
   onCancel,
   classes,
-  isDark
+  isDark,
+  defaultServiceCharge = null
 }) {
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState(null)
   const [cashAmount, setCashAmount] = useState('')
@@ -113,6 +115,13 @@ export default function InlinePaymentSection({
       }
 
       setChangeAmount(0)
+
+      // Pre-populate default service charge from admin settings
+      if (defaultServiceCharge && defaultServiceCharge.value > 0) {
+        setServiceChargeType(defaultServiceCharge.type || 'percentage')
+        setServiceChargeValue(defaultServiceCharge.value)
+        setShowServiceChargeSection(true)
+      }
     }
   }, [order])
 

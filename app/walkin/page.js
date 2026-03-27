@@ -127,6 +127,18 @@ export default function WalkInPage() {
         setOriginalOrderId(savedModifyingOrderId)
         console.log('✅ [Walkin] Reopen state set:', savedModifyingOrderId)
       }
+
+      const savedOrderTaker = localStorage.getItem('walkin_order_taker')
+      if (savedOrderTaker && savedOrderTaker !== 'null') {
+        try {
+          const taker = JSON.parse(savedOrderTaker)
+          if (taker?.id) setSelectedOrderTaker(taker)
+        } catch (e) {
+          console.warn('⚠️ Failed to parse order taker data')
+        }
+      } else {
+        setSelectedOrderTaker(null)
+      }
     }
 
     window.addEventListener('reloadCart', handleReloadCart)
@@ -236,6 +248,18 @@ export default function WalkInPage() {
         console.log('🔄 [Walkin] Setting as reopened order:', savedModifyingOrderId)
         setIsReopenedOrder(true)
         setOriginalOrderId(savedModifyingOrderId)
+      }
+
+      const savedOrderTaker = localStorage.getItem('walkin_order_taker')
+      if (savedOrderTaker && savedOrderTaker !== 'null') {
+        try {
+          const taker = JSON.parse(savedOrderTaker)
+          if (taker?.id) setSelectedOrderTaker(taker)
+        } catch (e) {
+          console.warn('⚠️ Failed to parse order taker data')
+        }
+      } else {
+        setSelectedOrderTaker(null)
       }
     }
 
@@ -2420,6 +2444,8 @@ export default function WalkInPage() {
     localStorage.removeItem('walkin_discount')
     localStorage.removeItem('walkin_modifying_order')
     localStorage.removeItem('walkin_modifying_order_number')
+    localStorage.removeItem('walkin_modifying_daily_serial')
+    localStorage.removeItem('walkin_order_taker')
     localStorage.removeItem('walkin_original_state')
     localStorage.removeItem('walkin_original_order_status')
     localStorage.removeItem('walkin_original_payment_status')
