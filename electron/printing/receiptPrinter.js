@@ -105,4 +105,4 @@ function registerReceiptPrinter(ipcMain) {
   });
 }
 
-module.exports = { registerReceiptPrinter };
+module.exports = { registerReceiptPrinter, printReceipt };

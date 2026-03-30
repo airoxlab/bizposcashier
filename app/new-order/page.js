@@ -410,7 +410,7 @@ export default function NewOrderPage() {
     setCart(prev => {
       const existingIndex = prev.findIndex(item => {
         if (item.isDeal && cartItem.isDeal) return item.dealId === cartItem.dealId
-        if (!item.isDeal && !cartItem.isDeal) return item.productId === cartItem.productId && item.variantId === cartItem.variantId
+        if (!item.isDeal && !cartItem.isDeal) return item.productId === cartItem.productId && item.variantId === cartItem.variantId && !item.itemInstructions
         return false
       })
       if (existingIndex !== -1) {

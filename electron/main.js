@@ -3,13 +3,14 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const url = require('url');
+const os = require('os');
 const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
 
 // Suppress non-critical file-system errors (EPERM on logo/QR temp files)
 // so they never pop up an Electron error dialog during login or printing.
 process.on('uncaughtException', (err) => {
-  const isFilePermissionError = err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'EBUSY';
+  const isFilePermissionError = err.code === 'EPERM' || err.code === 'EACCES' || err.code === 'EBUSY' || err.code === 'ENOENT';
   const isPrinterAsset = err.message && (
     err.message.includes('logo.png') ||
     err.message.includes('qr.png') ||
@@ -59,6 +60,7 @@ const { registerMarketingHandlers } = require('./marketing/marketingHandlers');
 const { registerAssetHandlers } = require('./handlers/assetHandlers');
 const { registerBackupHandlers } = require('./handlers/backupHandler');
 const { registerImageHandlers, getImageDir } = require('./handlers/imageHandler');
+const { registerMobilePrintServer } = require('./printing/mobilePrintServer');
 
 let mainWindow;
 
@@ -320,6 +322,7 @@ app.whenReady().then(() => {
   registerAssetHandlers(ipcMain);
   registerBackupHandlers(ipcMain);
   registerImageHandlers(ipcMain);
+  registerMobilePrintServer();
 
   // Update check is now manual from Settings > Updates page
   // No automatic check on startup to avoid timing issues
@@ -394,6 +397,18 @@ app.on('will-quit', () => {
 });
 
 ipcMain.handle('get-app-version', () => app.getVersion());
+
+ipcMain.handle('get-local-ip', () => {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return '127.0.0.1';
+});
 
 // Auto-updater IPC handlers
 ipcMain.handle('check-for-updates', async () => {

@@ -4,6 +4,7 @@ window.global = window.global || window;
 
 const api = {
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  getLocalIP: () => ipcRenderer.invoke('get-local-ip'),
 
   // Auto-update methods
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),

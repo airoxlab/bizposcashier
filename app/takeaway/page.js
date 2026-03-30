@@ -384,10 +384,11 @@ export default function TakeawayPage() {
         if (item.isDeal && cartItem.isDeal) {
           return item.dealId === cartItem.dealId
         }
-        // For regular products, check if product ID and variant ID match
+        // For regular products, check if product ID, variant ID, and instructions match
         if (!item.isDeal && !cartItem.isDeal) {
           return item.productId === cartItem.productId &&
-                 item.variantId === cartItem.variantId
+                 item.variantId === cartItem.variantId &&
+                 !item.itemInstructions
         }
         return false
       })

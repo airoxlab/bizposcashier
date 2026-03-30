@@ -92,6 +92,7 @@ export default function PrinterPage() {
   // Network Printing states
   const [sharePrinterMode, setSharePrinterMode] = useState(false)
   const [isServer, setIsServer] = useState(false)
+  const [localIP, setLocalIP] = useState('')
 
   const formRef = useRef(null)
 
@@ -131,6 +132,12 @@ useEffect(() => {
 
     // Load network printing settings from database
     await loadNetworkPrintingSettings(userData)
+
+    // Fetch this PC's local IP for display
+    if (window.electronAPI?.getLocalIP) {
+      const ip = await window.electronAPI.getLocalIP()
+      setLocalIP(ip || '')
+    }
   }
 
   initializePage()
@@ -1295,6 +1302,28 @@ const autoDiscoverPrinters = async () => {
               <div className="mt-2 text-purple-200 text-xs flex items-center">
                 <Info className="w-3 h-3 mr-1" />
                 <span>Turn on "Share Printer" on client terminals OR "I am Server" on terminal with printer</span>
+              </div>
+            )}
+
+            {/* Mobile App Print Server — always visible */}
+            {localIP && (
+              <div className="mt-3 bg-blue-900/30 border border-blue-500/30 rounded-xl p-3">
+                <p className="text-blue-200 text-xs font-medium mb-2 flex items-center">
+                  <Monitor className="w-3 h-3 mr-1" />
+                  Mobile App Print Server Address
+                </p>
+                <div className="flex items-center justify-between">
+                  <code className="text-white text-sm font-mono font-bold">{localIP}:3940</code>
+                  <button
+                    onClick={() => { navigator.clipboard.writeText(`${localIP}:3940`); notify.success('IP copied!'); }}
+                    className="text-blue-300 hover:text-white text-xs underline ml-2"
+                  >
+                    Copy
+                  </button>
+                </div>
+                <p className="text-blue-300 text-xs mt-1">
+                  Paste this in BizPOS Admin → Settings → Mobile App Print Server
+                </p>
               </div>
             )}
           </div>

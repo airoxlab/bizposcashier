@@ -2,15 +2,16 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const http = require('http');
+const { app } = require('electron');
 
 /**
  * Asset Handlers - Downloads and manages store logo and QR code
  * Downloads from Supabase bucket links and saves to temp folder
  */
 
-// Get temp directory path
+// Get temp directory path — must be outside the .asar archive (userData survives app updates)
 function getTempDir() {
-  return path.join(__dirname, '..', 'printing', 'temp');
+  return path.join(app.getPath('userData'), 'printing', 'temp');
 }
 
 // Ensure temp directory exists
