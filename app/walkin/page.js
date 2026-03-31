@@ -670,8 +670,17 @@ export default function WalkInPage() {
     setProductVariants([])
     setDealProducts([])
 
-    // Show toast notification
-    // Removed toast notification for adding items - too many notifications
+    const itemName = cartItem.isDeal ? cartItem.dealName : cartItem.productName
+    const variantInfo = cartItem.variantName ? ` (${cartItem.variantName})` : ''
+    toast.success(`${itemName}${variantInfo} added to cart!`, {
+      duration: 1000,
+      style: {
+        borderRadius: '10px',
+        background: theme === 'dark' ? '#1f2937' : '#fff',
+        color: theme === 'dark' ? '#f3f4f6' : '#111827',
+        border: theme === 'dark' ? '1px solid #374151' : '1px solid #e5e7eb',
+      },
+    })
   }
 
   const updateCartItemQuantity = (itemId, newQuantity) => {
@@ -1413,6 +1422,7 @@ export default function WalkInPage() {
                     console.error('⚠️ [Walkin Payment] Error creating updated ledger entry:', ledgerError.message)
                   } else {
                     console.log(`✅ [Walkin Payment] Updated ledger entry: Rs ${paymentData.newTotal} (Balance: ${newBalance})`)
+                    await supabase.from('customers').update({ account_balance: newBalance }).eq('id', order.customer_id)
                   }
                 }
               } else {
@@ -1444,6 +1454,7 @@ export default function WalkInPage() {
                 console.error('⚠️ [Walkin Payment] Error creating ledger entry:', ledgerError.message)
               } else {
                 console.log(`✅ [Walkin Payment] Created ledger entry: Rs ${paymentData.newTotal} (Balance: ${newBalance})`)
+                await supabase.from('customers').update({ account_balance: newBalance }).eq('id', order.customer_id)
               }
             }
           }

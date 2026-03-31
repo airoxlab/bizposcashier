@@ -244,9 +244,11 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
     commands.push(leftRight('Table:', String(orderData.tableName)));
   }
 
-  // Cashier name (admin's customer_name or cashier's name)
-  const cashierName = userProfile?.cashier_name || userProfile?.customer_name || 'N/A';
-  commands.push(leftRight('Cashier:', cashierName));
+  // Cashier name — skipped for mobile app prints
+  if (!orderData?.skip_cashier) {
+    const cashierName = userProfile?.cashier_name || userProfile?.customer_name || 'N/A';
+    commands.push(leftRight('Cashier:', cashierName));
+  }
 
   // Order taker name (only shown if set on the order)
   const orderTakerName = orderData?.order_taker_name || null;
@@ -529,9 +531,11 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
   commands.push(leftRight('Time:', formattedTime));
   commands.push(leftRight('Type:', orderType));
 
-  // Cashier name (admin's customer_name or cashier's name)
-  const cashierName = userProfile?.cashier_name || userProfile?.customer_name || 'N/A';
-  commands.push(leftRight('Cashier:', cashierName));
+  // Cashier name — skipped for mobile app prints
+  if (!orderData?.skip_cashier) {
+    const cashierName = userProfile?.cashier_name || userProfile?.customer_name || 'N/A';
+    commands.push(leftRight('Cashier:', cashierName));
+  }
 
   // Order taker name (only shown if set on the order)
   const kitchenOrderTakerName = orderData?.order_taker_name || null;

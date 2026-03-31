@@ -663,6 +663,7 @@ const processOrder = async () => {
               console.error('⚠️ [Payment] Error creating updated ledger entry:', ledgerError.message)
             } else {
               console.log(`✅ [Payment] Updated ledger entry created: Rs ${modifyDebitAmount} (Balance: ${currentBalance} -> ${newBalance})`)
+              await supabase.from('customers').update({ account_balance: newBalance }).eq('id', orderData.customer.id)
               notify.success(`Updated customer account. New balance: Rs ${newBalance.toFixed(0)}`, { duration: 5000 })
             }
           }
