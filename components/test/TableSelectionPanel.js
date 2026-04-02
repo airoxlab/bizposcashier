@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { motion } from 'framer-motion'
-import { Table2, Users, MapPin, Check, RefreshCw } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { Table2, Users, MapPin, Check, RefreshCw, MoreVertical, CheckCircle, XCircle } from 'lucide-react'
 import { cacheManager } from '../../lib/cacheManager'
 import { isInTodaysBusinessDay } from '../../lib/utils/businessDayUtils'
 
@@ -16,9 +16,23 @@ export default function TableSelectionPanel({
   const [tables, setTables] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [openMenuId, setOpenMenuId] = useState(null) // table id whose menu is open
+  const [changingStatusId, setChangingStatusId] = useState(null) // table id being updated
+  const menuRef = useRef(null)
 
   useEffect(() => {
     fetchTables()
+  }, [])
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    const handler = (e) => {
+      if (menuRef.current && !menuRef.current.contains(e.target)) {
+        setOpenMenuId(null)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
   }, [])
 
   // Re-apply occupancy overlay whenever orders change (order completed, new order placed, etc.)
@@ -126,6 +140,21 @@ export default function TableSelectionPanel({
     }
   }
 
+  const handleToggleStatus = async (e, table) => {
+    e.stopPropagation()
+    setOpenMenuId(null)
+    const newStatus = table.status === 'available' ? 'occupied' : 'available'
+    setChangingStatusId(table.id)
+    try {
+      await cacheManager.updateTableStatus(table.id, newStatus)
+      setTables(prev => prev.map(t => t.id === table.id ? { ...t, status: newStatus } : t))
+    } catch (err) {
+      console.error('Failed to update table status:', err)
+    } finally {
+      setChangingStatusId(null)
+    }
+  }
+
   const handleTableSelect = (table) => {
     // If already selected, deselect it
     if (selectedTable?.id === table.id) {
@@ -220,11 +249,15 @@ export default function TableSelectionPanel({
           }
         `}</style>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
+        <div ref={menuRef} className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
           {tables.map((table) => {
             const isSelected = selectedTable?.id === table.id
             const isAvailable = table.status === 'available'
             const isDisabled = !isAvailable
+            const isChanging = changingStatusId === table.id
+            const menuOpen = openMenuId === table.id
+            // Only show toggle for available/occupied (not reserved/maintenance)
+            const canToggle = table.status === 'available' || table.status === 'occupied'
 
             return (
               <motion.div
@@ -247,6 +280,51 @@ export default function TableSelectionPanel({
                 {isSelected && (
                   <div className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-purple-500 rounded-full flex items-center justify-center">
                     <Check className="w-3 h-3 text-white" />
+                  </div>
+                )}
+
+                {/* Menu button (top-left) */}
+                {canToggle && !isSelected && (
+                  <div className="absolute top-1 left-1">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setOpenMenuId(menuOpen ? null : table.id) }}
+                      className={`p-0.5 rounded transition-colors ${isDark ? 'hover:bg-white/10 text-gray-400' : 'hover:bg-black/10 text-gray-500'}`}
+                    >
+                      {isChanging
+                        ? <div className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                        : <MoreVertical className="w-3 h-3" />
+                      }
+                    </button>
+
+                    <AnimatePresence>
+                      {menuOpen && (
+                        <motion.div
+                          initial={{ opacity: 0, scale: 0.9, y: -4 }}
+                          animate={{ opacity: 1, scale: 1, y: 0 }}
+                          exit={{ opacity: 0, scale: 0.9, y: -4 }}
+                          transition={{ duration: 0.1 }}
+                          className={`absolute top-6 left-0 z-50 rounded-lg shadow-xl border py-1 min-w-[140px] ${isDark ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-200'}`}
+                        >
+                          {isAvailable ? (
+                            <button
+                              onClick={(e) => handleToggleStatus(e, table)}
+                              className={`w-full flex items-center px-3 py-2 text-xs gap-2 transition-colors ${isDark ? 'hover:bg-gray-700 text-red-400' : 'hover:bg-red-50 text-red-600'}`}
+                            >
+                              <XCircle className="w-3.5 h-3.5" />
+                              Mark as Occupied
+                            </button>
+                          ) : (
+                            <button
+                              onClick={(e) => handleToggleStatus(e, table)}
+                              className={`w-full flex items-center px-3 py-2 text-xs gap-2 transition-colors ${isDark ? 'hover:bg-gray-700 text-green-400' : 'hover:bg-green-50 text-green-600'}`}
+                            >
+                              <CheckCircle className="w-3.5 h-3.5" />
+                              Mark as Available
+                            </button>
+                          )}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
                 )}
 

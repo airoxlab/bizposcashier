@@ -273,12 +273,32 @@ export default function OrdersPage() {
     fetchOrders();
   }, [activeTab, statusFilter, dateFrom, dateTo, searchTerm, cashierFilter, deliveryBoyFilter]);
 
+  // Mobile order notification: preload.js bridges IPC → CustomEvent 'bizpos:new-order'
+  useEffect(() => {
+    const handler = (e) => {
+      const data = e.detail || {};
+      console.log('📱 [Orders Page] Mobile order notification:', data);
+      notify.success(`📱 New order from tablet: #${data.order_number || ''}`, {
+        duration: 5000,
+        description: `${data.order_type || ''} · Rs ${data.total || 0}`,
+      });
+      fetchOrders(true);
+    };
+    window.addEventListener('bizpos:new-order', handler);
+    return () => window.removeEventListener('bizpos:new-order', handler);
+  }, [user?.id]);
+
   // Realtime subscription for orders
   useEffect(() => {
     if (!user?.id) return;
 
     console.log("📡 [Orders Page] Setting up realtime subscription");
 
+    // Listen to ALL order changes (no server-side filter) and handle in JS.
+    // A server-side filter `user_id=eq.X` requires the subscriber to have an
+    // authenticated Supabase session; without one (anon key only) the filter
+    // validation silently drops events from other clients. Filtering in the
+    // callback is safe because the orders table is scoped by user_id anyway.
     const channel = supabase
       .channel("orders-realtime")
       .on(
@@ -287,10 +307,13 @@ export default function OrdersPage() {
           event: "*",
           schema: "public",
           table: "orders",
-          filter: `user_id=eq.${user.id}`,
         },
         (payload) => {
           console.log("🔔 [Orders Page] Realtime update:", payload);
+
+          // Ignore orders belonging to other admins
+          const row = payload.new || payload.old || {};
+          if (row.user_id && row.user_id !== user.id) return;
 
           if (payload.eventType === "INSERT") {
             const order = payload.new;
@@ -311,15 +334,32 @@ export default function OrdersPage() {
             }
           }
 
-          // Refresh list without auto-jumping (selectedOrderRef keeps current selection)
-          fetchOrders();
+          // Refresh list silently — no skeleton flash
+          fetchOrders(true);
         }
       )
+      .subscribe();
+
+    // Broadcast fallback: mobile app publishes here after creating an order,
+    // in case postgres_changes still doesn't fire (e.g. Supabase RLS config).
+    const mobileChannel = supabase
+      .channel('bizpos-order-notify')
+      .on('broadcast', { event: 'new_order' }, (payload) => {
+        const { order_number, order_type, total, user_id } = payload.payload || {};
+        if (user_id && user_id !== user.id) return;
+        console.log('📱 [Orders Page] Mobile broadcast received:', order_number);
+        notify.success(`📱 New order from tablet: #${order_number}`, {
+          duration: 5000,
+          description: `${order_type || ''} · Rs ${total || 0}`,
+        });
+        fetchOrders(true);
+      })
       .subscribe();
 
     return () => {
       console.log("📡 [Orders Page] Cleaning up realtime subscription");
       supabase.removeChannel(channel);
+      supabase.removeChannel(mobileChannel);
     };
   }, [user?.id, activeTab, statusFilter, dateFrom, dateTo]);
 
@@ -415,15 +455,16 @@ export default function OrdersPage() {
     }
   };
 
-  const fetchOrders = async () => {
+  const fetchOrders = async (silent = false) => {
     try {
-      // Only show loading spinner on initial load
-      const shouldShowLoading = orders.length === 0;
-
-      if (shouldShowLoading) {
-        setLoading(true);
-      } else {
-        setLoadingMore(true);
+      // Only show loading spinner on initial/manual load, not on subscription-triggered refreshes
+      if (!silent) {
+        const shouldShowLoading = orders.length === 0;
+        if (shouldShowLoading) {
+          setLoading(true);
+        } else {
+          setLoadingMore(true);
+        }
       }
 
       if (!user?.id) {
@@ -650,6 +691,7 @@ export default function OrdersPage() {
         if (refreshed) {
           setSelectedOrder(refreshed);
           selectedOrderRef.current = refreshed;
+          await fetchOrderItems(refreshed.id);
         }
       }
 

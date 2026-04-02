@@ -1,7 +1,7 @@
 // components/ProtectedPage.js - Protected Page Wrapper with Blur/Block UI
 'use client'
 import React, { useState, useEffect } from 'react'
-import { Lock, Shield, AlertTriangle, RefreshCw, CheckCircle, XCircle, X } from 'lucide-react'
+import { Lock, Shield, AlertTriangle, RefreshCw, CheckCircle, XCircle, X, LogOut } from 'lucide-react'
 import { permissionManager } from '@/lib/permissionManager'
 import { authManager } from '@/lib/authManager'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -41,6 +41,7 @@ export default function ProtectedPage({
     } catch { return null }
   })
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [isLoggingOut, setIsLoggingOut] = useState(false)
   const [notification, setNotification] = useState(null) // { type: 'success' | 'error', message: '', count: 0 }
 
   useEffect(() => {
@@ -254,6 +255,24 @@ export default function ProtectedPage({
                 className="w-full px-6 py-3 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors font-medium"
               >
                 Go Back
+              </button>
+
+              {/* Logout Button */}
+              <button
+                onClick={async () => {
+                  setIsLoggingOut(true)
+                  try {
+                    await authManager.logout()
+                    window.location.href = '/'
+                  } catch {
+                    window.location.href = '/'
+                  }
+                }}
+                disabled={isLoggingOut}
+                className="w-full px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                <LogOut className="w-4 h-4" />
+                {isLoggingOut ? 'Logging out...' : 'Logout'}
               </button>
             </div>
           </div>

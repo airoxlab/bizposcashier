@@ -975,6 +975,7 @@ export default function TakeawayPage() {
                     console.error('⚠️ [Takeaway Payment] Error creating updated ledger entry:', ledgerError.message)
                   } else {
                     console.log(`✅ [Takeaway Payment] Updated ledger entry: Rs ${paymentData.newTotal} (Balance: ${newBalance})`)
+                    await supabase.from('customers').update({ account_balance: newBalance }).eq('id', order.customer_id)
                   }
                 }
               } else {
@@ -1006,6 +1007,7 @@ export default function TakeawayPage() {
                 console.error('⚠️ [Takeaway Payment] Error creating ledger entry:', ledgerError.message)
               } else {
                 console.log(`✅ [Takeaway Payment] Created ledger entry: Rs ${paymentData.newTotal} (Balance: ${newBalance})`)
+                await supabase.from('customers').update({ account_balance: newBalance }).eq('id', order.customer_id)
               }
             }
           }

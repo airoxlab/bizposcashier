@@ -1,6 +1,6 @@
 {
   "name": "BizPOS",
-  "version": "2.8.0",
+  "version": "2.0.9",
   "description": "Modern POS Software - BizPOS",
   "main": "electron/main.js",
   "homepage": "./",
@@ -103,6 +103,7 @@
     ],
     "win": {
       "icon": "electron/assets/icon.ico",
+      "requestedExecutionLevel": "requireAdministrator",
       "target": [
         {
           "target": "nsis",

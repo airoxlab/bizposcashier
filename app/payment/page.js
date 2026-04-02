@@ -38,6 +38,7 @@ import loyaltyManager from '../../lib/loyaltyManager'
 import customerLedgerManager from '../../lib/customerLedgerManager'
 import { notify } from '../../components/ui/NotificationSystem'
 import { supabase } from '../../lib/supabase'
+import { permissionManager } from '../../lib/permissionManager'
 import { getOrderItemsWithChanges } from '../../lib/utils/orderChangesTracker'
 import LoyaltyRedemption from '../../components/pos/LoyaltyRedemption'
 import SplitPaymentModal from '../../components/pos/SplitPaymentModal'
@@ -87,6 +88,9 @@ export default function PaymentPage() {
   // Modified Order Payment States
   const [amountDue, setAmountDue] = useState(0) // For modified paid orders, this is the additional amount
   const [isModifiedPaidOrder, setIsModifiedPaidOrder] = useState(false)
+
+  // Permission: can this cashier accept payment?
+  const [canAcceptPayment, setCanAcceptPayment] = useState(true)
 useEffect(() => {
   // Check authentication
   if (!authManager.isLoggedIn()) {
@@ -96,6 +100,10 @@ useEffect(() => {
 
   const userData = authManager.getCurrentUser()
   setUser(userData)
+
+  // Check payment permission — admins always allowed; cashiers need ACCEPT_PAYMENT
+  const allowPayment = permissionManager.canAcceptPayment()
+  setCanAcceptPayment(allowPayment)
 
   // CRITICAL: Set user ID in all managers immediately
   if (userData?.id) {
@@ -119,6 +127,11 @@ useEffect(() => {
   const parsedOrderData = JSON.parse(savedOrderData)
   setOrderData(parsedOrderData)
   setOriginalSubtotal(parsedOrderData.subtotal)
+
+  // If cashier cannot accept payment, auto-select Unpaid
+  if (!allowPayment) {
+    setSelectedPaymentMethod({ id: 'unpaid', name: 'Unpaid', icon: Clock, color: 'from-gray-500 to-gray-600', requiresAmount: false, logo: null })
+  }
 
   // 🆕 CRITICAL FIX: Calculate amount due for modified PAID orders
   // If modifying a previously PAID order, only charge for additional items
@@ -553,8 +566,11 @@ const processOrder = async () => {
       console.log('🔄 Modifying existing order (ONLINE):', orderData.existingOrderId)
 
       // Update existing order - WITH delivery_charges and delivery_time
-      // Preserve the original order status (e.g. 'Preparing') so editing doesn't revert it to Pending
-      const preservedOrderStatus = orderData.originalOrderStatus || 'Pending'
+      // Preserve kitchen status (Preparing/Ready) so editing doesn't revert it to Pending.
+      // Exception: Dispatched orders reset to Pending so kitchen sees new/modified items.
+      const preservedOrderStatus = (orderData.originalOrderStatus && orderData.originalOrderStatus !== 'Dispatched')
+        ? orderData.originalOrderStatus
+        : 'Pending'
       const { error: updateError } = await supabase
         .from('orders')
         .update({
@@ -726,7 +742,7 @@ const processOrder = async () => {
         total_amount: orderData.total,
         payment_method: selectedPaymentMethod.name,
         payment_status: (selectedPaymentMethod.id === 'unpaid' || selectedPaymentMethod.id === 'account') ? 'Pending' : 'Paid',
-        order_status: orderData.isModifying && orderData.originalOrderStatus
+        order_status: (orderData.isModifying && orderData.originalOrderStatus && orderData.originalOrderStatus !== 'Dispatched')
           ? orderData.originalOrderStatus
           : 'Pending',
         order_instructions: orderData.orderInstructions || '',
@@ -1438,7 +1454,7 @@ const handlePrintKitchenToken = async () => {
         payment_method: 'Split',
         payment_status: paymentStatus,
         amount_paid: totalPaidAmount,
-        order_status: orderData.isModifying && orderData.originalOrderStatus
+        order_status: (orderData.isModifying && orderData.originalOrderStatus && orderData.originalOrderStatus !== 'Dispatched')
           ? orderData.originalOrderStatus
           : 'Pending',
         order_instructions: orderData.orderInstructions || '',
@@ -2066,104 +2082,112 @@ if (orderComplete) {
             <div className={`${classes.card} rounded-lg ${classes.border} border p-2 flex-1 overflow-hidden flex flex-col`}>
               <h2 className={`text-sm font-bold ${classes.textPrimary} mb-2`}>Payment Method</h2>
 
-              <div className="grid grid-cols-3 gap-2 mb-2">
-                {paymentMethods.map((method) => {
-                  const isDisabled = method.requiresCustomer && !orderData.customer
-                  return (
-                    <button
-                      key={method.id}
-                      onClick={() => handlePaymentMethodSelect(method)}
-                      disabled={isDisabled}
-                      className={`p-2 rounded-lg border ${
-                        isDisabled
-                          ? `opacity-50 cursor-not-allowed ${classes.border} ${classes.card}`
-                          : selectedPaymentMethod?.id === method.id
-                          ? `border-purple-500 ${isDark ? 'bg-purple-900/20' : 'bg-purple-50'}`
-                          : `${classes.border} ${classes.card}`
-                      }`}
-                      title={isDisabled ? 'Requires customer selection' : ''}
-                    >
-                    <div className="flex flex-col items-center">
-                      {method.logo ? (
-                        <div className="w-8 h-8 relative mb-1">
-                          <Image
-                            src={method.logo}
-                            alt={method.name}
-                            fill
-                            className="object-contain"
-                          />
-                        </div>
-                      ) : (
-                        <div className={`w-8 h-8 bg-gradient-to-r ${method.color} rounded flex items-center justify-center mb-1`}>
-                          <method.icon className="w-4 h-4 text-white" />
-                        </div>
-                      )}
-                      <h3 className={`text-[10px] font-semibold text-center ${
-                        isDisabled
-                          ? classes.textSecondary
-                          : selectedPaymentMethod?.id === method.id
-                          ? isDark ? 'text-purple-300' : 'text-purple-700'
-                          : classes.textPrimary
-                        }`}>
-                        {method.displayName || method.name}
-                      </h3>
-                    </div>
-                  </button>
-                  )
-                })}
-              </div>
-
-              {/* Customer Account Panel */}
-              {selectedPaymentMethod?.id === 'account' && orderData.customer && (
-                <div className={`mb-2 rounded-lg border ${isDark ? 'bg-purple-900/20 border-purple-700/30' : 'bg-purple-50 border-purple-200'} overflow-hidden`}>
-                  {/* Customer name header */}
-                  <div className={`px-3 py-1.5 border-b ${isDark ? 'border-purple-700/30 bg-purple-900/30' : 'border-purple-200 bg-purple-100/60'}`}>
-                    <p className={`text-xs font-semibold ${isDark ? 'text-purple-200' : 'text-purple-900'}`}>
-                      {orderData.customer.full_name || orderData.customer.first_name + ' ' + orderData.customer.last_name || 'Customer'}
-                    </p>
-                  </div>
-                  {/* Stats row */}
-                  <div className="grid grid-cols-2 divide-x divide-purple-200/40 px-0">
-                    <div className="p-2 text-center">
-                      <p className={`text-[9px] uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Balance Owed</p>
-                      <p className={`text-xs font-bold ${isDark ? 'text-orange-300' : 'text-orange-600'}`}>
-                        {loadingLedgerBalance ? '...' : `Rs ${customerLedgerBalance.toFixed(0)}`}
-                      </p>
-                    </div>
-                    <div className="p-2 text-center">
-                      <p className={`text-[9px] uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Order Total</p>
-                      <p className={`text-xs font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>
-                        Rs {orderData.total.toFixed(0)}
-                      </p>
-                    </div>
-                  </div>
+              {!canAcceptPayment ? (
+                <div className={`flex-1 flex flex-col items-center justify-center gap-2 py-4 rounded-lg ${isDark ? 'bg-orange-900/20 border border-orange-700/30' : 'bg-orange-50 border border-orange-200'}`}>
+                  <Clock className={`w-6 h-6 ${isDark ? 'text-orange-400' : 'text-orange-500'}`} />
+                  <p className={`text-xs font-semibold text-center ${isDark ? 'text-orange-300' : 'text-orange-700'}`}>Payment collection not permitted</p>
+                  <p className={`text-[10px] text-center ${isDark ? 'text-orange-400/70' : 'text-orange-500'}`}>Order will be placed as unpaid</p>
                 </div>
-              )}
+              ) : (
+                <>
+                  <div className="grid grid-cols-3 gap-2 mb-2">
+                    {paymentMethods.map((method) => {
+                      const isDisabled = method.requiresCustomer && !orderData.customer
+                      return (
+                        <button
+                          key={method.id}
+                          onClick={() => handlePaymentMethodSelect(method)}
+                          disabled={isDisabled}
+                          className={`p-2 rounded-lg border ${
+                            isDisabled
+                              ? `opacity-50 cursor-not-allowed ${classes.border} ${classes.card}`
+                              : selectedPaymentMethod?.id === method.id
+                              ? `border-purple-500 ${isDark ? 'bg-purple-900/20' : 'bg-purple-50'}`
+                              : `${classes.border} ${classes.card}`
+                          }`}
+                          title={isDisabled ? 'Requires customer selection' : ''}
+                        >
+                          <div className="flex flex-col items-center">
+                            {method.logo ? (
+                              <div className="w-8 h-8 relative mb-1">
+                                <Image
+                                  src={method.logo}
+                                  alt={method.name}
+                                  fill
+                                  className="object-contain"
+                                />
+                              </div>
+                            ) : (
+                              <div className={`w-8 h-8 bg-gradient-to-r ${method.color} rounded flex items-center justify-center mb-1`}>
+                                <method.icon className="w-4 h-4 text-white" />
+                              </div>
+                            )}
+                            <h3 className={`text-[10px] font-semibold text-center ${
+                              isDisabled
+                                ? classes.textSecondary
+                                : selectedPaymentMethod?.id === method.id
+                                ? isDark ? 'text-purple-300' : 'text-purple-700'
+                                : classes.textPrimary
+                              }`}>
+                              {method.displayName || method.name}
+                            </h3>
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
 
-              {/* Split Payment Button - Compact */}
-              <button
-                onClick={handleSplitPaymentClick}
-                disabled={isProcessing}
-                className={`w-full py-2 rounded-lg text-xs font-semibold ${
-                  isProcessing
-                    ? 'bg-gray-400 cursor-not-allowed'
-                    : isDark
-                    ? 'bg-gradient-to-r from-orange-600 to-orange-700'
-                    : 'bg-gradient-to-r from-orange-500 to-orange-600'
-                } text-white flex items-center justify-center`}
-              >
-                {isProcessing ? (
-                  <>
-                    <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white mr-1"></div>
-                    Creating...
-                  </>
-                ) : (
-                  <>
-                    <CreditCard className="w-3 h-3 mr-1" />
-                    Split Payment
-                  </>
-                )}
-              </button>
+                  {/* Customer Account Panel */}
+                  {selectedPaymentMethod?.id === 'account' && orderData.customer && (
+                    <div className={`mb-2 rounded-lg border ${isDark ? 'bg-purple-900/20 border-purple-700/30' : 'bg-purple-50 border-purple-200'} overflow-hidden`}>
+                      <div className={`px-3 py-1.5 border-b ${isDark ? 'border-purple-700/30 bg-purple-900/30' : 'border-purple-200 bg-purple-100/60'}`}>
+                        <p className={`text-xs font-semibold ${isDark ? 'text-purple-200' : 'text-purple-900'}`}>
+                          {orderData.customer.full_name || orderData.customer.first_name + ' ' + orderData.customer.last_name || 'Customer'}
+                        </p>
+                      </div>
+                      <div className="grid grid-cols-2 divide-x divide-purple-200/40 px-0">
+                        <div className="p-2 text-center">
+                          <p className={`text-[9px] uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Balance Owed</p>
+                          <p className={`text-xs font-bold ${isDark ? 'text-orange-300' : 'text-orange-600'}`}>
+                            {loadingLedgerBalance ? '...' : `Rs ${customerLedgerBalance.toFixed(0)}`}
+                          </p>
+                        </div>
+                        <div className="p-2 text-center">
+                          <p className={`text-[9px] uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Order Total</p>
+                          <p className={`text-xs font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>
+                            Rs {orderData.total.toFixed(0)}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Split Payment Button - Compact */}
+                  <button
+                    onClick={handleSplitPaymentClick}
+                    disabled={isProcessing}
+                    className={`w-full py-2 rounded-lg text-xs font-semibold ${
+                      isProcessing
+                        ? 'bg-gray-400 cursor-not-allowed'
+                        : isDark
+                        ? 'bg-gradient-to-r from-orange-600 to-orange-700'
+                        : 'bg-gradient-to-r from-orange-500 to-orange-600'
+                    } text-white flex items-center justify-center`}
+                  >
+                    {isProcessing ? (
+                      <>
+                        <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white mr-1"></div>
+                        Creating...
+                      </>
+                    ) : (
+                      <>
+                        <CreditCard className="w-3 h-3 mr-1" />
+                        Split Payment
+                      </>
+                    )}
+                  </button>
+                </>
+              )}
             </div>
 
             {/* Cash Amount Input - COMPACT */}

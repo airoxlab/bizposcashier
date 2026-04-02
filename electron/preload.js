@@ -33,6 +33,10 @@ const api = {
   
   onNavigate: (callback) => ipcRenderer.on('navigate', callback),
   onNewOrder: (callback) => ipcRenderer.on('new-order', callback),
+
+  // Order notification — also fires a DOM CustomEvent so pages can listen
+  // without needing to know about Electron (no rebuild required for page changes)
+
   
   removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel),
   
@@ -145,6 +149,11 @@ window.addEventListener('DOMContentLoaded', () => {
   });
   
   document.body.classList.add('electron-app');
+});
+
+// Bridge IPC → CustomEvent so any page can react without Electron-specific code
+ipcRenderer.on('new-order', (_event, data) => {
+  window.dispatchEvent(new CustomEvent('bizpos:new-order', { detail: data }));
 });
 
 console.log('Preload script loaded');

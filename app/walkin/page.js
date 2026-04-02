@@ -159,6 +159,7 @@ export default function WalkInPage() {
     }
   }, [cart, customer, orderInstructions, isReopenedOrder, originalOrderId, selectedTable])
 
+
   // Load cached data on mount
   useEffect(() => {
     if (!authManager.isLoggedIn()) {
@@ -2796,7 +2797,14 @@ export default function WalkInPage() {
         onOrderDataChange={setOrderData}
         orderTakers={orderTakers}
         selectedOrderTaker={selectedOrderTaker}
-        onOrderTakerChange={setSelectedOrderTaker}
+        onOrderTakerChange={(taker) => {
+          setSelectedOrderTaker(taker)
+          if (taker?.id) {
+            localStorage.setItem('walkin_order_taker', JSON.stringify(taker))
+          } else {
+            localStorage.removeItem('walkin_order_taker')
+          }
+        }}
         requireOrderTaker={requireOrderTaker}
       />
 

@@ -9,7 +9,8 @@
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
-const { app } = require('electron');
+const { execFile } = require('child_process');
+const { app, BrowserWindow } = require('electron');
 const log = require('electron-log');
 const { printReceipt } = require('./receiptPrinter');
 const { printKitchenToken } = require('./kitchenTokenPrinter');
@@ -126,7 +127,35 @@ function sendJson(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
+/**
+ * Ensures Windows Firewall allows inbound TCP traffic on the print relay port.
+ * Silently skips on non-Windows or if the rule already exists.
+ */
+function ensureFirewallRule() {
+  if (process.platform !== 'win32') return;
+  const ruleName = 'BizPOS Mobile Print Relay';
+  // Add rule — netsh ignores duplicates gracefully
+  execFile('netsh', [
+    'advfirewall', 'firewall', 'add', 'rule',
+    `name=${ruleName}`,
+    'dir=in',
+    'action=allow',
+    'protocol=TCP',
+    `localport=${MOBILE_PRINT_PORT}`,
+    'profile=any',
+    'enable=yes',
+  ], { windowsHide: true }, (err, stdout, stderr) => {
+    if (err) {
+      log.warn('[MobilePrint] Could not add firewall rule (may need admin rights):', stderr || err.message);
+    } else {
+      log.info('[MobilePrint] Firewall rule ensured for port', MOBILE_PRINT_PORT);
+    }
+  });
+}
+
 function registerMobilePrintServer() {
+  ensureFirewallRule();
+
   const server = http.createServer(async (req, res) => {
     // CORS preflight
     if (req.method === 'OPTIONS') {
@@ -144,6 +173,21 @@ function registerMobilePrintServer() {
     // GET /api/ping — connectivity test from mobile
     if (method === 'GET' && url === '/api/ping') {
       sendJson(res, 200, { ok: true, service: 'BizPOS Print Server' });
+      return;
+    }
+
+    // POST /api/order-notify — mobile notifies desktop of a new/modified order
+    if (method === 'POST' && url === '/api/order-notify') {
+      try {
+        const data = await parseBody(req);
+        sendJson(res, 200, { success: true });
+        // Forward to all renderer windows so the orders page updates instantly
+        BrowserWindow.getAllWindows().forEach(w => {
+          try { w.webContents.send('new-order', data); } catch {}
+        });
+      } catch (error) {
+        sendJson(res, 500, { success: false, error: error.message });
+      }
       return;
     }
 

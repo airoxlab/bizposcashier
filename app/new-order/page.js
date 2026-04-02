@@ -230,6 +230,9 @@ export default function NewOrderPage() {
     const savedTable = localStorage.getItem('new_order_walkin_table')
     if (savedTable) try { setSelectedTable(JSON.parse(savedTable)) } catch {}
 
+    const savedOrderTaker = localStorage.getItem('new_order_order_taker')
+    if (savedOrderTaker) try { const t = JSON.parse(savedOrderTaker); if (t?.id) setSelectedOrderTaker(t) } catch {}
+
     setOrderExtras(restoredExtras)
     isInitialized.current = true
 
@@ -477,11 +480,13 @@ export default function NewOrderPage() {
       localStorage.removeItem(`${tab.storageKey}_extras`)
     })
     localStorage.removeItem('new_order_walkin_table')
+    localStorage.removeItem('new_order_order_taker')
     setCart([])
     setCustomer(null)
     setOrderInstructions('')
     setOrderExtras({ walkin: {}, takeaway: {}, delivery: {} })
     setSelectedTable(null)
+    setSelectedOrderTaker(null)
     notify.info('Order discarded')
     router.push('/dashboard/')
   }
@@ -951,25 +956,29 @@ export default function NewOrderPage() {
                 if (existing.amount !== paymentData.newTotal) {
                   await supabase.from('customer_ledger').delete().eq('id', existing.id)
                   const currentBalance = await customerLedgerManager.getCustomerBalance(order.customer_id)
+                  const newBalance = currentBalance + paymentData.newTotal
                   await supabase.from('customer_ledger').insert({
                     user_id: currentUser.id, customer_id: order.customer_id,
                     transaction_type: 'debit', amount: paymentData.newTotal,
-                    balance_before: currentBalance, balance_after: currentBalance + paymentData.newTotal,
+                    balance_before: currentBalance, balance_after: newBalance,
                     order_id: order.id,
                     description: `Order #${order.order_number} - ${(order.order_type || 'WALKIN').toUpperCase()}`,
                     notes: 'Payment completed via inline payment modal', created_by: currentUser.id
                   })
+                  await supabase.from('customers').update({ account_balance: newBalance }).eq('id', order.customer_id)
                 }
               } else {
                 const currentBalance = await customerLedgerManager.getCustomerBalance(order.customer_id)
+                const newBalance = currentBalance + paymentData.newTotal
                 await supabase.from('customer_ledger').insert({
                   user_id: currentUser.id, customer_id: order.customer_id,
                   transaction_type: 'debit', amount: paymentData.newTotal,
-                  balance_before: currentBalance, balance_after: currentBalance + paymentData.newTotal,
+                  balance_before: currentBalance, balance_after: newBalance,
                   order_id: order.id,
                   description: `Order #${order.order_number} - ${(order.order_type || 'WALKIN').toUpperCase()}`,
                   notes: 'Payment completed via inline payment modal', created_by: currentUser.id
                 })
+                await supabase.from('customers').update({ account_balance: newBalance }).eq('id', order.customer_id)
               }
             }
           } catch (ledgerError) {
@@ -1152,7 +1161,15 @@ export default function NewOrderPage() {
         onChangeTable={handleTableClick}
         orderTakers={activeOrderType === 'walkin' ? orderTakers : []}
         selectedOrderTaker={activeOrderType === 'walkin' ? selectedOrderTaker : null}
-        onOrderTakerChange={(taker) => activeOrderType === 'walkin' && setSelectedOrderTaker(taker)}
+        onOrderTakerChange={(taker) => {
+          if (activeOrderType !== 'walkin') return
+          setSelectedOrderTaker(taker)
+          if (taker?.id) {
+            localStorage.setItem('new_order_order_taker', JSON.stringify(taker))
+          } else {
+            localStorage.removeItem('new_order_order_taker')
+          }
+        }}
         requireOrderTaker={activeOrderType === 'walkin' ? requireOrderTaker : false}
       />
 
