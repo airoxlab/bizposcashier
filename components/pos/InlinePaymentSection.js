@@ -581,12 +581,33 @@ export default function InlinePaymentSection({
 
           {/* Order Items - Scrollable if needed */}
           <div className="flex-1 overflow-y-auto mb-3 space-y-1.5">
-            {(order.order_items || []).map((item, index) => (
+            {(order.order_items || []).map((item, index) => {
+              let dealProducts = []
+              if (item.is_deal && item.deal_products) {
+                try {
+                  dealProducts = typeof item.deal_products === 'string'
+                    ? JSON.parse(item.deal_products)
+                    : item.deal_products
+                } catch {}
+              }
+              return (
               <div key={index} className={`p-2 rounded text-xs ${isDark ? 'bg-gray-800/50' : 'bg-gray-50'}`}>
                 <div className="flex justify-between items-start">
                   <div className="flex-1">
                     <p className={`font-semibold ${classes.textPrimary}`}>{item.product_name}</p>
-                    {item.variant_name && (
+                    {item.is_deal && dealProducts.length > 0 && (
+                      <div className={`mt-0.5 ml-1 pl-1.5 border-l-2 ${isDark ? 'border-purple-700' : 'border-purple-300'} space-y-0.5`}>
+                        {dealProducts.map((dp, dpIdx) => {
+                          const flavorName = dp.flavor ? (typeof dp.flavor === 'object' ? (dp.flavor.flavor_name || dp.flavor.name) : dp.flavor) : null
+                          return (
+                            <p key={dpIdx} className={`text-[9px] ${classes.textSecondary}`}>
+                              {dp.quantity}x {dp.name}{dp.variant ? ` - ${dp.variant}` : ''}{flavorName ? ` (${flavorName})` : ''}
+                            </p>
+                          )
+                        })}
+                      </div>
+                    )}
+                    {!item.is_deal && item.variant_name && (
                       <p className={`text-[10px] ${classes.textSecondary}`}>{item.variant_name}</p>
                     )}
                   </div>
@@ -596,7 +617,8 @@ export default function InlinePaymentSection({
                   </div>
                 </div>
               </div>
-            ))}
+              )
+            })}
           </div>
 
           {/* Totals Summary - Fixed at bottom */}

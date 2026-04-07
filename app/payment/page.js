@@ -27,7 +27,8 @@ import {
   MapPin,
   Truck,
   LayoutGrid,
-  UserCheck
+  UserCheck,
+  Gift
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { cacheManager } from '../../lib/cacheManager'
@@ -88,6 +89,9 @@ export default function PaymentPage() {
   // Modified Order Payment States
   const [amountDue, setAmountDue] = useState(0) // For modified paid orders, this is the additional amount
   const [isModifiedPaidOrder, setIsModifiedPaidOrder] = useState(false)
+
+  // Complimentary order
+  const [complimentaryReason, setComplimentaryReason] = useState('')
 
   // Permission: can this cashier accept payment?
   const [canAcceptPayment, setCanAcceptPayment] = useState(true)
@@ -277,6 +281,16 @@ useEffect(() => {
       color: 'from-gray-500 to-gray-600',
       requiresAmount: false,
       logo: null
+    },
+    {
+      id: 'complimentary',
+      name: 'Complimentary',
+      icon: Gift,
+      color: 'from-pink-500 to-rose-600',
+      requiresAmount: false,
+      logo: null,
+      requiresPermission: 'COMPLIMENTARY_ORDER',
+      requiresReason: true
     }
   ]
 
@@ -485,6 +499,9 @@ useEffect(() => {
     if (selectedPaymentMethod.requiresAmount) {
       return parseFloat(cashAmount) >= amountDue
     }
+    if (selectedPaymentMethod.requiresReason) {
+      return complimentaryReason.trim().length > 0
+    }
     return true
   }
 // COMPLETE UPDATED processOrder function with delivery_charges and delivery_time fixes
@@ -585,10 +602,13 @@ const processOrder = async () => {
           delivery_address: orderData.deliveryAddress || '',
           table_id: orderData.tableId || null,
           total_amount: orderData.total,
+          amount_paid: selectedPaymentMethod.id === 'complimentary' ? 0 : orderData.total,
           payment_method: selectedPaymentMethod.name,
           payment_status: (selectedPaymentMethod.id === 'unpaid' || selectedPaymentMethod.id === 'account') ? 'Pending' : 'Paid',
           order_status: preservedOrderStatus,
-          order_instructions: orderData.orderInstructions || '',
+          order_instructions: selectedPaymentMethod.id === 'complimentary'
+            ? [orderData.orderInstructions, `[COMPLIMENTARY: ${complimentaryReason}]`].filter(Boolean).join(' | ')
+            : (orderData.orderInstructions || ''),
           delivery_time: deliveryTimeForDB,
           takeaway_time: takeawayTimeForDB,
           updated_at: new Date().toISOString(),
@@ -740,12 +760,15 @@ const processOrder = async () => {
         table_id: orderData.tableId || null, // Add table_id for walkin orders
         order_taker_id: orderData.orderTakerId || null,
         total_amount: orderData.total,
+        amount_paid: selectedPaymentMethod.id === 'complimentary' ? 0 : undefined,
         payment_method: selectedPaymentMethod.name,
         payment_status: (selectedPaymentMethod.id === 'unpaid' || selectedPaymentMethod.id === 'account') ? 'Pending' : 'Paid',
         order_status: (orderData.isModifying && orderData.originalOrderStatus && orderData.originalOrderStatus !== 'Dispatched')
           ? orderData.originalOrderStatus
           : 'Pending',
-        order_instructions: orderData.orderInstructions || '',
+        order_instructions: selectedPaymentMethod.id === 'complimentary'
+          ? [orderData.orderInstructions, `[COMPLIMENTARY: ${complimentaryReason}]`].filter(Boolean).join(' | ')
+          : (orderData.orderInstructions || ''),
         delivery_time: deliveryTimeForDB, // FIX: Add delivery time
         takeaway_time: takeawayTimeForDB, // Also add takeaway time
         loyalty_points_redeemed: loyaltyRedemption?.pointsToRedeem || 0, // Add loyalty points
@@ -874,6 +897,51 @@ const processOrder = async () => {
       tableName: orderData.tableName || null
     }))
 
+    // Auto-create expense entry for complimentary orders (food cost is a real expense)
+    if (selectedPaymentMethod?.id === 'complimentary' && orderData.total > 0) {
+      try {
+        const finalOrderNumber = orderData.isModifying ? orderData.existingOrderNumber : orderNumber
+
+        // Find or create "Complimentary Orders" expense category
+        let compCategoryId = null
+        const { data: existingCat } = await supabase
+          .from('expense_categories')
+          .select('id')
+          .eq('user_id', currentUser.id)
+          .eq('name', 'Complimentary Orders')
+          .maybeSingle()
+
+        if (existingCat) {
+          compCategoryId = existingCat.id
+        } else {
+          const { data: newCat } = await supabase
+            .from('expense_categories')
+            .insert({ user_id: currentUser.id, name: 'Complimentary Orders', icon: 'Gift', color: '#ec4899' })
+            .select('id')
+            .single()
+          if (newCat) compCategoryId = newCat.id
+        }
+
+        await supabase.from('expenses').insert({
+          user_id: currentUser.id,
+          amount: orderData.total,
+          total_amount: orderData.total,
+          tax_rate: 0,
+          tax_amount: 0,
+          payment_method: 'Unpaid',
+          category_id: compCategoryId,
+          description: `Complimentary Order #${finalOrderNumber} - ${complimentaryReason}`,
+          expense_date: new Date().toISOString().split('T')[0],
+          expense_time: new Date().toTimeString().split(' ')[0]
+        })
+
+        console.log(`🎁 Complimentary expense created for Order #${finalOrderNumber}: Rs ${orderData.total}`)
+      } catch (expErr) {
+        console.error('Failed to create complimentary expense:', expErr)
+        // Don't fail the order if expense creation fails
+      }
+    }
+
     playBeepSound()
 
     // Clear saved order data
@@ -890,6 +958,7 @@ const processOrder = async () => {
     localStorage.removeItem('walkin_original_payment_method')
     localStorage.removeItem('walkin_can_decrease_qty')
     localStorage.removeItem('walkin_table')
+    localStorage.removeItem('walkin_order_taker')
     localStorage.removeItem('walkin_reopened')
     localStorage.removeItem('delivery_cart')
     localStorage.removeItem('delivery_customer')
@@ -930,8 +999,19 @@ const processOrder = async () => {
       localStorage.removeItem('new_order_customer')
       localStorage.removeItem('new_order_instructions')
       localStorage.removeItem('new_order_walkin_table')
+      localStorage.removeItem('new_order_order_taker')
       const sourceKey = orderData?.sourceStorageKey
       if (sourceKey) localStorage.removeItem(`${sourceKey}_extras`)
+      // Clear modification state
+      localStorage.removeItem('new_order_modifying_order')
+      localStorage.removeItem('new_order_modifying_order_number')
+      localStorage.removeItem('new_order_modifying_daily_serial')
+      localStorage.removeItem('new_order_original_state')
+      localStorage.removeItem('new_order_original_order_status')
+      localStorage.removeItem('new_order_original_payment_status')
+      localStorage.removeItem('new_order_original_amount_paid')
+      localStorage.removeItem('new_order_original_payment_method')
+      localStorage.removeItem('new_order_can_decrease_qty')
     }
 
     setOrderComplete(true)
@@ -1284,7 +1364,8 @@ const handlePrintKitchenToken = async () => {
             size: removed.variant || '',
             quantity: removed.quantity,
             notes: '',
-            isDeal: false,
+            isDeal: removed.isDeal || false,
+            dealProducts: removed.dealProducts || null,
             changeType: 'removed'
           })
         })
@@ -1584,6 +1665,7 @@ const handlePrintKitchenToken = async () => {
       localStorage.removeItem('walkin_original_payment_method')
       localStorage.removeItem('walkin_can_decrease_qty')
       localStorage.removeItem('walkin_table')
+      localStorage.removeItem('walkin_order_taker')
       localStorage.removeItem('walkin_reopened')
       localStorage.removeItem('delivery_cart')
       localStorage.removeItem('delivery_customer')
@@ -1624,6 +1706,7 @@ const handlePrintKitchenToken = async () => {
         localStorage.removeItem('new_order_customer')
         localStorage.removeItem('new_order_instructions')
         localStorage.removeItem('new_order_walkin_table')
+        localStorage.removeItem('new_order_order_taker')
         const sourceKeySplit = orderData?.sourceStorageKey
         if (sourceKeySplit) localStorage.removeItem(`${sourceKeySplit}_extras`)
       }
@@ -1930,11 +2013,11 @@ if (orderComplete) {
           {/* LEFT COLUMN - Payment Controls (scrollable when needed) */}
           <div className="flex flex-col gap-3 overflow-y-auto">
 
-            {/* Smart Discount Section - COMPACT */}
-            <div className={`${classes.card} rounded-lg ${classes.border} border p-2`}>
+            {/* Smart Discount Section */}
+            <div className={`${classes.card} rounded-xl ${classes.border} border p-3`}>
               <div className="flex items-center justify-between mb-1">
-                <h2 className={`text-sm font-bold ${classes.textPrimary} flex items-center`}>
-                  <Tag className="w-3.5 h-3.5 mr-1 text-purple-600" />
+                <h2 className={`text-xs font-bold ${classes.textSecondary} uppercase tracking-wider flex items-center`}>
+                  <Tag className="w-3 h-3 mr-1.5" />
                   Discount
                 </h2>
                 <button
@@ -2019,10 +2102,10 @@ if (orderComplete) {
             </div>
 
             {/* Service Charge Section */}
-            <div className={`${classes.card} rounded-lg ${classes.border} border p-2`}>
+            <div className={`${classes.card} rounded-xl ${classes.border} border p-3`}>
               <div className="flex items-center justify-between mb-1">
-                <h2 className={`text-sm font-bold ${classes.textPrimary} flex items-center`}>
-                  <span className="w-3.5 h-3.5 mr-1 text-orange-500 font-bold text-xs">%</span>
+                <h2 className={`text-xs font-bold ${classes.textSecondary} uppercase tracking-wider flex items-center`}>
+                  <Percent className="w-3 h-3 mr-1.5" />
                   Service Charge
                 </h2>
                 <button
@@ -2078,59 +2161,58 @@ if (orderComplete) {
               )}
             </div>
 
-            {/* Payment Methods Grid - COMPACT */}
-            <div className={`${classes.card} rounded-lg ${classes.border} border p-2 flex-1 overflow-hidden flex flex-col`}>
-              <h2 className={`text-sm font-bold ${classes.textPrimary} mb-2`}>Payment Method</h2>
+            {/* Payment Methods */}
+            <div className={`${classes.card} rounded-xl ${classes.border} border p-3`}>
+              <h2 className={`text-xs font-bold ${classes.textSecondary} uppercase tracking-wider mb-2`}>Payment Method</h2>
 
               {!canAcceptPayment ? (
-                <div className={`flex-1 flex flex-col items-center justify-center gap-2 py-4 rounded-lg ${isDark ? 'bg-orange-900/20 border border-orange-700/30' : 'bg-orange-50 border border-orange-200'}`}>
-                  <Clock className={`w-6 h-6 ${isDark ? 'text-orange-400' : 'text-orange-500'}`} />
-                  <p className={`text-xs font-semibold text-center ${isDark ? 'text-orange-300' : 'text-orange-700'}`}>Payment collection not permitted</p>
-                  <p className={`text-[10px] text-center ${isDark ? 'text-orange-400/70' : 'text-orange-500'}`}>Order will be placed as unpaid</p>
+                <div className={`flex items-center gap-2 py-3 px-3 rounded-lg ${isDark ? 'bg-orange-900/20 border border-orange-700/30' : 'bg-orange-50 border border-orange-200'}`}>
+                  <Clock className={`w-5 h-5 ${isDark ? 'text-orange-400' : 'text-orange-500'}`} />
+                  <div>
+                    <p className={`text-xs font-semibold ${isDark ? 'text-orange-300' : 'text-orange-700'}`}>Payment not permitted</p>
+                    <p className={`text-[10px] ${isDark ? 'text-orange-400/70' : 'text-orange-500'}`}>Order will be placed as unpaid</p>
+                  </div>
                 </div>
               ) : (
                 <>
-                  <div className="grid grid-cols-3 gap-2 mb-2">
-                    {paymentMethods.map((method) => {
+                  <div className="grid grid-cols-4 gap-1.5 mb-2">
+                    {paymentMethods.filter(method => !method.requiresPermission || permissionManager.hasPermission(method.requiresPermission)).map((method) => {
                       const isDisabled = method.requiresCustomer && !orderData.customer
+                      const isSelected = selectedPaymentMethod?.id === method.id
                       return (
                         <button
                           key={method.id}
                           onClick={() => handlePaymentMethodSelect(method)}
                           disabled={isDisabled}
-                          className={`p-2 rounded-lg border ${
+                          className={`relative p-1.5 rounded-lg border-2 transition-all duration-150 ${
                             isDisabled
-                              ? `opacity-50 cursor-not-allowed ${classes.border} ${classes.card}`
-                              : selectedPaymentMethod?.id === method.id
-                              ? `border-purple-500 ${isDark ? 'bg-purple-900/20' : 'bg-purple-50'}`
-                              : `${classes.border} ${classes.card}`
+                              ? `opacity-40 cursor-not-allowed border-transparent ${isDark ? 'bg-gray-800' : 'bg-gray-100'}`
+                              : isSelected
+                              ? `border-purple-500 ${isDark ? 'bg-purple-900/30 shadow-[0_0_12px_rgba(139,92,246,0.2)]' : 'bg-purple-50 shadow-md'}`
+                              : `border-transparent ${isDark ? 'bg-gray-800 hover:bg-gray-700' : 'bg-gray-50 hover:bg-gray-100'}`
                           }`}
                           title={isDisabled ? 'Requires customer selection' : ''}
                         >
-                          <div className="flex flex-col items-center">
+                          {isSelected && (
+                            <div className="absolute -top-1 -right-1 w-4 h-4 bg-purple-500 rounded-full flex items-center justify-center">
+                              <Check className="w-2.5 h-2.5 text-white" />
+                            </div>
+                          )}
+                          <div className="flex flex-col items-center gap-0.5">
                             {method.logo ? (
-                              <div className="w-8 h-8 relative mb-1">
-                                <Image
-                                  src={method.logo}
-                                  alt={method.name}
-                                  fill
-                                  className="object-contain"
-                                />
+                              <div className="w-7 h-7 relative">
+                                <Image src={method.logo} alt={method.name} fill className="object-contain" />
                               </div>
                             ) : (
-                              <div className={`w-8 h-8 bg-gradient-to-r ${method.color} rounded flex items-center justify-center mb-1`}>
-                                <method.icon className="w-4 h-4 text-white" />
+                              <div className={`w-7 h-7 bg-gradient-to-br ${method.color} rounded-lg flex items-center justify-center shadow-sm`}>
+                                <method.icon className="w-3.5 h-3.5 text-white" />
                               </div>
                             )}
-                            <h3 className={`text-[10px] font-semibold text-center ${
-                              isDisabled
-                                ? classes.textSecondary
-                                : selectedPaymentMethod?.id === method.id
-                                ? isDark ? 'text-purple-300' : 'text-purple-700'
-                                : classes.textPrimary
-                              }`}>
+                            <span className={`text-[9px] font-medium leading-tight text-center ${
+                              isSelected ? (isDark ? 'text-purple-300' : 'text-purple-700') : classes.textSecondary
+                            }`}>
                               {method.displayName || method.name}
-                            </h3>
+                            </span>
                           </div>
                         </button>
                       )
@@ -2139,53 +2221,50 @@ if (orderComplete) {
 
                   {/* Customer Account Panel */}
                   {selectedPaymentMethod?.id === 'account' && orderData.customer && (
-                    <div className={`mb-2 rounded-lg border ${isDark ? 'bg-purple-900/20 border-purple-700/30' : 'bg-purple-50 border-purple-200'} overflow-hidden`}>
-                      <div className={`px-3 py-1.5 border-b ${isDark ? 'border-purple-700/30 bg-purple-900/30' : 'border-purple-200 bg-purple-100/60'}`}>
-                        <p className={`text-xs font-semibold ${isDark ? 'text-purple-200' : 'text-purple-900'}`}>
-                          {orderData.customer.full_name || orderData.customer.first_name + ' ' + orderData.customer.last_name || 'Customer'}
-                        </p>
-                      </div>
-                      <div className="grid grid-cols-2 divide-x divide-purple-200/40 px-0">
+                    <div className={`mb-2 rounded-lg ${isDark ? 'bg-purple-900/20 border border-purple-700/30' : 'bg-purple-50 border border-purple-200'} overflow-hidden`}>
+                      <div className="grid grid-cols-2 divide-x ${isDark ? 'divide-purple-700/30' : 'divide-purple-200'}">
                         <div className="p-2 text-center">
-                          <p className={`text-[9px] uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Balance Owed</p>
-                          <p className={`text-xs font-bold ${isDark ? 'text-orange-300' : 'text-orange-600'}`}>
+                          <p className={`text-[9px] uppercase tracking-wide ${classes.textSecondary}`}>Balance Owed</p>
+                          <p className={`text-sm font-bold ${isDark ? 'text-orange-300' : 'text-orange-600'}`}>
                             {loadingLedgerBalance ? '...' : `Rs ${customerLedgerBalance.toFixed(0)}`}
                           </p>
                         </div>
                         <div className="p-2 text-center">
-                          <p className={`text-[9px] uppercase tracking-wide ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Order Total</p>
-                          <p className={`text-xs font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>
-                            Rs {orderData.total.toFixed(0)}
-                          </p>
+                          <p className={`text-[9px] uppercase tracking-wide ${classes.textSecondary}`}>Order Total</p>
+                          <p className={`text-sm font-bold ${classes.textPrimary}`}>Rs {orderData.total.toFixed(0)}</p>
                         </div>
                       </div>
                     </div>
                   )}
 
-                  {/* Split Payment Button - Compact */}
-                  <button
-                    onClick={handleSplitPaymentClick}
-                    disabled={isProcessing}
-                    className={`w-full py-2 rounded-lg text-xs font-semibold ${
-                      isProcessing
-                        ? 'bg-gray-400 cursor-not-allowed'
-                        : isDark
-                        ? 'bg-gradient-to-r from-orange-600 to-orange-700'
-                        : 'bg-gradient-to-r from-orange-500 to-orange-600'
-                    } text-white flex items-center justify-center`}
-                  >
-                    {isProcessing ? (
-                      <>
-                        <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white mr-1"></div>
-                        Creating...
-                      </>
-                    ) : (
-                      <>
-                        <CreditCard className="w-3 h-3 mr-1" />
-                        Split Payment
-                      </>
-                    )}
-                  </button>
+                  {/* Complimentary Reason */}
+                  {selectedPaymentMethod?.id === 'complimentary' && (
+                    <div className={`mb-2 flex items-center gap-2 rounded-lg ${isDark ? 'bg-pink-900/15 border border-pink-700/30' : 'bg-pink-50 border border-pink-200'} px-2.5 py-2`}>
+                      <Gift className={`w-4 h-4 flex-shrink-0 ${isDark ? 'text-pink-400' : 'text-pink-500'}`} />
+                      <input
+                        type="text"
+                        value={complimentaryReason}
+                        onChange={(e) => setComplimentaryReason(e.target.value)}
+                        placeholder="Enter reason (required)..."
+                        autoFocus
+                        className={`flex-1 px-0 py-0 bg-transparent text-xs border-0 outline-none ${isDark ? 'text-white placeholder-pink-400/50' : 'text-gray-900 placeholder-pink-400'}`}
+                      />
+                    </div>
+                  )}
+
+                  {/* Split Payment */}
+                  {selectedPaymentMethod?.id !== 'complimentary' && (
+                    <button
+                      onClick={handleSplitPaymentClick}
+                      disabled={isProcessing}
+                      className={`w-full py-1.5 rounded-lg text-xs font-medium ${
+                        isDark ? 'bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700' : 'bg-gray-100 hover:bg-gray-200 text-gray-600 border border-gray-200'
+                      } flex items-center justify-center gap-1 transition-colors`}
+                    >
+                      <CreditCard className="w-3 h-3" />
+                      Split Payment
+                    </button>
+                  )}
                 </>
               )}
             </div>
@@ -2284,8 +2363,8 @@ if (orderComplete) {
               </div>
             )}
 
-            {/* Loyalty Redemption Section - Compact */}
-            {orderData.customer && (
+            {/* Loyalty Redemption Section - Hidden for Complimentary */}
+            {orderData.customer && selectedPaymentMethod?.id !== 'complimentary' && (
               <LoyaltyRedemption
                 customer={orderData.customer}
                 orderTotal={originalSubtotal - discountAmount}
@@ -2299,8 +2378,8 @@ if (orderComplete) {
           </div>
 
           {/* RIGHT COLUMN - Order Summary */}
-          <div className={`${classes.card} rounded-lg ${classes.border} border p-2 overflow-hidden flex flex-col`}>
-            <h2 className={`text-sm font-bold ${classes.textPrimary} mb-2`}>Order Summary</h2>
+          <div className={`${classes.card} rounded-xl ${classes.border} border p-3 overflow-hidden flex flex-col`}>
+            <h2 className={`text-xs font-bold ${classes.textSecondary} uppercase tracking-wider mb-2`}>Order Summary</h2>
 
             {/* Modification Preview - Shows when modifying an order */}
             {orderData.isModifying && orderData.detailedChanges && (
@@ -2471,10 +2550,16 @@ if (orderComplete) {
                   <span className="font-semibold">+Rs {parseFloat(orderData.deliveryCharges).toFixed(0)}</span>
                 </div>
               )}
-              <div className={`flex justify-between text-base font-bold ${classes.textPrimary} ${classes.border} border-t pt-1.5 mt-1.5`}>
+              <div className={`flex justify-between items-center text-lg font-extrabold ${classes.textPrimary} ${classes.border} border-t pt-2 mt-2`}>
                 <span>Total:</span>
-                <span className="text-green-600">Rs {orderData.total.toFixed(0)}</span>
+                <span className={selectedPaymentMethod?.id === 'complimentary' ? 'text-pink-500 line-through' : 'text-green-600'}>Rs {orderData.total.toFixed(0)}</span>
               </div>
+              {selectedPaymentMethod?.id === 'complimentary' && (
+                <div className="flex justify-between items-center mt-0.5">
+                  <span className={`text-xs font-medium ${isDark ? 'text-pink-400' : 'text-pink-600'}`}>Complimentary — No Charge</span>
+                  <span className="text-lg font-extrabold text-pink-500">Rs 0</span>
+                </div>
+              )}
 
               {/* Payment Breakdown for Modified PAID Orders */}
               {isModifiedPaidOrder && (
@@ -2590,31 +2675,35 @@ if (orderComplete) {
             )}
 
 
-            {/* Complete Payment Button - Compact */}
+            {/* Complete Payment Button */}
             <button
               onClick={processOrder}
               disabled={!canProcessPayment() || isProcessing}
-              className={`w-full py-2 rounded-lg font-bold text-sm flex items-center justify-center ${canProcessPayment() && !isProcessing
-                  ? 'bg-green-600 hover:bg-green-700 text-white'
-                  : `${isDark ? 'bg-gray-600 text-gray-400' : 'bg-gray-300 text-gray-500'} cursor-not-allowed`
+              className={`w-full py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-1.5 transition-all duration-200 ${canProcessPayment() && !isProcessing
+                  ? selectedPaymentMethod?.id === 'complimentary'
+                    ? 'bg-gradient-to-r from-pink-500 to-rose-600 hover:from-pink-600 hover:to-rose-700 text-white shadow-lg shadow-pink-500/20'
+                    : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white shadow-lg shadow-green-500/20'
+                  : `${isDark ? 'bg-gray-700 text-gray-500' : 'bg-gray-200 text-gray-400'} cursor-not-allowed`
                 }`}
             >
               {isProcessing ? (
                 <>
-                  <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white mr-1"></div>
+                  <div className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-white/30 border-t-white"></div>
                   Processing...
                 </>
               ) : (
                 <>
                   {networkStatus.isOnline ? (
-                    <CheckCircle className="w-4 h-4 mr-1" />
+                    <CheckCircle className="w-4 h-4" />
                   ) : (
-                    <Volume2 className="w-4 h-4 mr-1" />
+                    <Volume2 className="w-4 h-4" />
                   )}
                   {networkStatus.isOnline
-                    ? (selectedPaymentMethod?.id === 'account' || selectedPaymentMethod?.id === 'unpaid'
-                        ? 'Place Order'
-                        : 'Complete Payment')
+                    ? selectedPaymentMethod?.id === 'complimentary'
+                      ? 'Place Complimentary Order'
+                      : (selectedPaymentMethod?.id === 'account' || selectedPaymentMethod?.id === 'unpaid'
+                          ? 'Place Order'
+                          : 'Complete Payment')
                     : 'Save Order (Offline)'}
                 </>
               )}
@@ -2622,13 +2711,19 @@ if (orderComplete) {
 
             {!selectedPaymentMethod && (
               <p className={`text-center ${classes.textSecondary} text-[10px] mt-1`}>
-                Please select a payment method above
+                Select a payment method
               </p>
             )}
 
             {selectedPaymentMethod?.requiresAmount && !canProcessPayment() && (
               <p className={`text-center ${isDark ? 'text-red-400' : 'text-red-500'} text-[10px] mt-1`}>
-                Please enter sufficient cash amount
+                Enter sufficient cash amount
+              </p>
+            )}
+
+            {selectedPaymentMethod?.id === 'complimentary' && !complimentaryReason.trim() && (
+              <p className={`text-center ${isDark ? 'text-pink-400' : 'text-pink-500'} text-[10px] mt-1`}>
+                Enter a reason for complimentary order
               </p>
             )}
           </div>

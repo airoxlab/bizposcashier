@@ -55,6 +55,9 @@ export default function ExpensesPage() {
   const [categoryFilter, setCategoryFilter] = useState('All')
   const [paymentFilter, setPaymentFilter] = useState('All')
 
+  // Payment accounts
+  const [paymentAccounts, setPaymentAccounts] = useState([])
+
   // UI states
   const [showAddExpense, setShowAddExpense] = useState(false)
   const [showCategoryModal, setShowCategoryModal] = useState(false)
@@ -71,6 +74,7 @@ export default function ExpensesPage() {
     subcategoryId: '',
     description: '',
     paymentMethod: '',
+    paymentAccountId: '',
     taxRate: 0,
     expenseDate: new Date().toISOString().split('T')[0]
   })
@@ -299,6 +303,9 @@ export default function ExpensesPage() {
       setExpenses(sortedExpenses)
       setCategories(categories)
       setSubcategories(subcategories)
+
+      // Fetch payment accounts in background
+      fetchPaymentAccounts()
     } catch (error) {
       console.error('❌ Error fetching expense data:', error)
       notify.error(`Failed to load data: ${error.message}`)
@@ -391,6 +398,36 @@ export default function ExpensesPage() {
     }
   }
 
+  const fetchPaymentAccounts = async () => {
+    try {
+      if (!user?.id) return
+      const { data, error } = await supabase
+        .from('payment_accounts')
+        .select('*')
+        .eq('user_id', user.id)
+        .eq('is_active', true)
+        .order('sort_order', { ascending: true })
+
+      if (error) throw error
+
+      // Auto-initialize if no accounts exist
+      if (!data || data.length === 0) {
+        await supabase.rpc('initialize_default_payment_accounts', { p_user_id: user.id })
+        const { data: newAccounts } = await supabase
+          .from('payment_accounts')
+          .select('*')
+          .eq('user_id', user.id)
+          .eq('is_active', true)
+          .order('sort_order', { ascending: true })
+        setPaymentAccounts(newAccounts || [])
+      } else {
+        setPaymentAccounts(data)
+      }
+    } catch (error) {
+      console.error('Error fetching payment accounts:', error)
+    }
+  }
+
   const calculateTotalAmount = () => {
     const amount = parseFloat(expenseForm.amount) || 0
     const taxAmount = (amount * expenseForm.taxRate) / 100
@@ -415,6 +452,7 @@ export default function ExpensesPage() {
         subcategory_id: expenseForm.subcategoryId || null,
         description: expenseForm.description,
         payment_method: expenseForm.paymentMethod,
+        payment_account_id: expenseForm.paymentAccountId || null,
         tax_rate: expenseForm.taxRate,
         tax_amount: taxAmount,
         total_amount: totalAmount,
@@ -566,6 +604,7 @@ export default function ExpensesPage() {
       subcategoryId: '',
       description: '',
       paymentMethod: '',
+      paymentAccountId: '',
       taxRate: 0,
       expenseDate: new Date().toISOString().split('T')[0]
     })
@@ -579,6 +618,7 @@ export default function ExpensesPage() {
       subcategoryId: expense.subcategory_id || '',
       description: expense.description || '',
       paymentMethod: expense.payment_method,
+      paymentAccountId: expense.payment_account_id || '',
       taxRate: expense.tax_rate || 0,
       expenseDate: expense.expense_date
     })
@@ -1059,30 +1099,82 @@ export default function ExpensesPage() {
                 </div>
               )}
 
-              {/* Payment Method */}
+              {/* Payment Method / Account */}
               <div>
                 <label className={`block text-sm font-semibold ${themeClasses.textPrimary} mb-3`}>
-                  Payment Method *
+                  Pay From Account *
                 </label>
-                <div className="grid grid-cols-2 gap-3">
-                  {paymentMethods.map((method) => (
+                {paymentAccounts.length > 0 ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    {paymentAccounts.map((account) => (
+                      <button
+                        key={account.id}
+                        onClick={() => setExpenseForm({
+                          ...expenseForm,
+                          paymentAccountId: account.id,
+                          paymentMethod: account.payment_method_key || account.name
+                        })}
+                        className={`p-3 rounded-xl border-2 transition-all ${expenseForm.paymentAccountId === account.id
+                            ? `border-purple-500 ${isDark ? 'bg-purple-900/50' : 'bg-purple-50'}`
+                            : `${themeClasses.border} ${themeClasses.hover} ${themeClasses.card}`
+                          }`}
+                      >
+                        <div className="flex flex-col items-center">
+                          <div
+                            className="w-8 h-8 rounded-lg flex items-center justify-center mb-2"
+                            style={{ backgroundColor: (account.color || '#6366f1') + '30' }}
+                          >
+                            <Wallet className="w-4 h-4" style={{ color: account.color || '#6366f1' }} />
+                          </div>
+                          <span className={`text-xs font-medium ${themeClasses.textPrimary}`}>{account.name}</span>
+                          <span className={`text-xs ${themeClasses.textSecondary}`}>
+                            PKR {parseFloat(account.current_balance || 0).toLocaleString()}
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                    {/* Unpaid option */}
                     <button
-                      key={method.id}
-                      onClick={() => setExpenseForm({ ...expenseForm, paymentMethod: method.id })}
-                      className={`p-3 rounded-xl border-2 transition-all ${expenseForm.paymentMethod === method.id
+                      onClick={() => setExpenseForm({
+                        ...expenseForm,
+                        paymentAccountId: '',
+                        paymentMethod: 'Unpaid'
+                      })}
+                      className={`p-3 rounded-xl border-2 transition-all ${expenseForm.paymentMethod === 'Unpaid'
                           ? `border-purple-500 ${isDark ? 'bg-purple-900/50' : 'bg-purple-50'}`
                           : `${themeClasses.border} ${themeClasses.hover} ${themeClasses.card}`
                         }`}
                     >
                       <div className="flex flex-col items-center">
-                        <div className={`w-8 h-8 bg-gradient-to-r ${method.color} rounded-lg flex items-center justify-center mb-2`}>
-                          {React.createElement(method.icon, { className: "w-4 h-4 text-white" })}
+                        <div className="w-8 h-8 bg-gradient-to-r from-gray-500 to-gray-600 rounded-lg flex items-center justify-center mb-2">
+                          <Clock className="w-4 h-4 text-white" />
                         </div>
-                        <span className={`text-xs font-medium ${themeClasses.textPrimary}`}>{method.name}</span>
+                        <span className={`text-xs font-medium ${themeClasses.textPrimary}`}>Unpaid</span>
                       </div>
                     </button>
-                  ))}
-                </div>
+                  </div>
+                ) : (
+                  /* Fallback: old payment method grid if no accounts set up */
+                  <div className="grid grid-cols-2 gap-3">
+                    {paymentMethods.map((method) => (
+                      <button
+                        key={method.id}
+                        onClick={() => setExpenseForm({ ...expenseForm, paymentMethod: method.id })}
+                        className={`p-3 rounded-xl border-2 transition-all ${expenseForm.paymentMethod === method.id
+                            ? `border-purple-500 ${isDark ? 'bg-purple-900/50' : 'bg-purple-50'}`
+                            : `${themeClasses.border} ${themeClasses.hover} ${themeClasses.card}`
+                          }`}
+                      >
+                        <div className="flex flex-col items-center">
+                          <div className={`w-8 h-8 bg-gradient-to-r ${method.color} rounded-lg flex items-center justify-center mb-2`}>
+                            {React.createElement(method.icon, { className: "w-4 h-4 text-white" })}
+                          </div>
+                          <span className={`text-xs font-medium ${themeClasses.textPrimary}`}>{method.name}</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Tax Rate */}

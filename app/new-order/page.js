@@ -80,8 +80,8 @@ export default function NewOrderPage() {
   const [allProducts, setAllProducts] = useState([])
   const [deals, setDeals] = useState([])
   const [networkStatus, setNetworkStatus] = useState({ isOnline: true, unsyncedOrders: 0 })
-  const [isDataReady, setIsDataReady] = useState(false)
-  const [isLoading, setIsLoading] = useState(true)
+  const [isDataReady, setIsDataReady] = useState(() => cacheManager.isReady())
+  const [isLoading, setIsLoading] = useState(() => !cacheManager.isReady())
   const [theme, setTheme] = useState('light')
 
   // Active order type tab
@@ -110,6 +110,18 @@ export default function NewOrderPage() {
   const [ordersRefreshTrigger, setOrdersRefreshTrigger] = useState(0)
   const [showSplitPaymentModal, setShowSplitPaymentModal] = useState(false)
   const [splitPaymentOrder, setSplitPaymentOrder] = useState(null)
+
+  // Reopened/modified order state
+  const [isReopenedOrder, setIsReopenedOrder] = useState(false)
+  const [modifyingOrderId, setModifyingOrderId] = useState(null)
+  const [modifyingOrderNumber, setModifyingOrderNumber] = useState(null)
+  const [modifyingDailySerial, setModifyingDailySerial] = useState(null)
+  const [originalState, setOriginalState] = useState(null)
+  const [originalOrderStatus, setOriginalOrderStatus] = useState(null)
+  const [originalPaymentStatus, setOriginalPaymentStatus] = useState(null)
+  const [originalAmountPaid, setOriginalAmountPaid] = useState(0)
+  const [originalPaymentMethod, setOriginalPaymentMethod] = useState(null)
+  const [canDecreaseQty, setCanDecreaseQty] = useState(true)
 
   // Table selection (walkin only)
   const [selectedTable, setSelectedTable] = useState(null)
@@ -233,6 +245,24 @@ export default function NewOrderPage() {
     const savedOrderTaker = localStorage.getItem('new_order_order_taker')
     if (savedOrderTaker) try { const t = JSON.parse(savedOrderTaker); if (t?.id) setSelectedOrderTaker(t) } catch {}
 
+    // Restore modification state if reopened order was in progress
+    const savedModifyingOrder = localStorage.getItem('new_order_modifying_order')
+    if (savedModifyingOrder) {
+      setIsReopenedOrder(true)
+      setModifyingOrderId(savedModifyingOrder)
+      setModifyingOrderNumber(localStorage.getItem('new_order_modifying_order_number') || null)
+      setModifyingDailySerial(localStorage.getItem('new_order_modifying_daily_serial') || null)
+      try {
+        const os = localStorage.getItem('new_order_original_state')
+        if (os) setOriginalState(JSON.parse(os))
+      } catch {}
+      setOriginalOrderStatus(localStorage.getItem('new_order_original_order_status') || null)
+      setOriginalPaymentStatus(localStorage.getItem('new_order_original_payment_status') || null)
+      setOriginalAmountPaid(parseFloat(localStorage.getItem('new_order_original_amount_paid')) || 0)
+      setOriginalPaymentMethod(localStorage.getItem('new_order_original_payment_method') || null)
+      setCanDecreaseQty(localStorage.getItem('new_order_can_decrease_qty') !== 'false')
+    }
+
     setOrderExtras(restoredExtras)
     isInitialized.current = true
 
@@ -284,8 +314,8 @@ export default function NewOrderPage() {
   }, [])
 
   const checkAndLoadData = async () => {
-    setIsLoading(true)
     try {
+      // If cache already has data, load instantly — no spinner
       if (cacheManager.isReady()) {
         loadCachedData()
         setIsDataReady(true)
@@ -293,6 +323,7 @@ export default function NewOrderPage() {
         return
       }
 
+      setIsLoading(true)
       const loadingId = notify.loading('Loading menu data...')
       let attempts = 0
 
@@ -317,7 +348,7 @@ export default function NewOrderPage() {
             setIsLoading(false)
           })
         }
-      }, 500)
+      }, 100)
     } catch {
       setIsLoading(false)
     }
@@ -453,6 +484,7 @@ export default function NewOrderPage() {
 
   const handleClearCart = () => {
     setCart([])
+    clearModificationState()
   }
 
   const calculateSubtotal = () => cart.reduce((sum, item) => sum + item.totalPrice, 0)
@@ -487,8 +519,98 @@ export default function NewOrderPage() {
     setOrderExtras({ walkin: {}, takeaway: {}, delivery: {} })
     setSelectedTable(null)
     setSelectedOrderTaker(null)
+    clearModificationState()
     notify.info('Order discarded')
     router.push('/dashboard/')
+  }
+
+  // Handle reopening an order from the sidebar into the new-order page's cart
+  const handleReopenInPlace = (reopenData) => {
+    const orderType = reopenData.orderType || 'walkin'
+
+    // Switch to the correct tab
+    setActiveOrderType(orderType)
+
+    // Load reopened order data into cart
+    setCart(reopenData.cart || [])
+    setCustomer(reopenData.customer || null)
+    setOrderInstructions(reopenData.orderInstructions || '')
+
+    // Set modification state
+    setIsReopenedOrder(true)
+    setModifyingOrderId(reopenData.existingOrderId || null)
+    setModifyingOrderNumber(reopenData.existingOrderNumber || null)
+    setModifyingDailySerial(reopenData.dailySerial || null)
+    setOriginalState(reopenData.originalState || null)
+    setOriginalOrderStatus(reopenData.originalOrderStatus || null)
+    setOriginalPaymentStatus(reopenData.originalPaymentStatus || null)
+    setOriginalAmountPaid(reopenData.originalAmountPaid || 0)
+    setOriginalPaymentMethod(reopenData.originalPaymentMethod || null)
+    setCanDecreaseQty(reopenData.canDecreaseQty !== false)
+
+    // Set extras (discount, delivery charges, etc.)
+    setOrderExtras(prev => ({
+      ...prev,
+      [orderType]: {
+        discount: reopenData.discount || 0,
+        ...(reopenData.deliveryCharges ? { deliveryCharges: reopenData.deliveryCharges } : {}),
+        ...(reopenData.deliveryTime ? { deliveryTime: reopenData.deliveryTime } : {}),
+        ...(reopenData.pickupTime ? { pickupTime: reopenData.pickupTime } : {})
+      }
+    }))
+
+    // Restore table for walkin
+    if (orderType === 'walkin' && reopenData.tableId) {
+      setSelectedTable(reopenData.table || { id: reopenData.tableId })
+    }
+
+    // Restore order taker and persist to localStorage
+    if (orderType === 'walkin' && reopenData.orderTakerId) {
+      const taker = { id: reopenData.orderTakerId, name: reopenData.orderTakerName || null }
+      setSelectedOrderTaker(taker)
+      localStorage.setItem('new_order_order_taker', JSON.stringify(taker))
+    }
+
+    // Persist modification state to localStorage
+    localStorage.setItem('new_order_modifying_order', reopenData.existingOrderId || '')
+    localStorage.setItem('new_order_modifying_order_number', reopenData.existingOrderNumber || '')
+    localStorage.setItem('new_order_modifying_daily_serial', reopenData.dailySerial || '')
+    localStorage.setItem('new_order_original_state', JSON.stringify(reopenData.originalState || null))
+    localStorage.setItem('new_order_original_order_status', reopenData.originalOrderStatus || 'Pending')
+    localStorage.setItem('new_order_original_payment_status', reopenData.originalPaymentStatus || 'Pending')
+    localStorage.setItem('new_order_original_amount_paid', (reopenData.originalAmountPaid || 0).toString())
+    localStorage.setItem('new_order_original_payment_method', reopenData.originalPaymentMethod || 'Cash')
+    localStorage.setItem('new_order_can_decrease_qty', (reopenData.canDecreaseQty !== false).toString())
+
+    // Close order details and return to products view
+    setSelectedOrder(null)
+    setCurrentView('products')
+    setOrdersRefreshTrigger(prev => prev + 1)
+
+    notify.success(`Order #${reopenData.existingOrderNumber || ''} loaded for modification`)
+  }
+
+  // Clear modification state (used when clearing cart or after successful order)
+  const clearModificationState = () => {
+    setIsReopenedOrder(false)
+    setModifyingOrderId(null)
+    setModifyingOrderNumber(null)
+    setModifyingDailySerial(null)
+    setOriginalState(null)
+    setOriginalOrderStatus(null)
+    setOriginalPaymentStatus(null)
+    setOriginalAmountPaid(0)
+    setOriginalPaymentMethod(null)
+    setCanDecreaseQty(true)
+    localStorage.removeItem('new_order_modifying_order')
+    localStorage.removeItem('new_order_modifying_order_number')
+    localStorage.removeItem('new_order_modifying_daily_serial')
+    localStorage.removeItem('new_order_original_state')
+    localStorage.removeItem('new_order_original_order_status')
+    localStorage.removeItem('new_order_original_payment_status')
+    localStorage.removeItem('new_order_original_amount_paid')
+    localStorage.removeItem('new_order_original_payment_method')
+    localStorage.removeItem('new_order_can_decrease_qty')
   }
 
   const handleOrderAndPay = () => {
@@ -523,8 +645,81 @@ export default function NewOrderPage() {
       tableName: activeOrderType === 'walkin' ? (selectedTable?.table_name || selectedTable?.table_number || null) : null,
       sourceStorageKey: tab?.storageKey || null,
       sourcePage: 'new-order',
+      // Include modification data if this is a reopened order
+      isModifying: isReopenedOrder,
+      existingOrderId: modifyingOrderId,
+      existingOrderNumber: modifyingOrderNumber,
+      originalPaymentStatus: originalPaymentStatus,
+      originalAmountPaid: originalAmountPaid,
+      originalPaymentMethod: originalPaymentMethod,
+      originalOrderStatus: originalOrderStatus,
       ...extras
     }
+
+    // Include detailed changes for modified orders
+    if (isReopenedOrder && modifyingOrderId && originalState) {
+      const changes = {
+        itemsAdded: [],
+        itemsRemoved: [],
+        itemsModified: []
+      }
+
+      // Find removed items
+      originalState.items.forEach(oldItem => {
+        const itemName = oldItem.isDeal ? oldItem.dealName : oldItem.productName
+        const itemVariant = oldItem.isDeal ? null : oldItem.variantName
+
+        const stillExists = cart.find(newItem => {
+          const newItemName = newItem.isDeal ? newItem.dealName : newItem.productName
+          const newItemVariant = newItem.isDeal ? null : newItem.variantName
+          return newItemName === itemName && newItemVariant === itemVariant
+        })
+        if (!stillExists) {
+          const removed = {
+            name: itemName,
+            variant: itemVariant,
+            quantity: oldItem.quantity,
+            price: oldItem.totalPrice
+          }
+          if (oldItem.isDeal) { removed.isDeal = true; removed.dealProducts = oldItem.dealProducts || null }
+          changes.itemsRemoved.push(removed)
+        }
+      })
+
+      // Find added and modified items
+      cart.forEach(newItem => {
+        const itemName = newItem.isDeal ? newItem.dealName : newItem.productName
+        const itemVariant = newItem.isDeal ? null : newItem.variantName
+
+        const oldItem = originalState.items.find(old => {
+          const oldItemName = old.isDeal ? old.dealName : old.productName
+          const oldItemVariant = old.isDeal ? null : old.variantName
+          return oldItemName === itemName && oldItemVariant === itemVariant
+        })
+        if (!oldItem) {
+          const added = {
+            name: itemName,
+            variant: itemVariant,
+            quantity: newItem.quantity,
+            price: newItem.totalPrice
+          }
+          if (newItem.isDeal) { added.isDeal = true; added.dealProducts = newItem.dealProducts || null }
+          changes.itemsAdded.push(added)
+        } else if (oldItem.quantity !== newItem.quantity) {
+          changes.itemsModified.push({
+            name: itemName,
+            variant: itemVariant,
+            oldQuantity: oldItem.quantity,
+            newQuantity: newItem.quantity,
+            oldPrice: oldItem.totalPrice,
+            newPrice: newItem.totalPrice
+          })
+        }
+      })
+
+      orderData.detailedChanges = changes
+    }
+
     localStorage.setItem('order_data', JSON.stringify(orderData))
     // Do NOT clear cart here — payment page clears it on success.
     // If user comes back from payment, cart is preserved.
@@ -1132,6 +1327,7 @@ export default function NewOrderPage() {
             setCurrentView('products')
             notify.success('Order converted! Check the delivery page.')
           }}
+          onReopen={handleReopenInPlace}
         />
       )}
 
@@ -1150,7 +1346,7 @@ export default function NewOrderPage() {
         isDark={isDark}
         networkStatus={networkStatus}
         orderType={activeOrderType}
-        isReopenedOrder={false}
+        isReopenedOrder={isReopenedOrder}
         onInstructionsChange={(val) => setOrderInstructions(val)}
         onUpdateItemInstruction={updateItemInstruction}
         inlineCustomer={true}

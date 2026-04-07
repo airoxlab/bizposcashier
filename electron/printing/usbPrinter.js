@@ -548,79 +548,140 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
   // ========================================
   // ITEMS SECTION
   // ========================================
-  commands.push(CMD.ALIGN_CENTER);
-  commands.push(CMD.BOLD_ON);
-  commands.push(text('ITEMS\n'));
-  commands.push(CMD.BOLD_OFF);
-  commands.push(drawLine('-'));
 
-  commands.push(leftRight('Item Name', 'Qty'));
-  commands.push(drawLine('-'));
-
-  if (orderData.items && orderData.items.length > 0) {
-    for (const item of orderData.items) {
-      const ct = item.changeType;
-
-      if (item.isDeal) {
-        let itemName = item.name;
-        const maxNameLength = PAPER_WIDTH - 4;
-        if (itemName.length > maxNameLength) itemName = itemName.substring(0, maxNameLength);
-
-        commands.push(CMD.ALIGN_LEFT);
-        if (ct === 'modified') {
-          commands.push(leftRight(itemName, `Before: ${item.oldQuantity}`));
-          commands.push(leftRight('', `After:  ${item.newQuantity}`));
-        } else if (ct === 'added') {
-          commands.push(leftRight(`+ ${itemName}`, item.quantity.toString()));
-        } else if (ct === 'removed') {
-          commands.push(leftRight(`- ${itemName}`, item.quantity.toString()));
-        } else {
-          commands.push(leftRight(itemName, item.quantity.toString()));
-        }
-
-        if (item.dealProducts && item.dealProducts.length > 0) {
-          commands.push(CMD.ALIGN_LEFT);
-          for (const product of item.dealProducts) {
-            const variantName = product.variant ||
-              (product.flavor ?
-                (typeof product.flavor === 'object' ? (product.flavor.flavor_name || product.flavor.name) : product.flavor)
-                : null);
-            let productLine = `  ${product.quantity}x ${product.name}`;
-            if (variantName) productLine += ` - ${variantName}`;
-            commands.push(leftText(productLine));
-          }
-        }
-        if (item.instructions) {
-          commands.push(leftText(`  * ${item.instructions}`));
-        }
-      } else {
-        let itemName = item.name;
-        if (item.size) itemName = `${item.name} (${item.size})`;
-        const maxNameLength = PAPER_WIDTH - 4;
-        if (itemName.length > maxNameLength) itemName = itemName.substring(0, maxNameLength);
-
-        commands.push(CMD.ALIGN_LEFT);
-        if (ct === 'modified') {
-          commands.push(leftRight(itemName, `Before: ${item.oldQuantity}`));
-          commands.push(leftRight('', `After:  ${item.newQuantity}`));
-        } else if (ct === 'added') {
-          commands.push(leftRight(`+ ${itemName}`, item.quantity.toString()));
-        } else if (ct === 'removed') {
-          commands.push(leftRight(`- ${itemName}`, item.quantity.toString()));
-        } else {
-          commands.push(leftRight(itemName, item.quantity.toString()));
-        }
-        if (item.instructions) {
-          commands.push(leftText(`  * ${item.instructions}`));
+  // Helper to print a single item line (deal or regular)
+  const printItem = (item, prefix) => {
+    const maxNameLength = PAPER_WIDTH - 6;
+    if (item.isDeal) {
+      let itemName = item.name;
+      if (itemName.length > maxNameLength) itemName = itemName.substring(0, maxNameLength);
+      commands.push(CMD.ALIGN_LEFT);
+      commands.push(leftRight(`${prefix}${itemName}`, item.quantity.toString()));
+      if (item.dealProducts && item.dealProducts.length > 0) {
+        for (const product of item.dealProducts) {
+          const variantName = product.variant ||
+            (product.flavor ?
+              (typeof product.flavor === 'object' ? (product.flavor.flavor_name || product.flavor.name) : product.flavor)
+              : null);
+          let productLine = `  ${product.quantity}x ${product.name}`;
+          if (variantName) productLine += ` - ${variantName}`;
+          commands.push(leftText(productLine));
         }
       }
+      if (item.instructions) {
+        commands.push(leftText(`  * ${item.instructions}`));
+      }
+    } else {
+      let itemName = item.name;
+      if (item.size) itemName = `${item.name} (${item.size})`;
+      if (itemName.length > maxNameLength) itemName = itemName.substring(0, maxNameLength);
+      commands.push(CMD.ALIGN_LEFT);
+      commands.push(leftRight(`${prefix}${itemName}`, item.quantity.toString()));
+      if (item.instructions) {
+        commands.push(leftText(`  * ${item.instructions}`));
+      }
     }
-  } else {
-    commands.push(CMD.ALIGN_CENTER);
-    commands.push(text('No items\n'));
-  }
+  };
 
-  commands.push(drawLine('-'));
+  // Check if this is a modified order with changes
+  const hasChanges = orderData.items && orderData.items.some(
+    item => item.changeType && item.changeType !== 'unchanged'
+  );
+
+  if (hasChanges) {
+    // ---- MODIFIED ORDER LAYOUT ----
+    // Top: CHANGES section (only what changed)
+    commands.push(CMD.ALIGN_CENTER);
+    commands.push(CMD.BOLD_ON);
+    commands.push(CMD.DOUBLE_HEIGHT);
+    commands.push(text('CHANGES\n'));
+    commands.push(CMD.NORMAL);
+    commands.push(CMD.BOLD_OFF);
+    commands.push(drawLine('='));
+
+    const changedItems = orderData.items.filter(
+      item => item.changeType && item.changeType !== 'unchanged'
+    );
+
+    // Added items
+    const addedItems = changedItems.filter(i => i.changeType === 'added');
+    if (addedItems.length > 0) {
+      commands.push(CMD.BOLD_ON);
+      commands.push(leftText('NEW ITEMS:'));
+      commands.push(CMD.BOLD_OFF);
+      for (const item of addedItems) {
+        printItem(item, '+ ');
+      }
+    }
+
+    // Modified items (quantity changed)
+    const modifiedItems = changedItems.filter(i => i.changeType === 'modified');
+    if (modifiedItems.length > 0) {
+      if (addedItems.length > 0) commands.push(text('\n'));
+      commands.push(CMD.BOLD_ON);
+      commands.push(leftText('QTY CHANGED:'));
+      commands.push(CMD.BOLD_OFF);
+      for (const item of modifiedItems) {
+        let itemName = item.isDeal ? item.name : (item.size ? `${item.name} (${item.size})` : item.name);
+        const maxNameLength = PAPER_WIDTH - 6;
+        if (itemName.length > maxNameLength) itemName = itemName.substring(0, maxNameLength);
+        commands.push(CMD.ALIGN_LEFT);
+        commands.push(leftRight(itemName, `${item.oldQuantity} > ${item.newQuantity}`));
+      }
+    }
+
+    // Removed items
+    const removedItems = changedItems.filter(i => i.changeType === 'removed');
+    if (removedItems.length > 0) {
+      if (addedItems.length > 0 || modifiedItems.length > 0) commands.push(text('\n'));
+      commands.push(CMD.BOLD_ON);
+      commands.push(leftText('REMOVED:'));
+      commands.push(CMD.BOLD_OFF);
+      for (const item of removedItems) {
+        printItem(item, '- ');
+      }
+    }
+
+    commands.push(drawLine('='));
+
+    // Bottom: RUNNING ORDER section (full current order)
+    commands.push(CMD.ALIGN_CENTER);
+    commands.push(CMD.BOLD_ON);
+    commands.push(text('RUNNING ORDER\n'));
+    commands.push(CMD.BOLD_OFF);
+    commands.push(drawLine('-'));
+    commands.push(leftRight('Item Name', 'Qty'));
+    commands.push(drawLine('-'));
+
+    // Print all current items (exclude removed ones)
+    const currentItems = orderData.items.filter(i => i.changeType !== 'removed');
+    for (const item of currentItems) {
+      printItem(item, '');
+    }
+
+    commands.push(drawLine('-'));
+  } else {
+    // ---- NORMAL ORDER LAYOUT ----
+    commands.push(CMD.ALIGN_CENTER);
+    commands.push(CMD.BOLD_ON);
+    commands.push(text('ITEMS\n'));
+    commands.push(CMD.BOLD_OFF);
+    commands.push(drawLine('-'));
+
+    commands.push(leftRight('Item Name', 'Qty'));
+    commands.push(drawLine('-'));
+
+    if (orderData.items && orderData.items.length > 0) {
+      for (const item of orderData.items) {
+        printItem(item, '');
+      }
+    } else {
+      commands.push(CMD.ALIGN_CENTER);
+      commands.push(text('No items\n'));
+    }
+
+    commands.push(drawLine('-'));
+  }
 
   // ========================================
   // SPECIAL NOTES

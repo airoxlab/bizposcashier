@@ -50,7 +50,8 @@ export default function WalkinOrderDetails({
   onPaymentRequired, // New prop for handling unpaid orders
   onClose, // Callback to close the details view
   orderType = 'walkin', // 'walkin' or 'takeaway'
-  onConvertToDelivery // New prop for refreshing after conversion
+  onConvertToDelivery, // New prop for refreshing after conversion
+  onReopen // Callback to reopen order in-place (used by new-order page)
 }) {
   const [orderItems, setOrderItems] = useState([])
   const [orderHistory, setOrderHistory] = useState([])
@@ -662,7 +663,12 @@ export default function WalkinOrderDetails({
           variantName: item.variant_name,
           quantity: item.quantity,
           price: item.final_price,
-          totalPrice: item.total_price
+          totalPrice: item.total_price,
+          isDeal: item.is_deal || false,
+          dealName: item.is_deal ? item.product_name : null,
+          dealProducts: item.is_deal && item.deal_products
+            ? (typeof item.deal_products === 'string' ? JSON.parse(item.deal_products) : item.deal_products)
+            : null
         })),
         subtotal: order.subtotal,
         discountAmount: order.discount_amount,
@@ -739,6 +745,28 @@ export default function WalkinOrderDetails({
     )
 
       console.log('✅ Order data saved to localStorage')
+
+      // If onReopen callback is provided (e.g. from new-order page), load into
+      // the parent's cart instead of navigating to a type-specific page.
+      if (onReopen) {
+        onReopen({
+          ...orderData,
+          dailySerial: order.daily_serial?.toString() || '',
+          originalOrderStatus: order.order_status || 'Pending',
+          originalPaymentStatus: order.payment_status || 'Pending',
+          originalAmountPaid: order.amount_paid || order.total_amount || 0,
+          originalPaymentMethod: order.payment_method || 'Cash',
+          canDecreaseQty: permissions.hasPermission('MODIFY_REOPEN_DECREASE_QTY'),
+          tableId: order.table_id || null,
+          table: order.tables ? { id: order.table_id, ...order.tables } : (order.table_id ? { id: order.table_id } : null),
+          orderTakerId: order.order_taker_id || null,
+          orderTakerName: order.order_takers?.name || null,
+          deliveryCharges: order.delivery_charges || null,
+          deliveryTime: order.delivery_time || null,
+          pickupTime: order.takeaway_time || null
+        })
+        return
+      }
 
       // Dispatch a custom event to trigger cart reload
       window.dispatchEvent(new CustomEvent('reloadCart', {

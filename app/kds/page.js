@@ -1136,31 +1136,62 @@ export default function KDSPage() {
                     <div className={`rounded-lg mb-2 px-2 py-1.5 ${isDark ? 'bg-orange-900/30 border border-orange-700/40' : 'bg-orange-50 border border-orange-200'}`}>
                       <p className={`text-[9px] font-bold uppercase tracking-wide mb-1 ${isDark ? 'text-orange-300' : 'text-orange-600'}`}>Changes</p>
                       <div className="space-y-0.5">
-                        {changesMap[order.id].map((c, i) => (
-                          <div key={i} className={`text-[10px] font-medium flex items-center gap-1 flex-wrap ${
-                            c.change_type === 'added' ? (isDark ? 'text-green-400' : 'text-green-600') :
-                            c.change_type === 'removed' ? (isDark ? 'text-red-400' : 'text-red-600') :
-                            (isDark ? 'text-orange-300' : 'text-orange-600')
-                          }`}>
-                            <span className="font-bold text-[11px] w-3 shrink-0">
-                              {c.change_type === 'added' ? '+' : c.change_type === 'removed' ? '−' : '~'}
-                            </span>
-                            {c.change_type === 'added' && (
-                              <span><span className="font-bold">{c.new_quantity}x</span> {c.product_name}{c.variant_name ? ` (${c.variant_name})` : ''}</span>
-                            )}
-                            {c.change_type === 'removed' && (
-                              <span className="line-through opacity-80"><span className="font-bold">{c.old_quantity}x</span> {c.product_name}{c.variant_name ? ` (${c.variant_name})` : ''}</span>
-                            )}
-                            {c.change_type === 'quantity_changed' && (
-                              <span>
-                                {c.product_name}{c.variant_name ? ` (${c.variant_name})` : ''}{': '}
-                                <span className="line-through opacity-70">{c.old_quantity}x</span>
-                                {' → '}
-                                <span className="font-bold">{c.new_quantity}x</span>
+                        {changesMap[order.id].map((c, i) => {
+                          let dealProducts = []
+                          if (c.deal_products) {
+                            try {
+                              dealProducts = typeof c.deal_products === 'string' ? JSON.parse(c.deal_products) : c.deal_products
+                            } catch {}
+                          }
+                          return (
+                          <div key={i}>
+                            <div className={`text-[10px] font-medium flex items-center gap-1 flex-wrap ${
+                              c.change_type === 'added' ? (isDark ? 'text-green-400' : 'text-green-600') :
+                              c.change_type === 'removed' ? (isDark ? 'text-red-400' : 'text-red-600') :
+                              (isDark ? 'text-orange-300' : 'text-orange-600')
+                            }`}>
+                              <span className="font-bold text-[11px] w-3 shrink-0">
+                                {c.change_type === 'added' ? '+' : c.change_type === 'removed' ? '−' : '~'}
                               </span>
+                              {c.change_type === 'added' && (
+                                <span><span className="font-bold">{c.new_quantity}x</span> {c.product_name}{c.variant_name ? ` (${c.variant_name})` : ''}</span>
+                              )}
+                              {c.change_type === 'removed' && (
+                                <span className="line-through opacity-80"><span className="font-bold">{c.old_quantity}x</span> {c.product_name}{c.variant_name ? ` (${c.variant_name})` : ''}</span>
+                              )}
+                              {c.change_type === 'quantity_changed' && (
+                                <span>
+                                  {c.product_name}{c.variant_name ? ` (${c.variant_name})` : ''}{': '}
+                                  <span className="line-through opacity-70">{c.old_quantity}x</span>
+                                  {' → '}
+                                  <span className="font-bold">{c.new_quantity}x</span>
+                                </span>
+                              )}
+                            </div>
+                            {dealProducts.length > 0 && (
+                              <div className={`ml-6 mt-0.5 mb-1 pl-2 border-l-2 ${
+                                c.change_type === 'removed'
+                                  ? (isDark ? 'border-red-700/60' : 'border-red-300')
+                                  : c.change_type === 'added'
+                                    ? (isDark ? 'border-green-700/60' : 'border-green-300')
+                                    : (isDark ? 'border-purple-700' : 'border-purple-300')
+                              } space-y-0.5`}>
+                                {dealProducts.map((dp, dpIndex) => (
+                                  <div key={dpIndex} className={`text-[9px] ${
+                                    c.change_type === 'removed'
+                                      ? (isDark ? 'text-red-400/70 line-through' : 'text-red-500/70 line-through')
+                                      : c.change_type === 'added'
+                                        ? (isDark ? 'text-green-400/80' : 'text-green-600/80')
+                                        : (isDark ? 'text-gray-300' : 'text-gray-600')
+                                  }`}>
+                                    {dp.quantity}x {dp.name}{dp.variant ? ` — ${dp.variant}` : ''}
+                                  </div>
+                                ))}
+                              </div>
                             )}
                           </div>
-                        ))}
+                          )
+                        })}
                       </div>
                     </div>
                   )}
@@ -1588,27 +1619,52 @@ export default function KDSPage() {
                         const isAdded = change.change_type === 'added'
                         const isRemoved = change.change_type === 'removed'
                         const isModified = change.change_type === 'quantity_changed'
+                        let changeDealProducts = []
+                        if (change.deal_products) {
+                          try {
+                            changeDealProducts = typeof change.deal_products === 'string' ? JSON.parse(change.deal_products) : change.deal_products
+                          } catch {}
+                        }
                         return (
-                          <div key={idx} className={`text-xs flex items-start gap-2 ${
-                            isAdded ? (isDark ? 'text-green-300' : 'text-green-700') :
-                            isRemoved ? (isDark ? 'text-red-300' : 'text-red-700') :
-                            (isDark ? 'text-yellow-300' : 'text-yellow-700')
-                          }`}>
-                            <span className="font-bold flex-shrink-0">
-                              {isAdded ? '+ NEW' : isRemoved ? '– REM' : '~ QTY'}
-                            </span>
-                            <span className="flex-1">
-                              {change.product_name}
-                              {change.variant_name && ` (${change.variant_name})`}
-                              {isModified && (
-                                <span className="ml-1">
-                                  — <span className="line-through opacity-60">{change.old_quantity}x</span>
-                                  {' → '}<span className="font-bold">{change.new_quantity}x</span>
-                                </span>
-                              )}
-                              {isAdded && <span className="ml-1 font-bold">{change.new_quantity}x</span>}
-                              {isRemoved && <span className="ml-1 line-through opacity-60">{change.old_quantity}x</span>}
-                            </span>
+                          <div key={idx}>
+                            <div className={`text-xs flex items-start gap-2 ${
+                              isAdded ? (isDark ? 'text-green-300' : 'text-green-700') :
+                              isRemoved ? (isDark ? 'text-red-300' : 'text-red-700') :
+                              (isDark ? 'text-yellow-300' : 'text-yellow-700')
+                            }`}>
+                              <span className="font-bold flex-shrink-0">
+                                {isAdded ? '+ NEW' : isRemoved ? '– REM' : '~ QTY'}
+                              </span>
+                              <span className="flex-1">
+                                {change.product_name}
+                                {change.variant_name && ` (${change.variant_name})`}
+                                {isModified && (
+                                  <span className="ml-1">
+                                    — <span className="line-through opacity-60">{change.old_quantity}x</span>
+                                    {' → '}<span className="font-bold">{change.new_quantity}x</span>
+                                  </span>
+                                )}
+                                {isAdded && <span className="ml-1 font-bold">{change.new_quantity}x</span>}
+                                {isRemoved && <span className="ml-1 line-through opacity-60">{change.old_quantity}x</span>}
+                              </span>
+                            </div>
+                            {changeDealProducts.length > 0 && (
+                              <div className={`ml-14 mt-0.5 mb-1 pl-2 border-l-2 ${
+                                isRemoved ? (isDark ? 'border-red-700/60' : 'border-red-300')
+                                  : isAdded ? (isDark ? 'border-green-700/60' : 'border-green-300')
+                                  : (isDark ? 'border-purple-700' : 'border-purple-300')
+                              } space-y-0.5`}>
+                                {changeDealProducts.map((dp, dpIndex) => (
+                                  <div key={dpIndex} className={`text-[10px] ${
+                                    isRemoved ? (isDark ? 'text-red-400/70 line-through' : 'text-red-500/70 line-through')
+                                      : isAdded ? (isDark ? 'text-green-400/80' : 'text-green-600/80')
+                                      : (isDark ? 'text-gray-300' : 'text-gray-600')
+                                  }`}>
+                                    {dp.quantity}x {dp.name}{dp.variant ? ` — ${dp.variant}` : ''}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </div>
                         )
                       })}

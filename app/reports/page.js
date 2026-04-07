@@ -379,16 +379,20 @@ const fetchSalesData = async () => {
       .eq('user_id', user.id)
       .order('created_at', { ascending: false })
 
-    // Filter by created_at using business hours as the time boundaries.
-    // dateFrom + bizStart = exact moment business day opens (e.g. Mar 10 12:00 PM)
-    // dateTo   + bizEnd   = exact moment business day closes (e.g. Mar 11 03:00 AM)
-    // This works correctly for overnight spans without fetching the wrong business day.
+    // Filter by created_at using business hours with PKT offset (+05:00)
     const { startTime: bizStart, endTime: bizEnd } = dailySerialManager.getBusinessHours()
     if (dateFrom) {
-      query = query.gte('created_at', new Date(`${dateFrom}T${bizStart}:00`).toISOString())
+      query = query.gte('created_at', `${dateFrom}T${bizStart}:00+05:00`)
     }
     if (dateTo) {
-      query = query.lte('created_at', new Date(`${dateTo}T${bizEnd}:00`).toISOString())
+      const isOvernight = bizEnd < bizStart
+      let endDate = dateTo
+      if (isOvernight) {
+        const d = new Date(dateTo + 'T12:00:00')
+        d.setDate(d.getDate() + 1)
+        endDate = d.toISOString().split('T')[0]
+      }
+      query = query.lte('created_at', `${endDate}T${bizEnd}:00+05:00`)
     }
 
     // Apply type filters at database level
@@ -640,7 +644,7 @@ const fetchCOGS = async (completedOrders = []) => {
     const ordersWithDeductions = completedOrders.filter(o => o.order_status === 'Completed')
     if (ordersWithDeductions.length === 0) return { totalCogs: 0, dailyCogs: new Map() }
 
-    // Build map of order_id → business date (from order's created_at)
+    // Build map of order_id → business date
     const orderDateMap = {}
     ordersWithDeductions.forEach(o => {
       orderDateMap[o.id] = getBusinessDate(o.created_at, bizStart, bizEnd)
@@ -648,23 +652,28 @@ const fetchCOGS = async (completedOrders = []) => {
 
     const orderIds = ordersWithDeductions.map(o => o.id)
 
-    // Fetch stock_history for all filtered orders — same logic as admin orders page
-    // Uses stored total_cost directly (historically accurate, not recalculated)
-    const { data: stockHistory, error } = await supabase
-      .from('stock_history')
-      .select('reference_id, total_cost')
-      .in('reference_id', orderIds)
-      .eq('transaction_type', 'order_deduction')
-
-    if (error) throw error
+    // Use the same RPC as Financial Reports for accurate COGS (kitchen + recipe + other)
+    const BATCH = 200
+    const orderCogsMap = {}
+    for (let i = 0; i < orderIds.length; i += BATCH) {
+      const { data, error } = await supabase.rpc('calculate_cogs_for_orders', {
+        p_order_ids: orderIds.slice(i, i + BATCH),
+        p_user_id: user.id,
+      })
+      if (!error && data) {
+        data.forEach(row => {
+          orderCogsMap[row.order_id] = parseFloat(row.total_cogs || 0)
+        })
+      }
+    }
 
     let totalCogs = 0
     const dailyCogs = new Map()
 
-    ;(stockHistory || []).forEach(record => {
-      const cost = Math.abs(parseFloat(record.total_cost || 0))
+    ordersWithDeductions.forEach(o => {
+      const cost = orderCogsMap[o.id] || 0
       totalCogs += cost
-      const date = orderDateMap[record.reference_id]
+      const date = orderDateMap[o.id]
       if (date) dailyCogs.set(date, (dailyCogs.get(date) || 0) + cost)
     })
 
@@ -680,10 +689,15 @@ const fetchCOGS = async (completedOrders = []) => {
   // Filter to only include Completed orders for revenue calculations (like Daily P&L)
   const validOrders = orders.filter(order => order.order_status === 'Completed')
 
-  // Calculate basic metrics - only from completed orders
-  const totalRevenue = validOrders.reduce((sum, order) => sum + parseFloat(order.total_amount || 0), 0)
+  // Separate complimentary orders from revenue calculation
+  const revenueOrders = validOrders.filter(order => order.payment_method !== 'Complimentary')
+  const complimentaryOrders = validOrders.filter(order => order.payment_method === 'Complimentary')
+  const complimentaryTotal = complimentaryOrders.reduce((sum, order) => sum + parseFloat(order.total_amount || 0), 0)
+
+  // Calculate basic metrics - exclude complimentary from revenue
+  const totalRevenue = revenueOrders.reduce((sum, order) => sum + parseFloat(order.total_amount || 0), 0)
   const totalOrders = validOrders.length
-  const averageOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0
+  const averageOrderValue = revenueOrders.length > 0 ? totalRevenue / revenueOrders.length : 0
   const uniqueCustomers = new Set(validOrders.filter(o => o.customer_id).map(o => o.customer_id)).size
 
   // Top products analysis - only from completed/valid orders
@@ -707,18 +721,18 @@ const fetchCOGS = async (completedOrders = []) => {
   const ordersByType = [
     { 
       name: 'Walk-in', 
-      value: validOrders.filter(o => o.order_type === 'walkin').length, 
-      revenue: validOrders.filter(o => o.order_type === 'walkin').reduce((sum, o) => sum + parseFloat(o.total_amount || 0), 0) 
+      value: validOrders.filter(o => o.order_type === 'walkin').length,
+      revenue: revenueOrders.filter(o => o.order_type === 'walkin').reduce((sum, o) => sum + parseFloat(o.total_amount || 0), 0)
     },
-    { 
-      name: 'Takeaway', 
-      value: validOrders.filter(o => o.order_type === 'takeaway').length, 
-      revenue: validOrders.filter(o => o.order_type === 'takeaway').reduce((sum, o) => sum + parseFloat(o.total_amount || 0), 0) 
+    {
+      name: 'Takeaway',
+      value: validOrders.filter(o => o.order_type === 'takeaway').length,
+      revenue: revenueOrders.filter(o => o.order_type === 'takeaway').reduce((sum, o) => sum + parseFloat(o.total_amount || 0), 0)
     },
-    { 
-      name: 'Delivery', 
-      value: validOrders.filter(o => o.order_type === 'delivery').length, 
-      revenue: validOrders.filter(o => o.order_type === 'delivery').reduce((sum, o) => sum + parseFloat(o.total_amount || 0), 0) 
+    {
+      name: 'Delivery',
+      value: validOrders.filter(o => o.order_type === 'delivery').length,
+      revenue: revenueOrders.filter(o => o.order_type === 'delivery').reduce((sum, o) => sum + parseFloat(o.total_amount || 0), 0)
     }
   ].filter(type => type.value > 0)
 
@@ -764,7 +778,9 @@ const fetchCOGS = async (completedOrders = []) => {
     }
     const dayData = dailyMap.get(date)
     dayData.orders += 1
-    dayData.revenue += parseFloat(order.total_amount || 0)
+    if (order.payment_method !== 'Complimentary') {
+      dayData.revenue += parseFloat(order.total_amount || 0)
+    }
   })
   const dailyTrends = Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date))
 
@@ -782,7 +798,9 @@ const fetchCOGS = async (completedOrders = []) => {
     }
     const customer = customerMap.get(order.customer_id)
     customer.orders += 1
-    customer.revenue += parseFloat(order.total_amount || 0)
+    if (order.payment_method !== 'Complimentary') {
+      customer.revenue += parseFloat(order.total_amount || 0)
+    }
   })
   const topCustomers = Array.from(customerMap.values())
     .sort((a, b) => b.revenue - a.revenue)
@@ -804,7 +822,9 @@ const fetchCOGS = async (completedOrders = []) => {
     }
     const cashier = cashierMap.get(cashierId)
     cashier.orders += 1
-    cashier.revenue += parseFloat(order.total_amount || 0)
+    if (order.payment_method !== 'Complimentary') {
+      cashier.revenue += parseFloat(order.total_amount || 0)
+    }
   })
   const cashierPerformance = Array.from(cashierMap.values())
     .sort((a, b) => b.revenue - a.revenue)
@@ -818,7 +838,9 @@ const fetchCOGS = async (completedOrders = []) => {
     }
     const hourData = hourlyMap.get(hour)
     hourData.orders += 1
-    hourData.revenue += parseFloat(order.total_amount || 0)
+    if (order.payment_method !== 'Complimentary') {
+      hourData.revenue += parseFloat(order.total_amount || 0)
+    }
   })
   const hourlyTrends = Array.from(hourlyMap.values()).sort((a, b) => a.hour - b.hour)
 
@@ -833,7 +855,9 @@ const fetchCOGS = async (completedOrders = []) => {
     dailyTrends,
     topCustomers,
     cashierPerformance,
-    hourlyTrends
+    hourlyTrends,
+    complimentaryCount: complimentaryOrders.length,
+    complimentaryTotal
   }
 
   setSalesData(processedData)
@@ -969,22 +993,24 @@ const fetchCOGS = async (completedOrders = []) => {
         .eq('orders.user_id', user.id)
         .eq('orders.order_status', 'Completed')
 
-      // Apply date filters via created_at using business hour boundaries
+      // Apply date filters via created_at using PKT offset (+05:00)
       const { startTime: prodBizStart, endTime: prodBizEnd } = dailySerialManager.getBusinessHours()
       if (dateFrom) {
-        query = query.gte('orders.created_at', new Date(`${dateFrom}T${prodBizStart}:00`).toISOString())
+        query = query.gte('orders.created_at', `${dateFrom}T${prodBizStart}:00+05:00`)
       }
       if (dateTo) {
-        query = query.lte('orders.created_at', new Date(`${dateTo}T${prodBizEnd}:00`).toISOString())
+        const isOvernight = prodBizEnd < prodBizStart
+        let endDate = dateTo
+        if (isOvernight) {
+          const d = new Date(dateTo + 'T12:00:00')
+          d.setDate(d.getDate() + 1)
+          endDate = d.toISOString().split('T')[0]
+        }
+        query = query.lte('orders.created_at', `${endDate}T${prodBizEnd}:00+05:00`)
       }
 
-      // Apply time filters if provided
-      if (timeFrom) {
-        query = query.gte('orders.order_time', timeFrom)
-      }
-      if (timeTo) {
-        query = query.lte('orders.order_time', timeTo)
-      }
+      // Time filters already covered by created_at business hour range — skip order_time
+      // to avoid breaking overnight businesses (order_time >= 10:00 AND <= 03:00 matches nothing)
 
       const { data: orderItems, error } = await query
 
@@ -1066,28 +1092,34 @@ const fetchCOGS = async (completedOrders = []) => {
       if (!user?.id) return null
 
       // Build query for orders with date/time filters
+      // Include all non-cancelled orders (not just Completed) so peak hours reflects real traffic
       let query = supabase
         .from('orders')
         .select('id, order_time, order_date, order_type, total_amount, order_status, created_at')
         .eq('user_id', user.id)
-        .eq('order_status', 'Completed')
+        .not('order_status', 'in', '("Cancelled","cancelled")')
 
-      // Apply date filters via created_at using business hour boundaries
+      // Apply date filters via created_at using PKT offset (+05:00)
       const { startTime: peakBizStart, endTime: peakBizEnd } = dailySerialManager.getBusinessHours()
       if (dateFrom) {
-        query = query.gte('created_at', new Date(`${dateFrom}T${peakBizStart}:00`).toISOString())
+        query = query.gte('created_at', `${dateFrom}T${peakBizStart}:00+05:00`)
       }
       if (dateTo) {
-        query = query.lte('created_at', new Date(`${dateTo}T${peakBizEnd}:00`).toISOString())
+        // For overnight businesses (end < start), end time belongs to next calendar day
+        const isOvernight = peakBizEnd < peakBizStart
+        let endDate = dateTo
+        if (isOvernight) {
+          const d = new Date(dateTo + 'T12:00:00')
+          d.setDate(d.getDate() + 1)
+          endDate = d.toISOString().split('T')[0]
+        }
+        query = query.lte('created_at', `${endDate}T${peakBizEnd}:00+05:00`)
       }
 
-      // Apply time filters if provided
-      if (timeFrom) {
-        query = query.gte('order_time', timeFrom)
-      }
-      if (timeTo) {
-        query = query.lte('order_time', timeTo)
-      }
+      // Time filters are handled by the created_at date range above (which already
+      // accounts for business hours). Applying order_time filters here would break
+      // overnight businesses (e.g. 10:00→03:00 means order_time >= 10:00 AND <= 03:00
+      // which matches nothing). Skip order_time filtering entirely.
 
       const { data: orders, error } = await query
 
@@ -1278,7 +1310,11 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
           { 'Metric': 'Gross Margin %', 'Value': profitData.grossMargin.toFixed(2) },
           { 'Metric': 'Total Expenses', 'Value': expenseData.totalExpenses.toFixed(2) },
           { 'Metric': 'Net Profit', 'Value': profitData.netProfit.toFixed(2) },
-          { 'Metric': 'Net Profit Margin %', 'Value': profitData.profitMargin.toFixed(2) }
+          { 'Metric': 'Net Profit Margin %', 'Value': profitData.profitMargin.toFixed(2) },
+          ...(salesData.complimentaryCount > 0 ? [
+            { 'Metric': 'Complimentary Orders', 'Value': salesData.complimentaryCount },
+            { 'Metric': 'Complimentary Total (excluded from revenue)', 'Value': salesData.complimentaryTotal.toFixed(2) }
+          ] : [])
         ]
         break
 
@@ -1644,6 +1680,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       <option value="Account">Account</option>
                       <option value="Split">Split</option>
                       <option value="Unpaid">Unpaid</option>
+                      <option value="Complimentary">Complimentary</option>
                     </select>
                   </div>
 
@@ -1782,6 +1819,11 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                         <div>
                           <p className="text-green-100 text-sm">Total Revenue</p>
                           <p className="text-3xl font-bold">{formatCurrency(salesData.totalRevenue)}</p>
+                          {salesData.complimentaryCount > 0 && (
+                            <p className="text-green-200 text-xs mt-1">
+                              {salesData.complimentaryCount} comp order{salesData.complimentaryCount > 1 ? 's' : ''} ({formatCurrency(salesData.complimentaryTotal)}) excluded
+                            </p>
+                          )}
                         </div>
                         <DollarSign className="w-12 h-12 text-green-100" />
                       </div>

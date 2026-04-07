@@ -45,11 +45,16 @@ export default function LedgerTab({ userId, startDate, endDate }) {
   }, [selectedCustomer, userId, timePeriod, customStartDate, customEndDate]);
 
   const fetchCustomers = async () => {
-    const result = await ledgerManager.getAllCustomersForLedger(userId);
-    if (result.success) {
-      setCustomers(result.data || []);
-    } else {
-      notify.error('Failed to load customers');
+    setIsLoading(true);
+    try {
+      const result = await ledgerManager.getAllCustomersForLedger(userId);
+      if (result.success) {
+        setCustomers(result.data || []);
+      } else {
+        notify.error('Failed to load customers');
+      }
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -271,7 +276,7 @@ export default function LedgerTab({ userId, startDate, endDate }) {
               </div>
               <div className="flex items-center gap-3">
                 <span className={`px-4 py-2 ${themeManager.isDark() ? 'bg-purple-900/30' : 'bg-purple-100'} text-purple-700 dark:text-purple-300 rounded-lg font-semibold`}>
-                  Total: {filteredCustomers.length} of {customers.length}
+                  {isLoading && customers.length === 0 ? 'Loading...' : `Total: ${filteredCustomers.length} of ${customers.length}`}
                 </span>
               </div>
             </div>
@@ -349,8 +354,11 @@ export default function LedgerTab({ userId, startDate, endDate }) {
               <tbody className={`divide-y ${classes.border}`}>
                 {isLoading ? (
                   <tr>
-                    <td colSpan="6" className={`px-6 py-8 text-center ${classes.textSecondary}`}>
-                      Loading customers...
+                    <td colSpan="6" className="px-6 py-12 text-center">
+                      <div className="flex flex-col items-center gap-3">
+                        <div className="animate-spin rounded-full h-8 w-8 border-2 border-purple-500 border-t-transparent"></div>
+                        <span className={`text-sm ${classes.textSecondary}`}>Loading customers...</span>
+                      </div>
                     </td>
                   </tr>
                 ) : paginatedCustomers.length === 0 ? (

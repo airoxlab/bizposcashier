@@ -41,6 +41,12 @@ export default function SplitPaymentModal({
   const isDark = themeManager.isDark()
   const classes = themeManager.getClasses()
 
+  // Format currency — show decimals only when needed
+  const fmtRs = (v) => {
+    const n = parseFloat(v) || 0
+    return n % 1 === 0 ? `Rs ${n}` : `Rs ${n.toFixed(2)}`
+  }
+
   // Payment methods with icons
   const paymentMethods = [
     {
@@ -105,7 +111,8 @@ export default function SplitPaymentModal({
     return sum + (parseFloat(val) || 0)
   }, 0)
 
-  const remaining = (amountDue || 0) - totalEntered
+  const orderTotal = parseFloat((amountDue || 0).toFixed(2))
+  const remaining = orderTotal - totalEntered
 
   // Update amount with validation
   const updateAmount = (method, value) => {
@@ -119,12 +126,11 @@ export default function SplitPaymentModal({
 
     const newTotal = otherAmounts + (parseFloat(value) || 0)
 
-    // Don't allow total to exceed order amount (with small tolerance for rounding)
-    if (newTotal > (amountDue || 0) + 0.01) {
-      // Set error
+    // Don't allow total to exceed order amount
+    if (newTotal > (amountDue || 0) + 0.5) {
       setErrors(prev => ({
         ...prev,
-        total: `Cannot exceed order total of Rs ${(amountDue || 0).toFixed(2)}`
+        total: `Cannot exceed order total of ${fmtRs(amountDue)}`
       }))
       return
     }
@@ -134,12 +140,13 @@ export default function SplitPaymentModal({
       [method]: value
     }))
 
-    // Clear error
-    if (errors[method]) {
-      const newErrors = { ...errors }
-      delete newErrors[method]
-      setErrors(newErrors)
-    }
+    // Clear errors when value changes
+    setErrors(prev => {
+      const next = { ...prev }
+      delete next[method]
+      delete next.total
+      return next
+    })
   }
 
   // Disable input if already fully paid
@@ -151,7 +158,7 @@ export default function SplitPaymentModal({
     if (paymentMethod?.disabled) return true
 
     // Disabled if already fully paid and this field is empty
-    if (Math.abs(remaining) < 0.01 && methodAmount === 0) return true
+    if (remaining <= 0 && methodAmount === 0) return true
 
     return false
   }
@@ -166,11 +173,11 @@ export default function SplitPaymentModal({
       newErrors.general = 'Please enter at least one payment amount'
     }
 
-    // Check if total matches
-    if (Math.abs(remaining) > 0.01) {
-      newErrors.total = remaining > 0
-        ? `Still need Rs ${remaining.toFixed(2)}`
-        : `Overpaid by Rs ${Math.abs(remaining).toFixed(2)}`
+    // Check if total matches (small tolerance for rounding)
+    if (remaining > 0.5) {
+      newErrors.total = `Still need ${fmtRs(remaining)}`
+    } else if (remaining < -0.5) {
+      newErrors.total = `Overpaid by ${fmtRs(Math.abs(remaining))}`
     }
 
     setErrors(newErrors)
@@ -206,12 +213,15 @@ export default function SplitPaymentModal({
 
   // Handle Enter key to submit
   const handleKeyPress = (e) => {
-    if (e.key === 'Enter' && Math.abs(remaining) < 0.01) {
+    if (e.key === 'Enter' && isComplete) {
       handleSubmit()
     }
   }
 
   if (!isOpen) return null
+
+  const isComplete = Math.abs(remaining) < 1 && totalEntered > 0
+  const totalUsed = Object.values(amounts).filter(v => parseFloat(v) > 0).length
 
   return (
     <AnimatePresence>
@@ -222,59 +232,70 @@ export default function SplitPaymentModal({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           onClick={onClose}
-          className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+          className="absolute inset-0 bg-black/50 backdrop-blur-sm"
         />
 
         {/* Modal */}
         <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.95 }}
-          className={`relative ${classes.card} rounded-3xl shadow-2xl w-full max-w-3xl`}
+          initial={{ opacity: 0, y: 20, scale: 0.97 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: 20, scale: 0.97 }}
+          transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+          className={`relative ${isDark ? 'bg-gray-900' : 'bg-white'} rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden`}
         >
           {/* Header */}
-          <div className="bg-gradient-to-r from-orange-500 to-orange-600 px-8 py-5 rounded-t-3xl">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-2xl font-bold text-white">{title}</h2>
-                <p className="text-orange-100 text-base mt-1">
-                  Order Total: <span className="font-bold text-white">Rs {(amountDue || 0).toFixed(2)}</span>
-                </p>
-              </div>
-              <button
-                onClick={onClose}
-                className="p-2 rounded-full hover:bg-white/20 transition-colors"
-              >
-                <X className="w-6 h-6 text-white" />
-              </button>
+          <div className={`px-6 py-4 flex items-center justify-between ${isDark ? 'border-gray-800' : 'border-gray-100'} border-b`}>
+            <div>
+              <h2 className={`text-lg font-bold ${classes.textPrimary}`}>{title}</h2>
+              <p className={`text-xs ${classes.textSecondary} mt-0.5`}>
+                Split <span className="font-bold text-green-600">{fmtRs(amountDue)}</span> across multiple methods
+              </p>
             </div>
+            <button
+              onClick={onClose}
+              className={`p-1.5 rounded-lg ${isDark ? 'hover:bg-gray-800' : 'hover:bg-gray-100'} transition-colors`}
+            >
+              <X className={`w-5 h-5 ${classes.textSecondary}`} />
+            </button>
           </div>
 
-          {/* Body - All Payment Methods */}
-          <div className="px-8 py-6">
-            <div className="grid grid-cols-5 gap-4 mb-6">
+          {/* Body */}
+          <div className="px-6 py-5">
+            {/* Payment method rows */}
+            <div className="space-y-2.5">
               {paymentMethods.map((method) => {
                 const hasAmount = parseFloat(amounts[method.id]) > 0
-                const isDisabled = method.disabled
-
                 const fieldDisabled = isFieldDisabled(method.id)
 
                 return (
-                  <div key={method.id} className="text-center">
-                    {/* Icon & Label */}
-                    <div className={`mb-3 ${fieldDisabled ? 'opacity-40' : ''}`}>
-                      <div className={`w-12 h-12 ${method.color} rounded-full flex items-center justify-center mx-auto mb-2 ${
-                        hasAmount ? 'ring-4 ring-offset-2 ' + method.borderColor.replace('border-', 'ring-') : ''
-                      }`}>
-                        <method.icon className="w-6 h-6 text-white" />
-                      </div>
-                      <p className={`text-xs font-semibold ${classes.textPrimary}`}>
-                        {method.name}
-                      </p>
+                  <div
+                    key={method.id}
+                    className={`flex items-center gap-3 p-2.5 rounded-xl transition-all duration-150 ${
+                      hasAmount
+                        ? isDark ? 'bg-gray-800 ring-1 ring-green-500/30' : 'bg-green-50/50 ring-1 ring-green-200'
+                        : fieldDisabled
+                        ? 'opacity-35'
+                        : isDark ? 'bg-gray-800/50 hover:bg-gray-800' : 'bg-gray-50 hover:bg-gray-100'
+                    }`}
+                  >
+                    {/* Icon */}
+                    <div className={`w-9 h-9 ${method.color} rounded-lg flex items-center justify-center flex-shrink-0 shadow-sm`}>
+                      <method.icon className="w-4.5 h-4.5 text-white" style={{ width: 18, height: 18 }} />
+                    </div>
+
+                    {/* Label */}
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-sm font-semibold ${classes.textPrimary} leading-tight`}>{method.name}</p>
+                      {method.disabled && (
+                        <p className={`text-[9px] ${isDark ? 'text-red-400' : 'text-red-500'}`}>No customer selected</p>
+                      )}
                     </div>
 
                     {/* Amount Input */}
-                    <div className="relative">
+                    <div className="relative w-36">
+                      <span className={`absolute left-3 top-1/2 -translate-y-1/2 text-xs font-medium ${
+                        hasAmount ? (isDark ? 'text-green-400' : 'text-green-600') : classes.textSecondary
+                      }`}>Rs</span>
                       <input
                         type="number"
                         value={amounts[method.id]}
@@ -282,19 +303,19 @@ export default function SplitPaymentModal({
                         onKeyPress={handleKeyPress}
                         disabled={fieldDisabled}
                         placeholder="0"
-                        step="0.01"
+                        step="1"
                         min="0"
-                        className={`w-full px-2 py-3 text-center text-lg font-bold ${classes.input} rounded-xl border-2 transition-all ${
+                        className={`w-full pl-9 pr-3 py-2 text-right text-sm font-bold rounded-lg border transition-all ${
                           fieldDisabled
-                            ? 'bg-gray-100 cursor-not-allowed opacity-50'
+                            ? `cursor-not-allowed ${isDark ? 'bg-gray-900 border-gray-700 text-gray-600' : 'bg-gray-100 border-gray-200 text-gray-400'}`
                             : hasAmount
-                            ? method.borderColor + ' ' + method.focusRing + ' ring-2'
-                            : 'border-gray-300 focus:ring-2 ' + method.focusRing
+                            ? `${isDark ? 'bg-gray-900 border-green-500 text-green-400' : 'bg-white border-green-400 text-green-700'} focus:ring-2 focus:ring-green-500/30`
+                            : `${isDark ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-200 text-gray-900'} focus:ring-2 focus:ring-purple-500/30 focus:border-purple-400`
                         }`}
                       />
                       {hasAmount && (
-                        <div className={`absolute -top-1 -right-1 w-5 h-5 ${method.color} rounded-full flex items-center justify-center`}>
-                          <Check className="w-3 h-3 text-white" />
+                        <div className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center shadow-sm">
+                          <Check className="w-2.5 h-2.5 text-white" />
                         </div>
                       )}
                     </div>
@@ -303,90 +324,84 @@ export default function SplitPaymentModal({
               })}
             </div>
 
-            {/* Summary Bar */}
-            <div className={`rounded-2xl p-5 ${
-              Math.abs(remaining) < 0.01
-                ? isDark ? 'bg-green-900/30 border-2 border-green-500' : 'bg-green-50 border-2 border-green-400'
-                : isDark ? 'bg-orange-900/30 border-2 border-orange-500' : 'bg-orange-50 border-2 border-orange-400'
-            }`}>
-              <div className="grid grid-cols-3 gap-4 text-center">
-                <div>
-                  <p className={`text-xs ${classes.textSecondary} mb-1`}>Order Total</p>
-                  <p className={`text-xl font-bold ${classes.textPrimary}`}>
-                    Rs {(amountDue || 0).toFixed(2)}
-                  </p>
+            {/* Progress + Summary */}
+            <div className="mt-5">
+              {/* Progress bar */}
+              <div className={`h-1.5 rounded-full overflow-hidden ${isDark ? 'bg-gray-800' : 'bg-gray-200'}`}>
+                <motion.div
+                  className={`h-full rounded-full ${isComplete ? 'bg-green-500' : 'bg-purple-500'}`}
+                  initial={{ width: 0 }}
+                  animate={{ width: `${Math.min((totalEntered / (amountDue || 1)) * 100, 100)}%` }}
+                  transition={{ type: 'spring', damping: 20 }}
+                />
+              </div>
+
+              {/* Summary row */}
+              <div className="flex items-center justify-between mt-3">
+                <div className="flex items-center gap-4">
+                  <div>
+                    <p className={`text-[9px] uppercase tracking-wider ${classes.textSecondary}`}>Entered</p>
+                    <p className={`text-base font-bold ${classes.textPrimary}`}>{fmtRs(totalEntered)}</p>
+                  </div>
+                  <div className={`w-px h-8 ${isDark ? 'bg-gray-700' : 'bg-gray-200'}`} />
+                  <div>
+                    <p className={`text-[9px] uppercase tracking-wider ${classes.textSecondary}`}>Remaining</p>
+                    <p className={`text-base font-bold ${isComplete ? 'text-green-500' : 'text-orange-500'}`}>
+                      {isComplete ? 'Fully Paid' : fmtRs(remaining)}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className={`text-xs ${classes.textSecondary} mb-1`}>You Entered</p>
-                  <p className={`text-xl font-bold ${classes.textPrimary}`}>
-                    Rs {totalEntered.toFixed(2)}
-                  </p>
-                </div>
-                <div>
-                  <p className={`text-xs ${classes.textSecondary} mb-1`}>Remaining</p>
-                  <p className={`text-xl font-bold ${
-                    Math.abs(remaining) < 0.01 ? 'text-green-600' : 'text-red-600'
-                  }`}>
-                    Rs {remaining.toFixed(2)}
-                  </p>
+                <div className={`text-[10px] font-medium px-2 py-1 rounded-full ${
+                  isComplete
+                    ? isDark ? 'bg-green-900/30 text-green-400' : 'bg-green-100 text-green-700'
+                    : isDark ? 'bg-gray-800 text-gray-400' : 'bg-gray-100 text-gray-500'
+                }`}>
+                  {totalUsed} method{totalUsed !== 1 ? 's' : ''} used
                 </div>
               </div>
             </div>
 
-            {/* Error Messages */}
+            {/* Error */}
             {(errors.general || errors.total || errors.submit) && (
-              <div className={`mt-4 p-4 rounded-xl ${isDark ? 'bg-red-900/20' : 'bg-red-50'} border-2 border-red-500`}>
-                <div className="flex items-center text-red-600">
-                  <AlertTriangle className="w-5 h-5 mr-2 flex-shrink-0" />
-                  <span className="font-semibold">
-                    {errors.general || errors.total || errors.submit}
-                  </span>
-                </div>
+              <div className={`mt-4 flex items-center gap-2 p-3 rounded-xl text-xs font-medium ${isDark ? 'bg-red-900/20 text-red-400' : 'bg-red-50 text-red-600'}`}>
+                <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                {errors.general || errors.total || errors.submit}
               </div>
-            )}
-
-            {/* Helpful Tip */}
-            {!errors.general && !errors.total && (
-              <p className={`text-center text-xs ${classes.textSecondary} mt-4`}>
-                <strong>Tip:</strong> Enter amounts in any payment methods to split the total. Fields lock once total is reached.
-              </p>
             )}
           </div>
 
           {/* Footer */}
-          <div className={`px-8 py-5 ${classes.border} border-t rounded-b-3xl bg-gradient-to-r ${
-            isDark ? 'from-gray-800 to-gray-900' : 'from-gray-50 to-gray-100'
-          }`}>
-            <div className="flex items-center justify-end space-x-4">
-              <button
-                onClick={onClose}
-                disabled={isProcessing}
-                className="px-8 py-3 rounded-xl font-semibold transition-all bg-gray-300 hover:bg-gray-400 text-gray-700"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSubmit}
-                disabled={isProcessing || Math.abs(remaining) > 0.01}
-                className={`px-10 py-3 rounded-xl font-semibold text-lg transition-all flex items-center ${
-                  isProcessing || Math.abs(remaining) > 0.01
-                    ? 'bg-gray-400 text-gray-600 cursor-not-allowed'
-                    : 'bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white shadow-lg hover:shadow-xl transform hover:scale-105'
-                }`}
-              >
-                {isProcessing ? (
-                  <>
-                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                    Processing...
-                  </>
-                ) : (
-                  <>
-                    <Check className="w-6 h-6 mr-2" />
-                    Complete Payment
-                  </>
-                )}
-              </button>
-            </div>
+          <div className={`px-6 py-4 flex items-center justify-end gap-3 ${isDark ? 'border-gray-800 bg-gray-900/50' : 'border-gray-100 bg-gray-50/50'} border-t`}>
+            <button
+              onClick={onClose}
+              disabled={isProcessing}
+              className={`px-5 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+                isDark ? 'text-gray-400 hover:bg-gray-800' : 'text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSubmit}
+              disabled={isProcessing || !isComplete}
+              className={`px-6 py-2.5 rounded-xl text-sm font-bold flex items-center gap-2 transition-all duration-200 ${
+                isProcessing || !isComplete
+                  ? isDark ? 'bg-gray-800 text-gray-500 cursor-not-allowed' : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white shadow-lg shadow-green-500/20'
+              }`}
+            >
+              {isProcessing ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-white/30 border-t-white"></div>
+                  Processing...
+                </>
+              ) : (
+                <>
+                  <Check className="w-4 h-4" />
+                  Complete Split Payment
+                </>
+              )}
+            </button>
           </div>
         </motion.div>
       </div>

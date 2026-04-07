@@ -6,7 +6,7 @@ import {
   X, BarChart2, TrendingUp, ShoppingBag,
   Banknote, Smartphone, CreditCard, Building2,
   Clock, AlertCircle, RefreshCw, Delete,
-  Wallet, Layers
+  Wallet, Layers, Gift
 } from 'lucide-react'
 import { cacheManager } from '../../lib/cacheManager'
 import { authManager } from '../../lib/authManager'
@@ -32,6 +32,7 @@ const METHOD_META = {
   Account:   { icon: <CreditCard className="w-3.5 h-3.5" />, color: 'text-purple-500',  bg: 'bg-purple-500/10'  },
   Unpaid:    { icon: <AlertCircle className="w-3.5 h-3.5"/>, color: 'text-orange-500',  bg: 'bg-orange-500/10'  },
   Split:     { icon: <Layers     className="w-3.5 h-3.5" />, color: 'text-indigo-500',  bg: 'bg-indigo-500/10'  },
+  Complimentary: { icon: <Gift className="w-3.5 h-3.5" />, color: 'text-pink-500', bg: 'bg-pink-500/10' },
 }
 
 function computeStats(orders, splitByMethod) {
@@ -39,7 +40,7 @@ function computeStats(orders, splitByMethod) {
   const cancelled    = orders.filter(o =>  ['Cancelled', 'cancelled'].includes(o.order_status))
   const pending      = nonCancelled.filter(o => ['Pending','Preparing','Ready','Dispatched'].includes(o.order_status))
 
-  const totalRevenue = nonCancelled.reduce((s, o) => s + parseFloat(o.total_amount || 0), 0)
+  const totalRevenue = nonCancelled.filter(o => o.payment_method !== 'Complimentary').reduce((s, o) => s + parseFloat(o.total_amount || 0), 0)
 
   const byMethod = {}
   Object.keys(METHOD_META).forEach(m => {
@@ -182,13 +183,36 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
   const [stats, setStats]     = useState(null)
   const [loading, setLoading] = useState(false)
   const [bizRange, setBizRange] = useState(null)
+  const [viewFilter, setViewFilter] = useState('me') // 'all' | 'me' | cashier UUID
+  const [cashierList, setCashierList] = useState([])
 
-  const fetchStats = useCallback(async () => {
+  // Fetch cashier list once when opened
+  useEffect(() => {
+    if (!isOpen) return
+    const fetchCashiers = async () => {
+      const user = authManager.getCurrentUser()
+      if (!user?.id) return
+      try {
+        const { data } = await supabase
+          .from('cashiers')
+          .select('id, name')
+          .eq('user_id', user.id)
+          .eq('is_active', true)
+          .order('name')
+        setCashierList(data || [])
+      } catch {}
+    }
+    fetchCashiers()
+  }, [isOpen])
+
+  const fetchStats = useCallback(async (filterOverride) => {
     setLoading(true)
+    const activeFilter = filterOverride !== undefined ? filterOverride : viewFilter
     try {
       const cashier = authManager.getCashier()
       const user    = authManager.getCurrentUser()
-      const cashierId = cashier?.id
+      const role    = authManager.getRole()
+      const myCashierId = cashier?.id
       const userId    = user?.id
 
       const profile   = getProfile()
@@ -202,9 +226,14 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
       const startTs = new Date(startDateTime)
       const endTs   = new Date(endDateTime)
 
+      // Determine which cashier to filter by
+      const filterCashierId = activeFilter === 'all' ? null
+        : activeFilter === 'me' ? myCashierId
+        : activeFilter // specific cashier UUID
+
       // Start from cache
       let orders = (cacheManager.cache?.orders || []).filter(o => {
-        if (cashierId && o.cashier_id !== cashierId) return false
+        if (filterCashierId && o.cashier_id !== filterCashierId && o.order_taker_id !== filterCashierId) return false
         const ts = new Date(o.created_at)
         return ts >= startTs && ts < endTs
       })
@@ -216,12 +245,14 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
         try {
           let query = supabase
             .from('orders')
-            .select('id,cashier_id,order_status,payment_method,payment_status,total_amount,created_at')
+            .select('id,cashier_id,order_taker_id,order_status,payment_method,payment_status,total_amount,created_at')
             .eq('user_id', userId)
             .gte('created_at', startDateTime)
             .lt('created_at', endDateTime)
 
-          if (cashierId) query = query.eq('cashier_id', cashierId)
+          if (filterCashierId) {
+            query = query.or(`cashier_id.eq.${filterCashierId},order_taker_id.eq.${filterCashierId}`)
+          }
 
           const { data, error } = await query
           if (!error && data) orders = data
@@ -248,7 +279,7 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [viewFilter])
 
   useEffect(() => {
     if (isOpen) fetchStats()
@@ -289,13 +320,30 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
               <BarChart2 className="w-4.5 h-4.5 text-indigo-500" style={{ width: 18, height: 18 }} />
             </div>
             <div>
-              <h2 className={`text-sm font-bold ${text}`}>My Shift Analytics</h2>
+              <h2 className={`text-sm font-bold ${text}`}>
+                {viewFilter === 'all' ? 'Overall Sales' : viewFilter === 'me' ? 'My Shift Analytics' : `${cashierList.find(c => c.id === viewFilter)?.name || 'Cashier'}'s Sales`}
+              </h2>
               <p className={`text-[11px] ${textSec}`}>{bizLabel}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <select
+              value={viewFilter}
+              onChange={(e) => {
+                const val = e.target.value
+                setViewFilter(val)
+                fetchStats(val)
+              }}
+              className={`text-xs px-2 py-1.5 rounded-lg border transition-colors ${isDark ? 'bg-gray-800 border-gray-600 text-gray-200' : 'bg-white border-gray-300 text-gray-700'}`}
+            >
+              <option value="all">All (Overall)</option>
+              <option value="me">My Orders</option>
+              {cashierList.map(c => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
             <button
-              onClick={fetchStats}
+              onClick={() => fetchStats()}
               disabled={loading}
               className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-colors ${isDark ? 'bg-indigo-900/40 text-indigo-300 hover:bg-indigo-900/60' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'}`}
             >

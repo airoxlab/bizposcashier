@@ -243,17 +243,15 @@ export default function TakeawayPage() {
 
   const checkAndLoadData = async () => {
     try {
+      // If cache already has data, load instantly — no spinner
       if (cacheManager.isReady()) {
-        console.log('📦 Cache is ready, loading data immediately')
         loadCachedData()
         setIsDataReady(true)
         setIsLoading(false)
         return
       }
 
-      console.log('⏳ Cache not ready, waiting for initialization...')
-      // Keep loading state true only if cache is not ready
-
+      setIsLoading(true)
       let attempts = 0
       const maxAttempts = 60
 
@@ -261,13 +259,11 @@ export default function TakeawayPage() {
         attempts++
 
         if (cacheManager.isReady()) {
-          console.log('✅ Cache became ready, loading data')
           clearInterval(checkIntervalRef.current)
           loadCachedData()
           setIsDataReady(true)
           setIsLoading(false)
         } else if (attempts >= maxAttempts) {
-          console.log('⚠️ Cache timeout, trying to initialize manually')
           clearInterval(checkIntervalRef.current)
 
           cacheManager.initializeCache().then(() => {
@@ -275,7 +271,6 @@ export default function TakeawayPage() {
               loadCachedData()
               setIsDataReady(true)
             } else {
-              console.log('❌ Failed to load cache, redirecting to dashboard')
               notify.error('Failed to load menu data. Please try again from the dashboard.', {
                 duration: 6000,
                 action: {
@@ -297,7 +292,7 @@ export default function TakeawayPage() {
             setIsLoading(false)
           })
         }
-      }, 100) // Reduced from 500ms to 100ms for faster checks
+      }, 100)
 
     } catch (error) {
       console.error('Error checking cache:', error)
@@ -2002,12 +1997,14 @@ export default function TakeawayPage() {
           })
 
           if (!stillExists) {
-            changes.itemsRemoved.push({
+            const removed = {
               name: itemName,
               variant: itemVariant,
               quantity: oldItem.quantity,
               price: oldItem.totalPrice
-            })
+            }
+            if (oldItem.isDeal) { removed.isDeal = true; removed.dealProducts = oldItem.dealProducts || null }
+            changes.itemsRemoved.push(removed)
           }
         })
 
@@ -2022,12 +2019,14 @@ export default function TakeawayPage() {
           })
 
           if (!oldItem) {
-            changes.itemsAdded.push({
+            const added = {
               name: itemName,
               variant: itemVariant,
               quantity: newItem.quantity,
               price: newItem.totalPrice
-            })
+            }
+            if (newItem.isDeal) { added.isDeal = true; added.dealProducts = newItem.dealProducts || null }
+            changes.itemsAdded.push(added)
           } else if (oldItem.quantity !== newItem.quantity) {
             changes.itemsModified.push({
               name: itemName,

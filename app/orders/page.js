@@ -269,9 +269,8 @@ export default function OrdersPage() {
   }, [router]);
 
   useEffect(() => {
-    setDisplayLimit(100);
     fetchOrders();
-  }, [activeTab, statusFilter, dateFrom, dateTo, searchTerm, cashierFilter, deliveryBoyFilter]);
+  }, [activeTab, statusFilter, dateFrom, dateTo, searchTerm, cashierFilter, deliveryBoyFilter, displayLimit]);
 
   // Mobile order notification: preload.js bridges IPC → CustomEvent 'bizpos:new-order'
   useEffect(() => {
@@ -2204,11 +2203,24 @@ export default function OrdersPage() {
         <div
           className={`px-3 py-1 ${isDark ? "bg-gray-700/50" : "bg-gray-100"} ${
             themeClasses.border
-          } border-b`}
+          } border-b flex items-center justify-between`}
         >
           <p className={`text-xs font-semibold ${themeClasses.textPrimary}`}>
             Showing {filteredOrders.length} of {totalAvailable} orders
           </p>
+          <select
+            value={displayLimit}
+            onChange={(e) => {
+              setDisplayLimit(parseInt(e.target.value));
+            }}
+            className={`text-xs px-1.5 py-0.5 rounded border ${isDark ? 'bg-gray-700 border-gray-600 text-gray-200' : 'bg-white border-gray-300 text-gray-700'}`}
+          >
+            <option value={100}>100</option>
+            <option value={500}>500</option>
+            <option value={1000}>1000</option>
+            <option value={5000}>5000</option>
+            <option value={99999}>All</option>
+          </select>
         </div>
 
         <div className="flex-1 overflow-y-auto">
