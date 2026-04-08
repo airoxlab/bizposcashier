@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { cacheManager } from '../../lib/cacheManager'
+import { triggerWhatsAppAutoSend } from '../../lib/whatsappAutoSend'
 import { themeManager } from '../../lib/themeManager'
 import { authManager } from '../../lib/authManager'
 import loyaltyManager from '../../lib/loyaltyManager'
@@ -756,6 +757,22 @@ export default function DeliveryPage() {
       }
     }
       // ================================================================
+
+      // WhatsApp auto-send
+      if (newStatus === 'Ready') {
+        triggerWhatsAppAutoSend(order, user?.id, 'Ready')
+          .then(r => { if (r?.success) toast.success('WhatsApp: rider on the way notification sent', { duration: 3000 }) })
+          .catch(err => console.error('[Delivery] WA ready-send error:', err.message))
+      }
+      if (newStatus === 'Completed') {
+        triggerWhatsAppAutoSend(order, user?.id, 'Completed').then(result => {
+          if (result?.success) {
+            toast.success(`WhatsApp message sent to customer`, { duration: 3000 })
+          } else if (result?.error) {
+            toast.error(`WhatsApp: ${result.error}`, { duration: 4000 })
+          }
+        }).catch(err => console.error('[Delivery] WA auto-send error:', err.message))
+      }
 
       // Show appropriate toast based on online/offline status
       if (result.isOffline) {

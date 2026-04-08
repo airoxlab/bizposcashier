@@ -20,8 +20,6 @@
     "build-win-nosign": "npm run build && npx electron-builder --win -c.npmRebuild=false -c.win.sign=false",
     "release": "npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win --config.npmRebuild=false --publish always",
     "package-win": "npx electron-builder --win -c.npmRebuild=false",
-    "update-edgedriver": "node download-edgedriver.js",
-    "check-edge": "node scripts/check-edge-version.js",
     "clean": "rimraf out dist .next node_modules/.cache"
   },
   "dependencies": {
@@ -49,12 +47,12 @@
     "react-dom": "19.1.0",
     "react-hot-toast": "^2.6.0",
     "recharts": "^3.1.2",
-    "selenium-webdriver": "^4.36.0",
-    "serialport": "^13.0.0"
+    "qrcode": "^1.5.4",
+    "serialport": "^13.0.0",
+    "whatsapp-web.js": "^1.26.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.11",
-    "chromedriver": "^141.0.0",
     "concurrently": "^8.2.2",
     "cross-env": "^7.0.3",
     "electron": "^32.0.0",

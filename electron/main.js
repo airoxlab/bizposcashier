@@ -56,7 +56,7 @@ const { registerUSBPrinter } = require('./printing/usbPrinter');
 const { registerUSBDetectionHandlers } = require('./handlers/usbDetection');
 const { printKitchenToken } = require('./printing/kitchenTokenPrinter');
 const { registerWhatsAppHandlers } = require('./whatsapp/whatsappHandlers');
-const { registerMarketingHandlers } = require('./marketing/marketingHandlers');
+const whatsAppClient = require('./whatsapp/whatsappClient');
 const { registerAssetHandlers } = require('./handlers/assetHandlers');
 const { registerBackupHandlers } = require('./handlers/backupHandler');
 const { registerImageHandlers, getImageDir } = require('./handlers/imageHandler');
@@ -241,6 +241,25 @@ function createWindow() {
     mainWindow.show();
   });
 
+  // ── WhatsApp Auto-Connect on Startup ─────────────────────────────────────
+  // If a saved session exists, initialize automatically so the user doesn't
+  // have to manually click Connect every time they reopen the app.
+  mainWindow.webContents.on('did-finish-load', () => {
+    const sessionPath = path.join(app.getPath('userData'), 'whatsapp-session', 'session');
+    if (fs.existsSync(sessionPath)) {
+      log.info('[WhatsApp] Saved session found — auto-connecting...');
+      whatsAppClient.setMainWindow(mainWindow);
+      // Small delay so the renderer is hydrated and ready to receive events
+      setTimeout(() => {
+        whatsAppClient.initialize().catch(err => {
+          log.error('[WhatsApp] Auto-connect failed:', err.message);
+        });
+      }, 4000);
+    } else {
+      log.info('[WhatsApp] No saved session — skipping auto-connect');
+    }
+  });
+
   // Register keyboard shortcuts (since menu is removed)
   if (isDev) {
     // Reload page
@@ -317,12 +336,29 @@ app.whenReady().then(() => {
   registerReceiptPrinter(ipcMain);
   registerUSBPrinter(ipcMain);
   registerUSBDetectionHandlers(ipcMain);
-  registerWhatsAppHandlers(ipcMain);
-  registerMarketingHandlers(ipcMain);
+  registerWhatsAppHandlers(ipcMain, () => mainWindow);
   registerAssetHandlers(ipcMain);
   registerBackupHandlers(ipcMain);
   registerImageHandlers(ipcMain);
   registerMobilePrintServer();
+
+  // File picker for campaign media
+  ipcMain.handle('dialog:pick-file', async (_event, options = {}) => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      filters: options.filters || [
+        { name: 'Media', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'mp4', 'pdf'] }
+      ]
+    });
+    if (result.canceled || !result.filePaths.length) return null;
+    const filePath = result.filePaths[0];
+    const name = require('path').basename(filePath);
+    const ext = name.split('.').pop().toLowerCase();
+    const type = ['jpg','jpeg','png','gif','webp'].includes(ext) ? 'image'
+      : ['mp4','mov'].includes(ext) ? 'video'
+      : ext === 'pdf' ? 'pdf' : 'other';
+    return { path: filePath, name, type };
+  });
 
   // Update check is now manual from Settings > Updates page
   // No automatic check on startup to avoid timing issues

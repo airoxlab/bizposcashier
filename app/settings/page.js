@@ -44,7 +44,8 @@ import {
   Search,
   Edit2,
   Home,
-  Building2
+  Building2,
+  MessageSquare
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { notify } from '../../components/ui/NotificationSystem';
@@ -54,6 +55,7 @@ import { profileManager } from '../../lib/profileManager';
 import { supabase } from '../../lib/supabaseClient';
 import { cacheManager } from '../../lib/cacheManager';
 import ProtectedPage from '../../components/ProtectedPage';
+import { WhatsAppPanel } from './whatsapp/page';
 
 // Modern Toggle Switch Component
 const ModernToggle = ({ checked, onChange, label, description, disabled = false }) => {
@@ -1286,6 +1288,12 @@ export default function SettingsPage() {
       name: 'Customers',
       icon: Users,
       description: 'Manage customer profiles'
+    },
+    {
+      id: 'whatsapp',
+      name: 'WhatsApp',
+      icon: MessageSquare,
+      description: 'Messaging & automation',
     }
   ];
 
@@ -1366,7 +1374,7 @@ export default function SettingsPage() {
                   key={item.id}
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
-                  onClick={() => setActiveTab(item.id)}
+                  onClick={() => item.route ? router.push(item.route) : setActiveTab(item.id)}
                   className={`w-full text-left p-2 rounded-lg transition-all duration-300 group ${isActive
                     ? `${isDark ? 'bg-purple-900/20 border-purple-700/30' : 'bg-purple-100 border-purple-200'} border`
                     : `hover:${isDark ? 'bg-purple-900/10' : 'bg-purple-50'} ${isDark ? 'bg-gray-700/50' : 'bg-gray-50'}`
@@ -1406,7 +1414,13 @@ export default function SettingsPage() {
           <div className="flex items-center justify-between">
             <div>
               <h1 className={`text-xl font-bold ${classes.textPrimary}`}>
-                {activeTab === 'personal' ? 'Personal Profile' : activeTab === 'theme' ? 'Appearance Settings' : activeTab === 'updates' ? 'App Updates' : activeTab === 'layouts' ? 'Themes' : activeTab === 'customers' ? 'Customers' : 'Mobile App'}
+                {activeTab === 'personal' ? 'Personal Profile'
+                  : activeTab === 'theme' ? 'Appearance Settings'
+                  : activeTab === 'updates' ? 'App Updates'
+                  : activeTab === 'layouts' ? 'Themes'
+                  : activeTab === 'customers' ? 'Customers'
+                  : activeTab === 'whatsapp' ? 'WhatsApp'
+                  : 'Mobile App'}
               </h1>
               <p className={`${classes.textSecondary} text-xs flex items-center space-x-2`}>
                 <span>
@@ -1416,6 +1430,8 @@ export default function SettingsPage() {
                     ? 'Customize your interface theme and appearance'
                     : activeTab === 'layouts'
                     ? 'Choose a layout style for your POS interface'
+                    : activeTab === 'whatsapp'
+                    ? 'Messaging, auto-send notifications & campaign settings'
                     : 'Check and install app updates'
                   }
                 </span>
@@ -2544,6 +2560,20 @@ export default function SettingsPage() {
                   </div>
                 )
               })()}
+            </motion.div>
+          )}
+
+          {/* WhatsApp Tab */}
+          {activeTab === 'whatsapp' && (
+            <motion.div
+              key="whatsapp"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ duration: 0.3 }}
+              className="max-w-4xl"
+            >
+              <WhatsAppPanel />
             </motion.div>
           )}
 

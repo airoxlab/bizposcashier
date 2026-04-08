@@ -45,6 +45,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabase";
+import { triggerWhatsAppAutoSend } from "../../lib/whatsappAutoSend";
 import { themeManager } from "../../lib/themeManager";
 import { authManager } from "../../lib/authManager";
 import { printerManager } from "../../lib/printerManager";
@@ -1312,6 +1313,22 @@ export default function OrdersPage() {
         }
       }
       // ================================================================
+
+      // WhatsApp auto-send
+      if (newStatus === 'Ready') {
+        triggerWhatsAppAutoSend(selectedOrder, user?.id, 'Ready')
+          .then(r => { if (r?.success) notify.success('WhatsApp: order ready notification sent') })
+          .catch(err => console.error('[Orders] WA ready-send error:', err.message))
+      }
+      if (newStatus === 'Completed') {
+        triggerWhatsAppAutoSend(selectedOrder, user?.id, 'Completed').then(result => {
+          if (result?.success) {
+            notify.success('WhatsApp thank-you message sent to customer')
+          } else if (result?.error) {
+            notify.error(`WhatsApp: ${result.error}`)
+          }
+        }).catch(err => console.error('[Orders] WA auto-send error:', err.message))
+      }
 
       // Log order action only when online (it requires database access)
       if (!result.isOffline) {
