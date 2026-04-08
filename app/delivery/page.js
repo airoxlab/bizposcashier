@@ -758,11 +758,11 @@ export default function DeliveryPage() {
     }
       // ================================================================
 
-      // WhatsApp auto-send
-      if (newStatus === 'Ready') {
+      // WhatsApp auto-send — for delivery, send on Dispatched (not Ready)
+      if (newStatus === 'Dispatched') {
         triggerWhatsAppAutoSend(order, user?.id, 'Ready')
-          .then(r => { if (r?.success) toast.success('WhatsApp: rider on the way notification sent', { duration: 3000 }) })
-          .catch(err => console.error('[Delivery] WA ready-send error:', err.message))
+          .then(r => { if (r?.success) toast.success('WhatsApp: dispatch notification sent to customer', { duration: 3000 }) })
+          .catch(err => console.error('[Delivery] WA dispatch-send error:', err.message))
       }
       if (newStatus === 'Completed') {
         triggerWhatsAppAutoSend(order, user?.id, 'Completed').then(result => {
@@ -2283,6 +2283,7 @@ export default function DeliveryPage() {
           onPrint={null}
           onPrintToken={null}
           onMarkReady={(order) => handleOrderStatusUpdate(order, 'Ready')}
+          onDispatch={(order) => handleOrderStatusUpdate(order, 'Dispatched')}
           onComplete={handleCompleteAlreadyPaidOrder}
           onPaymentRequired={handlePaymentRequired}
           orderType="delivery"
