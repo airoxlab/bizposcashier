@@ -55,11 +55,18 @@ import dailySerialManager from '../../lib/utils/dailySerialManager'
 import LedgerTab from '../../components/reports/LedgerTab'
 import NotificationSystem, { notify } from '../../components/ui/NotificationSystem'
 import ProtectedPage from '../../components/ProtectedPage'
+import PinPad from '../../components/ui/PinPad'
 
 export default function ReportsPage() {
   const router = useRouter()
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(false)
+
+  // PIN auth
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [pin, setPin] = useState('')
+  const [pinError, setPinError] = useState('')
+  const [pinLoading, setPinLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [showFilters, setShowFilters] = useState(false)
   const [theme, setTheme] = useState('light')
@@ -219,11 +226,40 @@ export default function ReportsPage() {
 
   }, [router])
 
+  const verifyPin = async () => {
+    if (pin.length !== 6) {
+      setPinError('PIN must be 6 digits')
+      return
+    }
+    setPinLoading(true)
+    setPinError('')
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('expense_pin')
+        .eq('id', user.id)
+        .single()
+      if (error) throw error
+      if (data.expense_pin === pin) {
+        setIsAuthenticated(true)
+        setPin('')
+      } else {
+        setPinError('Invalid PIN. Please try again.')
+        setPin('')
+      }
+    } catch (error) {
+      console.error('Error verifying PIN:', error)
+      setPinError('Error verifying PIN. Please try again.')
+    } finally {
+      setPinLoading(false)
+    }
+  }
+
   useEffect(() => {
-    if (user) {
+    if (user && isAuthenticated) {
       fetchAllReportsData()
     }
-  }, [user, dateFrom, dateTo, timeFrom, timeTo, orderTypeFilter, paymentMethodFilter, orderStatusFilter, paymentStatusFilter, cashierFilter, expenseCategoryFilter, expensePaymentFilter])
+  }, [user, isAuthenticated, dateFrom, dateTo, timeFrom, timeTo, orderTypeFilter, paymentMethodFilter, orderStatusFilter, paymentStatusFilter, cashierFilter, expenseCategoryFilter, expensePaymentFilter])
 useEffect(() => {
   if (user && user.id) {
     fetchInitialData(user.id)
@@ -1442,6 +1478,38 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
   // Get theme classes from theme manager
   const themeClasses = themeManager.getClasses()
   const isDark = themeManager.isDark()
+
+  if (!isAuthenticated) {
+    return (
+      <ProtectedPage permissionKey="REPORTS" pageName="Reports">
+        <div className={`${themeClasses.background} min-h-screen`}>
+          <div className="flex items-center justify-center p-4 min-h-screen">
+            <div className="w-full max-w-md">
+              <motion.button
+                whileHover={{ x: -2 }}
+                whileTap={{ scale: 0.98 }}
+                onClick={() => router.push('/dashboard')}
+                className={`flex items-center ${themeClasses.textSecondary} ${themeClasses.hover} transition-colors mb-8`}
+              >
+                <ArrowLeft className="w-5 h-5 mr-2" />
+                Back to Dashboard
+              </motion.button>
+
+              <PinPad
+                pin={pin}
+                onPinChange={setPin}
+                onSubmit={verifyPin}
+                error={pinError}
+                loading={pinLoading}
+                subtitle="6-digit PIN required to access reports"
+                buttonLabel="Access Reports"
+              />
+            </div>
+          </div>
+        </div>
+      </ProtectedPage>
+    )
+  }
 
   return (
     <ProtectedPage permissionKey="REPORTS" pageName="Reports">

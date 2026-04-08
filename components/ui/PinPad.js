@@ -5,7 +5,7 @@ import { motion } from 'framer-motion'
 import { Delete, Lock, Shield } from 'lucide-react'
 import themeManager from '../../lib/themeManager'
 
-export default function PinPad({ pin, onPinChange, onSubmit, error }) {
+export default function PinPad({ pin, onPinChange, onSubmit, error, subtitle = '6-digit PIN required to access expenses', buttonLabel = 'Access Expenses' }) {
   const numbers = [
     ['1', '2', '3'],
     ['4', '5', '6'],
@@ -69,7 +69,7 @@ export default function PinPad({ pin, onPinChange, onSubmit, error }) {
           <Shield className="w-10 h-10 text-white" />
         </div>
         <h2 className={`text-2xl font-bold ${themeClasses.textPrimary} mb-2`}>Enter PIN</h2>
-        <p className={themeClasses.textSecondary}>6-digit PIN required to access expenses</p>
+        <p className={themeClasses.textSecondary}>{subtitle}</p>
       </div>
 
       {/* PIN Display */}
@@ -142,7 +142,7 @@ export default function PinPad({ pin, onPinChange, onSubmit, error }) {
         }`}
       >
         <Lock className="w-5 h-5 mr-2" />
-        Access Expenses
+        {buttonLabel}
       </motion.button>
     </div>
   )
