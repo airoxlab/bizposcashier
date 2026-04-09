@@ -65,11 +65,13 @@ const DEFAULT_SETTINGS = {
   auto_send_walkin: true,
   auto_send_takeaway: true,
   auto_send_delivery: true,
-  // Ready triggers
+  // Dispatch triggers (Ready/On-the-Way)
   auto_send_on_ready: true,
   auto_send_walkin_ready: false,
   auto_send_takeaway_ready: true,
   auto_send_delivery_ready: true,
+  // Ready status trigger (mutually exclusive with dispatch for delivery)
+  auto_send_on_ready_status: false,
   // Review link
   include_review_link: true,
   review_base_url: '',
@@ -679,27 +681,57 @@ export function WhatsAppPanel() {
                 </div>
               </div>
 
-              {/* ── Ready / On-the-Way Notifications ── */}
-              <div className={`rounded-2xl border p-5 flex items-center justify-between ${
-                settings.auto_send_on_ready
-                  ? 'border-blue-500/30 bg-blue-500/5'
-                  : 'border-gray-700/50 bg-gray-800/60'
-              }`}>
-                <div className="flex items-center gap-3">
-                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                    settings.auto_send_on_ready ? 'bg-blue-500/20' : 'bg-gray-700'
-                  }`}>
-                    <Zap size={18} className={settings.auto_send_on_ready ? 'text-blue-400' : 'text-gray-400'} />
+              {/* ── Dispatched & Ready Toggles (side by side, mutually exclusive) ── */}
+              <div className="grid grid-cols-2 gap-3">
+                {/* Dispatched / On-the-Way */}
+                <div className={`rounded-2xl border p-5 flex flex-col justify-between ${
+                  settings.auto_send_on_ready
+                    ? 'border-blue-500/30 bg-blue-500/5'
+                    : 'border-gray-700/50 bg-gray-800/60'
+                }`}>
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                      settings.auto_send_on_ready ? 'bg-blue-500/20' : 'bg-gray-700'
+                    }`}>
+                      <Zap size={18} className={settings.auto_send_on_ready ? 'text-blue-400' : 'text-gray-400'} />
+                    </div>
+                    <div>
+                      <p className="text-white font-bold text-sm">Dispatched Notification</p>
+                      <p className="text-gray-400 text-xs">Send when order status → Dispatched</p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-white font-bold text-sm">Ready / On-the-Way Notification</p>
-                    <p className="text-gray-400 text-xs">Send when order status → Ready (before completion)</p>
+                  <div className="flex justify-end">
+                    <Toggle
+                      checked={settings.auto_send_on_ready}
+                      onChange={() => setSettings(p => ({ ...p, auto_send_on_ready: !p.auto_send_on_ready, ...(p.auto_send_on_ready ? {} : { auto_send_on_ready_status: false }) }))}
+                    />
                   </div>
                 </div>
-                <Toggle
-                  checked={settings.auto_send_on_ready}
-                  onChange={() => setSettings(p => ({ ...p, auto_send_on_ready: !p.auto_send_on_ready }))}
-                />
+
+                {/* Ready Notification */}
+                <div className={`rounded-2xl border p-5 flex flex-col justify-between ${
+                  settings.auto_send_on_ready_status
+                    ? 'border-amber-500/30 bg-amber-500/5'
+                    : 'border-gray-700/50 bg-gray-800/60'
+                }`}>
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                      settings.auto_send_on_ready_status ? 'bg-amber-500/20' : 'bg-gray-700'
+                    }`}>
+                      <Zap size={18} className={settings.auto_send_on_ready_status ? 'text-amber-400' : 'text-gray-400'} />
+                    </div>
+                    <div>
+                      <p className="text-white font-bold text-sm">Ready Notification</p>
+                      <p className="text-gray-400 text-xs">Send when order status → Ready</p>
+                    </div>
+                  </div>
+                  <div className="flex justify-end">
+                    <Toggle
+                      checked={settings.auto_send_on_ready_status}
+                      onChange={() => setSettings(p => ({ ...p, auto_send_on_ready_status: !p.auto_send_on_ready_status, ...(!p.auto_send_on_ready_status ? { auto_send_on_ready: false } : {}) }))}
+                    />
+                  </div>
+                </div>
               </div>
 
               <div className="rounded-2xl border border-gray-700/50 bg-gray-800/60 p-5">
@@ -726,7 +758,7 @@ export function WhatsAppPanel() {
                       <Toggle
                         checked={settings[`auto_send_${t.key}_ready`]}
                         onChange={() => setSettings(p => ({ ...p, [`auto_send_${t.key}_ready`]: !p[`auto_send_${t.key}_ready`] }))}
-                        disabled={!settings.auto_send_on_ready}
+                        disabled={!settings.auto_send_on_ready && !settings.auto_send_on_ready_status}
                       />
                     </div>
                   ))}

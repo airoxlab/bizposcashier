@@ -210,6 +210,7 @@ export default function OrdersPage() {
   const [splitPaymentOrder, setSplitPaymentOrder] = useState(null);
   const [showConvertToDeliveryModal, setShowConvertToDeliveryModal] = useState(false);
   const [showConvertToTakeawayModal, setShowConvertToTakeawayModal] = useState(false);
+  const [showDispatchButton, setShowDispatchButton] = useState(true);
 
   const cancellationReasons = [
     "Customer requested cancellation",
@@ -250,6 +251,16 @@ export default function OrdersPage() {
     if (userData?.id) {
       printerManager.setUserId(userData.id);
       cacheManager.setUserId(userData.id);
+
+      // Fetch dispatch button setting
+      supabase
+        .from('users')
+        .select('show_dispatch_button')
+        .eq('id', userData.id)
+        .single()
+        .then(({ data }) => {
+          if (data) setShowDispatchButton(data.show_dispatch_button !== false)
+        })
     }
 
     setTheme(themeManager.currentTheme);
@@ -1316,10 +1327,16 @@ export default function OrdersPage() {
 
       // WhatsApp auto-send
       // For delivery: send on Dispatched (not Ready), for others: send on Ready
+      // ReadyStatus: send on Ready for delivery orders (mutually exclusive with Dispatch)
       if (newStatus === 'Ready' && selectedOrder.order_type !== 'delivery') {
         triggerWhatsAppAutoSend(selectedOrder, user?.id, 'Ready')
           .then(r => { if (r?.success) notify.success('WhatsApp: order ready notification sent') })
           .catch(err => console.error('[Orders] WA ready-send error:', err.message))
+      }
+      if (newStatus === 'Ready' && selectedOrder.order_type === 'delivery') {
+        triggerWhatsAppAutoSend(selectedOrder, user?.id, 'ReadyStatus')
+          .then(r => { if (r?.success) notify.success('WhatsApp: order ready notification sent') })
+          .catch(err => console.error('[Orders] WA ready-status-send error:', err.message))
       }
       if (newStatus === 'Dispatched' && selectedOrder.order_type === 'delivery') {
         triggerWhatsAppAutoSend(selectedOrder, user?.id, 'Ready')
@@ -2567,8 +2584,8 @@ export default function OrdersPage() {
                     </motion.button>
                   )}
 
-                  {/* Dispatch button — delivery orders only, when Ready */}
-                  {selectedOrder.order_status === "Ready" && selectedOrder.order_type === "delivery" && (
+                  {/* Dispatch button — delivery orders only, when Ready, if enabled in settings */}
+                  {showDispatchButton && selectedOrder.order_status === "Ready" && selectedOrder.order_type === "delivery" && (
                     <motion.button
                       whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.98 }}

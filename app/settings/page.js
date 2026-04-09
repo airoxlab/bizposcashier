@@ -45,7 +45,8 @@ import {
   Edit2,
   Home,
   Building2,
-  MessageSquare
+  MessageSquare,
+  Truck
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { notify } from '../../components/ui/NotificationSystem';
@@ -596,6 +597,7 @@ export default function SettingsPage() {
       show_footer_section: true,
       show_logo_on_receipt: true,
       show_business_name_on_receipt: true,
+      show_dispatch_button: true,
       business_start_time: '10:00',
       business_end_time: '03:00'
     }
@@ -829,7 +831,7 @@ export default function SettingsPage() {
 
       const { data, error } = await supabase
         .from("users")
-        .select("customer_name, email, store_name, phone, store_address, store_logo, qr_code, invoice_status, hashtag1, hashtag2, show_footer_section, show_logo_on_receipt, show_business_name_on_receipt, business_start_time, business_end_time")
+        .select("customer_name, email, store_name, phone, store_address, store_logo, qr_code, invoice_status, hashtag1, hashtag2, show_footer_section, show_logo_on_receipt, show_business_name_on_receipt, show_dispatch_button, business_start_time, business_end_time")
         .eq("email", userEmail)
         .single()
 
@@ -860,6 +862,7 @@ export default function SettingsPage() {
           show_footer_section: data?.show_footer_section === false ? false : true, // Default true if null/undefined
           show_logo_on_receipt: data?.show_logo_on_receipt === false ? false : true, // Default true if null/undefined
           show_business_name_on_receipt: data?.show_business_name_on_receipt === false ? false : true, // Default true if null/undefined
+          show_dispatch_button: data?.show_dispatch_button === false ? false : true, // Default true if null/undefined
           business_start_time: data?.business_start_time || "10:00",
           business_end_time: data?.business_end_time || "03:00"
         }
@@ -1833,6 +1836,26 @@ export default function SettingsPage() {
                           </div>
                         )}
                       </div>
+                    </div>
+
+                    {/* Orders Settings Card */}
+                    <div className={`${classes.card} ${classes.shadow} ${classes.border} rounded-2xl p-6`}>
+                      <div className="flex items-center space-x-3 mb-6">
+                        <div className="w-12 h-12 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-xl flex items-center justify-center shadow-lg">
+                          <Truck className="w-6 h-6 text-white" />
+                        </div>
+                        <div>
+                          <h3 className={`text-lg font-bold ${classes.textPrimary}`}>Orders Settings</h3>
+                          <p className={`text-sm ${classes.textSecondary}`}>Configure order page options</p>
+                        </div>
+                      </div>
+
+                      <ModernToggle
+                        checked={personalInfo.show_dispatch_button}
+                        onChange={() => setPersonalInfo(prev => ({ ...prev, show_dispatch_button: !prev.show_dispatch_button }))}
+                        label="Show Dispatch Button"
+                        description="Show dispatch button on orders page for delivery orders (disable if using KDS)"
+                      />
                     </div>
 
                     {/* Business Hours Card */}

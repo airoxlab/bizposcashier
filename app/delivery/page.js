@@ -758,7 +758,12 @@ export default function DeliveryPage() {
     }
       // ================================================================
 
-      // WhatsApp auto-send — for delivery, send on Dispatched (not Ready)
+      // WhatsApp auto-send — for delivery, send on Dispatched or Ready (mutually exclusive)
+      if (newStatus === 'Ready') {
+        triggerWhatsAppAutoSend(order, user?.id, 'ReadyStatus')
+          .then(r => { if (r?.success) toast.success('WhatsApp: order ready notification sent to customer', { duration: 3000 }) })
+          .catch(err => console.error('[Delivery] WA ready-status-send error:', err.message))
+      }
       if (newStatus === 'Dispatched') {
         triggerWhatsAppAutoSend(order, user?.id, 'Ready')
           .then(r => { if (r?.success) toast.success('WhatsApp: dispatch notification sent to customer', { duration: 3000 }) })
