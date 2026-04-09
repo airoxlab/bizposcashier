@@ -66,6 +66,7 @@ export default function Dashboard() {
   const [pendingWebOrders, setPendingWebOrders] = useState(0)
   const [activeOrders, setActiveOrders] = useState([])
   const [ordersLoading, setOrdersLoading] = useState(true)
+  const [waStatus, setWaStatus] = useState('disconnected')
   const router = useRouter()
   const permissions = usePermissions()
 
@@ -174,6 +175,16 @@ export default function Dashboard() {
       // It will be stopped on logout (authManager) or when "I am Server" is toggled OFF (printer page)
     }
   }, [router])
+
+  // WhatsApp status listener
+  useEffect(() => {
+    const isElectron = typeof window !== 'undefined' && !!window.electronAPI?.whatsapp
+    if (!isElectron) return
+    const wa = window.electronAPI.whatsapp
+    wa.getStatus().then(({ status }) => setWaStatus(status))
+    wa.onStatus(({ status }) => setWaStatus(status))
+    return () => wa.removeListeners()
+  }, [])
 
   const initializeCache = async () => {
     try {
@@ -380,20 +391,20 @@ export default function Dashboard() {
       permissionKey: 'REPORTS'
     },
     {
-      id: 'marketing',
-      title: 'Marketing',
-      icon: MessageSquare,
-      gradient: 'from-cyan-500 to-blue-600',
-      route: '/marketing',
-      permissionKey: 'MARKETING'
-    },
-    {
       id: 'petty-cash',
       title: 'Petty Cash',
       icon: Wallet,
       gradient: 'from-indigo-500 to-purple-600',
       route: '/petty-cash',
       permissionKey: 'PETTY_CASH_USE'
+    },
+    {
+      id: 'marketing',
+      title: 'Marketing',
+      icon: MessageSquare,
+      gradient: 'from-cyan-500 to-teal-600',
+      route: '/marketing',
+      permissionKey: 'MARKETING'
     }
   ]
 
@@ -481,9 +492,32 @@ export default function Dashboard() {
                     {userRole?.toUpperCase()}
                   </span>
                 </div>
-                <p className={`${themeClasses.textSecondary} font-medium`}>
-                  {user.store_name}
-                </p>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <p className={`${themeClasses.textSecondary} font-medium`}>
+                    {user.store_name}
+                  </p>
+                  {/* WhatsApp Status Badge */}
+                  <button
+                    onClick={() => router.push('/settings/whatsapp')}
+                    title={waStatus === 'connected' ? 'WhatsApp Connected' : waStatus === 'connecting' ? 'WhatsApp Connecting...' : 'WhatsApp Disconnected — Click to connect'}
+                    className={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-xs font-medium transition-all ${
+                      waStatus === 'connected'
+                        ? isDark ? 'bg-green-500/15 border-green-500/30 text-green-400' : 'bg-green-50 border-green-200 text-green-700'
+                        : waStatus === 'connecting' || waStatus === 'qr_ready'
+                        ? isDark ? 'bg-yellow-500/15 border-yellow-500/30 text-yellow-400' : 'bg-yellow-50 border-yellow-200 text-yellow-700'
+                        : isDark ? 'bg-red-500/15 border-red-500/30 text-red-400' : 'bg-red-50 border-red-200 text-red-600'
+                    }`}
+                  >
+                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                      waStatus === 'connected' ? 'bg-green-500' :
+                      waStatus === 'connecting' || waStatus === 'qr_ready' ? 'bg-yellow-400 animate-pulse' :
+                      'bg-red-500'
+                    }`} />
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" className="flex-shrink-0">
+                      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347zM12 0C5.373 0 0 5.373 0 12c0 2.135.561 4.14 1.541 5.874L0 24l6.336-1.521A11.94 11.94 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.8 9.8 0 01-5.015-1.374l-.36-.214-3.762.903.964-3.674-.234-.375A9.778 9.778 0 012.182 12C2.182 6.57 6.57 2.182 12 2.182S21.818 6.57 21.818 12 17.43 21.818 12 21.818z"/>
+                    </svg>
+                  </button>
+                </div>
               </div>
             </div>
 

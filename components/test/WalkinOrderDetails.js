@@ -46,6 +46,7 @@ export default function WalkinOrderDetails({
   onPrint,
   onPrintToken,
   onMarkReady,
+  onDispatch, // Callback for delivery dispatch (Ready → Dispatched)
   onComplete,
   onPaymentRequired, // New prop for handling unpaid orders
   onClose, // Callback to close the details view
@@ -925,6 +926,16 @@ export default function WalkinOrderDetails({
               >
                 <XCircle className="w-3 h-3" />
                 Cancel
+              </button>
+            )}
+            {/* Dispatch button — delivery orders at Ready status */}
+            {onDispatch && orderType === 'delivery' && order.order_status === 'Ready' && (
+              <button
+                onClick={() => onDispatch(order)}
+                className="flex items-center gap-1 px-1.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap"
+              >
+                <Truck className="w-3 h-3" />
+                Dispatch
               </button>
             )}
             {/* Complete button - with permission check */}

@@ -45,6 +45,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabase";
+import { triggerWhatsAppAutoSend } from "../../lib/whatsappAutoSend";
 import { themeManager } from "../../lib/themeManager";
 import { authManager } from "../../lib/authManager";
 import { printerManager } from "../../lib/printerManager";
@@ -209,6 +210,7 @@ export default function OrdersPage() {
   const [splitPaymentOrder, setSplitPaymentOrder] = useState(null);
   const [showConvertToDeliveryModal, setShowConvertToDeliveryModal] = useState(false);
   const [showConvertToTakeawayModal, setShowConvertToTakeawayModal] = useState(false);
+  const [showDispatchButton, setShowDispatchButton] = useState(true);
 
   const cancellationReasons = [
     "Customer requested cancellation",
@@ -249,6 +251,16 @@ export default function OrdersPage() {
     if (userData?.id) {
       printerManager.setUserId(userData.id);
       cacheManager.setUserId(userData.id);
+
+      // Fetch dispatch button setting
+      supabase
+        .from('users')
+        .select('show_dispatch_button')
+        .eq('id', userData.id)
+        .single()
+        .then(({ data }) => {
+          if (data) setShowDispatchButton(data.show_dispatch_button !== false)
+        })
     }
 
     setTheme(themeManager.currentTheme);
@@ -1312,6 +1324,34 @@ export default function OrdersPage() {
         }
       }
       // ================================================================
+
+      // WhatsApp auto-send
+      // For delivery: send on Dispatched (not Ready), for others: send on Ready
+      // ReadyStatus: send on Ready for delivery orders (mutually exclusive with Dispatch)
+      if (newStatus === 'Ready' && selectedOrder.order_type !== 'delivery') {
+        triggerWhatsAppAutoSend(selectedOrder, user?.id, 'Ready')
+          .then(r => { if (r?.success) notify.success('WhatsApp: order ready notification sent') })
+          .catch(err => console.error('[Orders] WA ready-send error:', err.message))
+      }
+      if (newStatus === 'Ready' && selectedOrder.order_type === 'delivery') {
+        triggerWhatsAppAutoSend(selectedOrder, user?.id, 'ReadyStatus')
+          .then(r => { if (r?.success) notify.success('WhatsApp: order ready notification sent') })
+          .catch(err => console.error('[Orders] WA ready-status-send error:', err.message))
+      }
+      if (newStatus === 'Dispatched' && selectedOrder.order_type === 'delivery') {
+        triggerWhatsAppAutoSend(selectedOrder, user?.id, 'Ready')
+          .then(r => { if (r?.success) notify.success('WhatsApp: dispatch notification sent') })
+          .catch(err => console.error('[Orders] WA dispatch-send error:', err.message))
+      }
+      if (newStatus === 'Completed') {
+        triggerWhatsAppAutoSend(selectedOrder, user?.id, 'Completed').then(result => {
+          if (result?.success) {
+            notify.success('WhatsApp thank-you message sent to customer')
+          } else if (result?.error) {
+            notify.error(`WhatsApp: ${result.error}`)
+          }
+        }).catch(err => console.error('[Orders] WA auto-send error:', err.message))
+      }
 
       // Log order action only when online (it requires database access)
       if (!result.isOffline) {
@@ -2541,6 +2581,21 @@ export default function OrdersPage() {
                     >
                       <CheckCircle className="w-3.5 h-3.5" />
                       <span>Mark Ready</span>
+                    </motion.button>
+                  )}
+
+                  {/* Dispatch button — delivery orders only, when Ready, if enabled in settings */}
+                  {showDispatchButton && selectedOrder.order_status === "Ready" && selectedOrder.order_type === "delivery" && (
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() =>
+                        updateOrderStatus(selectedOrder.id, "Dispatched")
+                      }
+                      className="flex items-center space-x-1.5 px-3 py-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg transition-all font-medium text-sm"
+                    >
+                      <Truck className="w-3.5 h-3.5" />
+                      <span>Dispatch</span>
                     </motion.button>
                   )}
 

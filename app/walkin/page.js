@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { cacheManager } from '../../lib/cacheManager'
+import { triggerWhatsAppAutoSend } from '../../lib/whatsappAutoSend'
 import { themeManager } from '../../lib/themeManager'
 import { authManager } from '../../lib/authManager'
 import { printerManager } from '../../lib/printerManager'
@@ -993,6 +994,22 @@ export default function WalkInPage() {
             border: theme === 'dark' ? '1px solid #374151' : '1px solid #e5e7eb',
           },
         })
+      }
+
+      // WhatsApp auto-send
+      if (newStatus === 'Ready') {
+        triggerWhatsAppAutoSend(order, user?.id, 'Ready')
+          .then(r => { if (r?.success) toast.success('WhatsApp: order ready notification sent', { duration: 3000 }) })
+          .catch(err => console.error('[Walkin] WA ready-send error:', err.message))
+      }
+      if (newStatus === 'Completed') {
+        triggerWhatsAppAutoSend(order, user?.id, 'Completed').then(result => {
+          if (result?.success) {
+            toast.success(`WhatsApp message sent to customer`, { duration: 3000 })
+          } else if (result?.error) {
+            toast.error(`WhatsApp: ${result.error}`, { duration: 4000 })
+          }
+        }).catch(err => console.error('[Walkin] WA auto-send error:', err.message))
       }
 
       // If order is completed, free up the table

@@ -77,28 +77,30 @@ const api = {
   
   invoke: (channel, data) => ipcRenderer.invoke(channel, data),
   
+  // File picker (for campaign media)
+  pickFile: (options) => ipcRenderer.invoke('dialog:pick-file', options),
+
+  // WhatsApp
   whatsapp: {
-    connect: () => ipcRenderer.invoke('whatsapp-connect'),
-    checkConnection: () => ipcRenderer.invoke('whatsapp-check-connection'),
-    disconnect: () => ipcRenderer.invoke('whatsapp-disconnect'),
-    sendCampaign: (data) => ipcRenderer.invoke('whatsapp-send-campaign', data),
-    
-    onProgress: (callback) => {
-      ipcRenderer.on('campaign-progress', (event, data) => callback(data));
+    connect: () => ipcRenderer.invoke('whatsapp:connect'),
+    disconnect: () => ipcRenderer.invoke('whatsapp:disconnect'),
+    getStatus: () => ipcRenderer.invoke('whatsapp:status'),
+    sendOrderMessage: (data) => ipcRenderer.invoke('whatsapp:send-order-message', data),
+    sendCampaignMessage: (data) => ipcRenderer.invoke('whatsapp:send-campaign-message', data),
+    checkNumber: (data) => ipcRenderer.invoke('whatsapp:check-number', data),
+
+    onQR: (cb) => ipcRenderer.on('whatsapp:qr', (_e, d) => cb(d)),
+    onStatus: (cb) => ipcRenderer.on('whatsapp:status', (_e, d) => cb(d)),
+    onReady: (cb) => ipcRenderer.on('whatsapp:ready', (_e, d) => cb(d)),
+    onDisconnected: (cb) => ipcRenderer.on('whatsapp:disconnected', (_e, d) => cb(d)),
+    onError: (cb) => ipcRenderer.on('whatsapp:error', (_e, d) => cb(d)),
+
+    removeListeners: () => {
+      ['whatsapp:qr', 'whatsapp:status', 'whatsapp:ready', 'whatsapp:disconnected', 'whatsapp:error']
+        .forEach(ch => ipcRenderer.removeAllListeners(ch));
     },
-    
-    removeProgressListener: () => {
-      ipcRenderer.removeAllListeners('campaign-progress');
-    }
   },
-  
-  marketing: {
-    uploadMedia: (data) => ipcRenderer.invoke('upload-campaign-media', data),
-    getCampaigns: (userEmail) => ipcRenderer.invoke('marketing-get-campaigns', userEmail),
-    getMessageStatuses: (campaignId) => ipcRenderer.invoke('marketing-get-message-statuses', campaignId),
-    getCustomers: (userId) => ipcRenderer.invoke('marketing-get-customers', userId)
-  },
-  
+
   // Product / deal image caching — downloads images to userData/product-images/
   // so they display correctly when offline.
   images: {

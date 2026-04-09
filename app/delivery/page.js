@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { cacheManager } from '../../lib/cacheManager'
+import { triggerWhatsAppAutoSend } from '../../lib/whatsappAutoSend'
 import { themeManager } from '../../lib/themeManager'
 import { authManager } from '../../lib/authManager'
 import loyaltyManager from '../../lib/loyaltyManager'
@@ -756,6 +757,27 @@ export default function DeliveryPage() {
       }
     }
       // ================================================================
+
+      // WhatsApp auto-send — for delivery, send on Dispatched or Ready (mutually exclusive)
+      if (newStatus === 'Ready') {
+        triggerWhatsAppAutoSend(order, user?.id, 'ReadyStatus')
+          .then(r => { if (r?.success) toast.success('WhatsApp: order ready notification sent to customer', { duration: 3000 }) })
+          .catch(err => console.error('[Delivery] WA ready-status-send error:', err.message))
+      }
+      if (newStatus === 'Dispatched') {
+        triggerWhatsAppAutoSend(order, user?.id, 'Ready')
+          .then(r => { if (r?.success) toast.success('WhatsApp: dispatch notification sent to customer', { duration: 3000 }) })
+          .catch(err => console.error('[Delivery] WA dispatch-send error:', err.message))
+      }
+      if (newStatus === 'Completed') {
+        triggerWhatsAppAutoSend(order, user?.id, 'Completed').then(result => {
+          if (result?.success) {
+            toast.success(`WhatsApp message sent to customer`, { duration: 3000 })
+          } else if (result?.error) {
+            toast.error(`WhatsApp: ${result.error}`, { duration: 4000 })
+          }
+        }).catch(err => console.error('[Delivery] WA auto-send error:', err.message))
+      }
 
       // Show appropriate toast based on online/offline status
       if (result.isOffline) {
@@ -2266,6 +2288,7 @@ export default function DeliveryPage() {
           onPrint={null}
           onPrintToken={null}
           onMarkReady={(order) => handleOrderStatusUpdate(order, 'Ready')}
+          onDispatch={(order) => handleOrderStatusUpdate(order, 'Dispatched')}
           onComplete={handleCompleteAlreadyPaidOrder}
           onPaymentRequired={handlePaymentRequired}
           orderType="delivery"
