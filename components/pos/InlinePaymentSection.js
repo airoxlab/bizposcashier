@@ -22,7 +22,8 @@ export default function InlinePaymentSection({
   onCancel,
   classes,
   isDark,
-  defaultServiceCharge = null
+  defaultServiceCharge = null,
+  orderType = null
 }) {
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState(null)
   const [cashAmount, setCashAmount] = useState('')
@@ -116,8 +117,9 @@ export default function InlinePaymentSection({
 
       setChangeAmount(0)
 
-      // Pre-populate default service charge from admin settings
-      if (defaultServiceCharge && defaultServiceCharge.value > 0) {
+      // Pre-populate default service charge from admin settings (walkin orders only)
+      const isWalkin = orderType === 'walkin' || order?.order_type === 'walkin'
+      if (isWalkin && defaultServiceCharge && defaultServiceCharge.value > 0) {
         setServiceChargeType(defaultServiceCharge.type || 'percentage')
         setServiceChargeValue(defaultServiceCharge.value)
         setShowServiceChargeSection(true)
@@ -385,7 +387,8 @@ export default function InlinePaymentSection({
           )}
         </div>
 
-        {/* Service Charge Section */}
+        {/* Service Charge Section - Walkin orders only */}
+        {(orderType === 'walkin' || order?.order_type === 'walkin') && (
         <div className={`${classes.card} ${classes.shadow} shadow-sm ${classes.border} border rounded-lg p-3`}>
           <div className="flex items-center justify-between mb-2">
             <h3 className={`text-xs font-bold ${classes.textPrimary} flex items-center`}>
@@ -442,6 +445,7 @@ export default function InlinePaymentSection({
             </div>
           )}
         </div>
+        )}
 
         {/* Payment Methods */}
         <div className={`${classes.card} ${classes.shadow} shadow-sm ${classes.border} border rounded-lg p-3`}>

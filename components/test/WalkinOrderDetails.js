@@ -37,6 +37,7 @@ import ConvertToTakeawayModal from '../delivery/ConvertToTakeawayModal'
 import { cacheManager } from '../../lib/cacheManager'
 import { useRouter } from 'next/navigation'
 import { getOrderItemsWithChanges } from '../../lib/utils/orderChangesTracker'
+import SendBillButton from '../pos/SendBillButton'
 import { getBusinessDate } from '../../lib/utils/businessDayUtils'
 
 export default function WalkinOrderDetails({
@@ -834,127 +835,129 @@ export default function WalkinOrderDetails({
     <div className={`flex-1 flex flex-col ${isDark ? 'bg-gray-900' : 'bg-gray-50'} overflow-hidden`}>
       {/* Header */}
       <div className={`${classes.card} ${classes.shadow} shadow-sm ${classes.border} border-b p-3`}>
-        <div className="flex items-center justify-between gap-2 overflow-hidden">
-          <div className="flex items-center gap-2 min-w-0 shrink">
-            <div className={`w-7 h-7 rounded-lg shrink-0 ${isDark ? 'bg-blue-900/30' : 'bg-blue-100'} flex items-center justify-center`}>
-              <Coffee className={`w-4 h-4 ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
+        <div className="flex items-center justify-between gap-1 overflow-hidden">
+          <div className="flex items-center gap-1.5 min-w-0 shrink overflow-hidden">
+            <div className={`w-6 h-6 rounded-md shrink-0 ${isDark ? 'bg-blue-900/30' : 'bg-blue-100'} flex items-center justify-center`}>
+              <Coffee className={`w-3 h-3 ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className={`text-sm font-bold ${classes.textPrimary}`}>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1">
+                <h1 className={`text-xs font-bold ${classes.textPrimary} truncate`}>
                   {formatOrderDisplay(order)}
                 </h1>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${getStatusColor(order.order_status)}`}>
+                <span className={`text-[9px] px-1 py-0.5 rounded-full shrink-0 ${getStatusColor(order.order_status)}`}>
                   {order.order_status}
                 </span>
               </div>
-              <p className={`${classes.textSecondary} text-xs`}>
-                {formatDate(order.order_date)} at {formatTime(order.order_time)} • {orderType === 'walkin' ? 'Walkin' : orderType === 'takeaway' ? 'Takeaway' : 'Delivery'} Order
+              <p className={`${classes.textSecondary} text-[10px] truncate`}>
+                {formatDate(order.order_date)} {formatTime(order.order_time)} • {orderType === 'walkin' ? 'Walkin' : orderType === 'takeaway' ? 'Takeaway' : 'Delivery'}
               </p>
             </div>
           </div>
 
-          {/* Action Buttons */}
-          <div className="flex items-center gap-0.5 flex-nowrap shrink-0 overflow-hidden">
-            <button
-              onClick={handlePrintReceipt}
-              className="flex items-center gap-1 px-1.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap"
-            >
-              <Printer className="w-3 h-3" />
-              Print
-            </button>
-            <button
-              onClick={handlePrintToken}
-              className="flex items-center gap-1 px-1.5 py-1.5 bg-orange-500 hover:bg-orange-600 active:bg-orange-700 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap"
-            >
-              <Printer className="w-3 h-3" />
-              Token
-            </button>
-            {/* Order type conversion buttons — Pending/Preparing/Ready only */}
-            {['Pending', 'Preparing', 'Ready'].includes(order.order_status) && (
-              <>
-                {orderType !== 'walkin' && (
-                  <button
-                    onClick={handleConvertToWalkin}
-                    disabled={isConverting}
-                    className={`flex items-center gap-1 px-1.5 py-1.5 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap ${isConverting ? 'bg-purple-400 cursor-not-allowed opacity-60' : 'bg-purple-600 hover:bg-purple-700 active:bg-purple-800'}`}
-                  >
-                    <Table2 className="w-3 h-3" />
-                    Walkin
-                  </button>
-                )}
-                {orderType !== 'takeaway' && (
-                  <button
-                    onClick={() => setShowConvertToTakeawayModal(true)}
-                    className="flex items-center gap-1 px-1.5 py-1.5 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap"
-                  >
-                    <Coffee className="w-3 h-3" />
-                    Takeaway
-                  </button>
-                )}
-                {orderType !== 'delivery' && (
-                  <button
-                    onClick={() => setShowConvertModal(true)}
-                    className="flex items-center gap-1 px-1.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap"
-                  >
-                    <Truck className="w-3 h-3" />
-                    Delivery
-                  </button>
-                )}
-              </>
-            )}
-            {/* Reopen button - with permission check */}
-            {permissions.hasPermission('REOPEN_ORDER') && (
+          {/* Action Buttons — single row */}
+          <div className="flex items-center gap-0.5 shrink-0">
               <button
-                onClick={handleReopenOrder}
+                onClick={handlePrintReceipt}
                 className="flex items-center gap-1 px-1.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap"
               >
-                <RotateCcw className="w-3 h-3" />
-                Reopen
+                <Printer className="w-3 h-3" />
+                Print
               </button>
-            )}
-            {/* Cancel button - with permission check */}
-            {permissions.hasPermission('CANCEL_ORDER') && (
               <button
-                onClick={handleCancelOrder}
-                disabled={order.order_status === 'Cancelled'}
-                className={`flex items-center gap-1 px-1.5 py-1.5 rounded-md transition-colors text-xs font-medium whitespace-nowrap ${
-                  order.order_status === 'Cancelled'
-                    ? 'bg-gray-400 cursor-not-allowed opacity-50'
-                    : 'bg-red-600 hover:bg-red-700 active:bg-red-800 text-white'
-                }`}
+                onClick={handlePrintToken}
+                className="flex items-center gap-1 px-1.5 py-1.5 bg-orange-500 hover:bg-orange-600 active:bg-orange-700 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap"
               >
-                <XCircle className="w-3 h-3" />
-                Cancel
+                <Printer className="w-3 h-3" />
+                Token
               </button>
-            )}
-            {/* Dispatch button — delivery orders at Ready status */}
-            {onDispatch && orderType === 'delivery' && order.order_status === 'Ready' && (
-              <button
-                onClick={() => onDispatch(order)}
-                className="flex items-center gap-1 px-1.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap"
-              >
-                <Truck className="w-3 h-3" />
-                Dispatch
-              </button>
-            )}
-            {/* Complete button - with permission check */}
-            {permissions.hasPermission('COMPLETE_ORDER') && (
-              <button
-                onClick={() => {
-                  const effectivelyPaid = paymentCompleted || order.payment_status === 'Paid' || order.payment_method === 'Account'
-                  if (!effectivelyPaid) {
-                    setShowPaymentView(true)
-                  } else {
-                    onComplete?.(order)
-                  }
-                }}
-                className="flex items-center gap-1 px-1.5 py-1.5 bg-green-600 hover:bg-green-700 active:bg-green-800 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap"
-              >
-                <Check className="w-3 h-3" />
-                Complete
-              </button>
-            )}
+              {/* Send Bill via WhatsApp (Customer Account only) */}
+              <SendBillButton order={order} size="sm" />
+              {/* Order type conversion buttons — Pending/Preparing/Ready only */}
+              {['Pending', 'Preparing', 'Ready'].includes(order.order_status) && (
+                <>
+                  {orderType !== 'walkin' && (
+                    <button
+                      onClick={handleConvertToWalkin}
+                      disabled={isConverting}
+                      className={`flex items-center gap-1 px-1.5 py-1.5 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap ${isConverting ? 'bg-purple-400 cursor-not-allowed opacity-60' : 'bg-purple-600 hover:bg-purple-700 active:bg-purple-800'}`}
+                    >
+                      <Table2 className="w-3 h-3" />
+                      Walkin
+                    </button>
+                  )}
+                  {orderType !== 'takeaway' && (
+                    <button
+                      onClick={() => setShowConvertToTakeawayModal(true)}
+                      className="flex items-center gap-1 px-1.5 py-1.5 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap"
+                    >
+                      <Coffee className="w-3 h-3" />
+                      Takeaway
+                    </button>
+                  )}
+                  {orderType !== 'delivery' && (
+                    <button
+                      onClick={() => setShowConvertModal(true)}
+                      className="flex items-center gap-1 px-1.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap"
+                    >
+                      <Truck className="w-3 h-3" />
+                      Delivery
+                    </button>
+                  )}
+                </>
+              )}
+            {/* Reopen button - with permission check */}
+              {permissions.hasPermission('REOPEN_ORDER') && (
+                <button
+                  onClick={handleReopenOrder}
+                  className="flex items-center gap-1 px-1.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  Reopen
+                </button>
+              )}
+              {/* Cancel button - with permission check */}
+              {permissions.hasPermission('CANCEL_ORDER') && (
+                <button
+                  onClick={handleCancelOrder}
+                  disabled={order.order_status === 'Cancelled'}
+                  className={`flex items-center gap-1 px-1.5 py-1.5 rounded-md transition-colors text-xs font-medium whitespace-nowrap ${
+                    order.order_status === 'Cancelled'
+                      ? 'bg-gray-400 cursor-not-allowed opacity-50'
+                      : 'bg-red-600 hover:bg-red-700 active:bg-red-800 text-white'
+                  }`}
+                >
+                  <XCircle className="w-3 h-3" />
+                  Cancel
+                </button>
+              )}
+              {/* Dispatch button — delivery orders at Ready status */}
+              {onDispatch && orderType === 'delivery' && order.order_status === 'Ready' && (
+                <button
+                  onClick={() => onDispatch(order)}
+                  className="flex items-center gap-1 px-1.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap"
+                >
+                  <Truck className="w-3 h-3" />
+                  Dispatch
+                </button>
+              )}
+              {/* Complete button - with permission check */}
+              {permissions.hasPermission('COMPLETE_ORDER') && (
+                <button
+                  onClick={() => {
+                    const effectivelyPaid = paymentCompleted || order.payment_status === 'Paid' || order.payment_method === 'Account'
+                    if (!effectivelyPaid) {
+                      setShowPaymentView(true)
+                    } else {
+                      onComplete?.(order)
+                    }
+                  }}
+                  className="flex items-center gap-1 px-1.5 py-1.5 bg-green-600 hover:bg-green-700 active:bg-green-800 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap"
+                >
+                  <Check className="w-3 h-3" />
+                  Complete
+                </button>
+              )}
           </div>
         </div>
       </div>

@@ -57,6 +57,7 @@ import { supabase } from '../../lib/supabaseClient';
 import { cacheManager } from '../../lib/cacheManager';
 import ProtectedPage from '../../components/ProtectedPage';
 import { WhatsAppPanel } from './whatsapp/page';
+import { CustomerAccountPanel } from './customer-account/page';
 
 // Modern Toggle Switch Component
 const ModernToggle = ({ checked, onChange, label, description, disabled = false }) => {
@@ -1297,6 +1298,12 @@ export default function SettingsPage() {
       name: 'WhatsApp',
       icon: MessageSquare,
       description: 'Messaging & automation',
+    },
+    {
+      id: 'customer-account',
+      name: 'Customer Account',
+      icon: CreditCard,
+      description: 'Account alerts & receipts',
     }
   ];
 
@@ -1423,6 +1430,7 @@ export default function SettingsPage() {
                   : activeTab === 'layouts' ? 'Themes'
                   : activeTab === 'customers' ? 'Customers'
                   : activeTab === 'whatsapp' ? 'WhatsApp'
+                  : activeTab === 'customer-account' ? 'Customer Account'
                   : 'Mobile App'}
               </h1>
               <p className={`${classes.textSecondary} text-xs flex items-center space-x-2`}>
@@ -1435,6 +1443,8 @@ export default function SettingsPage() {
                     ? 'Choose a layout style for your POS interface'
                     : activeTab === 'whatsapp'
                     ? 'Messaging, auto-send notifications & campaign settings'
+                    : activeTab === 'customer-account'
+                    ? 'Account payment alerts, receipt images & WhatsApp notifications'
                     : 'Check and install app updates'
                   }
                 </span>
@@ -2597,6 +2607,19 @@ export default function SettingsPage() {
               className="max-w-4xl"
             >
               <WhatsAppPanel />
+            </motion.div>
+          )}
+
+          {activeTab === 'customer-account' && (
+            <motion.div
+              key="customer-account"
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ duration: 0.3 }}
+              className="max-w-4xl"
+            >
+              <CustomerAccountPanel />
             </motion.div>
           )}
 

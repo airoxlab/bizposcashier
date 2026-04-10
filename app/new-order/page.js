@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { cacheManager } from '../../lib/cacheManager'
+import { triggerWhatsAppAutoSend } from '../../lib/whatsappAutoSend'
 import { themeManager } from '../../lib/themeManager'
 import { authManager } from '../../lib/authManager'
 import { printerManager } from '../../lib/printerManager'
@@ -1046,10 +1047,25 @@ export default function NewOrderPage() {
           })
         }
 
+        // WhatsApp auto-send on Completed
+        triggerWhatsAppAutoSend(order, user?.id, 'Completed').then(result => {
+          if (result?.success) {
+            toast.success(`WhatsApp message sent to customer`, { duration: 3000 })
+          } else if (result?.error) {
+            toast.error(`WhatsApp: ${result.error}`, { duration: 4000 })
+          }
+        }).catch(err => console.error('[NewOrder] WA auto-send error:', err.message))
+
         setSelectedOrder(null)
         setCurrentView('products')
         setOrdersRefreshTrigger(prev => prev + 1)
       } else {
+        // WhatsApp auto-send on Ready
+        if (newStatus === 'Ready') {
+          triggerWhatsAppAutoSend(order, user?.id, 'Ready')
+            .then(r => { if (r?.success) toast.success('WhatsApp: order ready notification sent', { duration: 3000 }) })
+            .catch(err => console.error('[NewOrder] WA ready-send error:', err.message))
+        }
         setOrdersRefreshTrigger(prev => prev + 1)
       }
     } catch (error) {

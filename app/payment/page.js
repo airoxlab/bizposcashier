@@ -44,6 +44,7 @@ import { getOrderItemsWithChanges } from '../../lib/utils/orderChangesTracker'
 import LoyaltyRedemption from '../../components/pos/LoyaltyRedemption'
 import SplitPaymentModal from '../../components/pos/SplitPaymentModal'
 import paymentTransactionManager from '../../lib/paymentTransactionManager'
+import SendBillButton from '../../components/pos/SendBillButton'
 
 import Image from 'next/image'
 
@@ -168,26 +169,28 @@ useEffect(() => {
   setCashAmount(calculatedAmountDue.toString())
   setChangeAmount(0)
 
-  // Pre-populate service charge:
+  // Pre-populate service charge (walkin orders only):
   // - If modifying and order already has service charge → restore it
   // - Otherwise apply the admin default (works for new orders AND reopened orders with no SC)
-  try {
-    const existingSC = parseFloat(parsedOrderData.originalState?.service_charge_amount || parsedOrderData.serviceChargeAmount || 0)
-    const existingSCPct = parseFloat(parsedOrderData.originalState?.service_charge_percentage || parsedOrderData.serviceChargePercentage || 0)
-    if (existingSC > 0) {
-      setServiceChargeType(existingSCPct > 0 ? 'percentage' : 'fixed')
-      setServiceChargeValue(existingSCPct > 0 ? existingSCPct : existingSC)
-      setShowServiceChargeSection(true)
-    } else {
-      const defaultSC = JSON.parse(localStorage.getItem('pos_default_service_charge') || '{}')
-      if (defaultSC.value > 0) {
-        setServiceChargeType(defaultSC.type || 'percentage')
-        setServiceChargeValue(defaultSC.value)
+  if (parsedOrderData.orderType === 'walkin') {
+    try {
+      const existingSC = parseFloat(parsedOrderData.originalState?.service_charge_amount || parsedOrderData.serviceChargeAmount || 0)
+      const existingSCPct = parseFloat(parsedOrderData.originalState?.service_charge_percentage || parsedOrderData.serviceChargePercentage || 0)
+      if (existingSC > 0) {
+        setServiceChargeType(existingSCPct > 0 ? 'percentage' : 'fixed')
+        setServiceChargeValue(existingSCPct > 0 ? existingSCPct : existingSC)
         setShowServiceChargeSection(true)
+      } else {
+        const defaultSC = JSON.parse(localStorage.getItem('pos_default_service_charge') || '{}')
+        if (defaultSC.value > 0) {
+          setServiceChargeType(defaultSC.type || 'percentage')
+          setServiceChargeValue(defaultSC.value)
+          setShowServiceChargeSection(true)
+        }
       }
+    } catch (e) {
+      // ignore parse errors
     }
-  } catch (e) {
-    // ignore parse errors
   }
 
   // Update network status
@@ -1960,6 +1963,24 @@ if (orderComplete) {
               )}
             </motion.button>
           </div>
+
+          {/* Row 3: Send Bill via WhatsApp (only for Customer Account) */}
+          {selectedPaymentMethod?.name === 'Account' && orderData.customer && (
+            <SendBillButton
+              order={{
+                id: orderData.existingOrderId || null,
+                order_number: orderNumber,
+                payment_method: 'Account',
+                customer_id: orderData.customer?.id,
+                customer: orderData.customer,
+                total_amount: orderData.total,
+                order_type: orderData.orderType,
+                order_date: new Date().toISOString(),
+                cart: orderData.cart,
+              }}
+              size="lg"
+            />
+          )}
         </div>
       </motion.div>
     </div>
@@ -2101,7 +2122,8 @@ if (orderComplete) {
               )}
             </div>
 
-            {/* Service Charge Section */}
+            {/* Service Charge Section - Walkin orders only */}
+            {orderData.orderType === 'walkin' && (
             <div className={`${classes.card} rounded-xl ${classes.border} border p-3`}>
               <div className="flex items-center justify-between mb-1">
                 <h2 className={`text-xs font-bold ${classes.textSecondary} uppercase tracking-wider flex items-center`}>
@@ -2160,6 +2182,7 @@ if (orderComplete) {
                 </div>
               )}
             </div>
+            )}
 
             {/* Payment Methods */}
             <div className={`${classes.card} rounded-xl ${classes.border} border p-3`}>

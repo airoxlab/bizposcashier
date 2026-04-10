@@ -17,7 +17,6 @@ import {
   Smartphone,
   Zap,
   Clock,
-  Link2,
   ToggleLeft,
   ChevronRight,
   Eye,
@@ -74,7 +73,6 @@ const DEFAULT_SETTINGS = {
   auto_send_on_ready_status: false,
   // Review link
   include_review_link: true,
-  review_base_url: '',
   // Campaign
   campaign_send_delay_min: 3,
   campaign_send_delay_max: 8,
@@ -89,13 +87,13 @@ const DEFAULT_SETTINGS = {
 }
 
 // ─── Toggle Switch ────────────────────────────────────────────────────────────
-const Toggle = ({ checked, onChange, disabled = false }) => (
+const Toggle = ({ checked, onChange, disabled = false, isDark = true }) => (
   <button
     type="button"
     onClick={onChange}
     disabled={disabled}
     className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 focus:outline-none ${
-      checked ? 'bg-green-500' : 'bg-gray-600'
+      checked ? 'bg-green-500' : isDark ? 'bg-gray-600' : 'bg-gray-300'
     } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
   >
     <span
@@ -107,13 +105,13 @@ const Toggle = ({ checked, onChange, disabled = false }) => (
 )
 
 // ─── Status Badge ─────────────────────────────────────────────────────────────
-const StatusBadge = ({ status }) => {
+const StatusBadge = ({ status, isDark = true }) => {
   const configs = {
-    connected: { label: 'Connected', color: 'bg-green-500/20 text-green-400 border-green-500/30', dot: 'bg-green-400' },
-    connecting: { label: 'Connecting...', color: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30', dot: 'bg-yellow-400 animate-pulse' },
-    qr_ready: { label: 'Scan QR Code', color: 'bg-blue-500/20 text-blue-400 border-blue-500/30', dot: 'bg-blue-400 animate-pulse' },
-    disconnected: { label: 'Not Connected', color: 'bg-red-500/20 text-red-400 border-red-500/30', dot: 'bg-red-400' },
-    failed: { label: 'Connection Failed', color: 'bg-red-500/20 text-red-400 border-red-500/30', dot: 'bg-red-400' },
+    connected: { label: 'Connected', color: isDark ? 'bg-green-500/20 text-green-400 border-green-500/30' : 'bg-green-50 text-green-600 border-green-200', dot: 'bg-green-400' },
+    connecting: { label: 'Connecting...', color: isDark ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30' : 'bg-yellow-50 text-yellow-600 border-yellow-200', dot: isDark ? 'bg-yellow-400 animate-pulse' : 'bg-yellow-500 animate-pulse' },
+    qr_ready: { label: 'Scan QR Code', color: isDark ? 'bg-blue-500/20 text-blue-400 border-blue-500/30' : 'bg-blue-50 text-blue-600 border-blue-200', dot: isDark ? 'bg-blue-400 animate-pulse' : 'bg-blue-500 animate-pulse' },
+    disconnected: { label: 'Not Connected', color: isDark ? 'bg-red-500/20 text-red-400 border-red-500/30' : 'bg-red-50 text-red-600 border-red-200', dot: 'bg-red-400' },
+    failed: { label: 'Connection Failed', color: isDark ? 'bg-red-500/20 text-red-400 border-red-500/30' : 'bg-red-50 text-red-600 border-red-200', dot: 'bg-red-400' },
   }
   const cfg = configs[status] || configs.disconnected
   return (
@@ -128,6 +126,14 @@ const StatusBadge = ({ status }) => {
 export function WhatsAppPanel() {
   const isDark = themeManager.isDark()
   const classes = themeManager.getClasses()
+
+  // Theme-aware class helpers
+  const cardBg = isDark ? 'border-gray-700/50 bg-gray-800/60' : 'border-gray-200 bg-white shadow-sm'
+  const inputBg = isDark ? 'bg-gray-900/60 border-gray-600/40 text-white placeholder-gray-500' : 'bg-gray-50 border-gray-300 text-gray-900 placeholder-gray-400'
+  const tp = isDark ? 'text-white' : 'text-gray-900' // text primary
+  const ts = isDark ? 'text-gray-400' : 'text-gray-500' // text secondary
+  const tt = isDark ? 'text-gray-500' : 'text-gray-400' // text tertiary
+  const tb = isDark ? 'text-gray-300' : 'text-gray-600' // text body
 
   const [activeTab, setActiveTab] = useState('connection') // connection | templates | auto-send | advanced
   const [activeTemplateType, setActiveTemplateType] = useState('walkin')
@@ -207,7 +213,8 @@ export function WhatsAppPanel() {
     if (!userId) return
     setIsSaving(true)
     try {
-      const payload = { ...settings, user_id: userId, updated_at: new Date().toISOString() }
+      const { review_base_url, ...rest } = settings
+      const payload = { ...rest, user_id: userId, updated_at: new Date().toISOString() }
       const { error } = await supabase
         .from('whatsapp_settings')
         .upsert(payload, { onConflict: 'user_id' })
@@ -289,7 +296,7 @@ export function WhatsAppPanel() {
           <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center shadow-lg shadow-green-500/20">
             <MessageSquare size={18} className="text-white" />
           </div>
-          <StatusBadge status={waStatus} />
+          <StatusBadge status={waStatus} isDark={isDark} />
         </div>
         <button
           onClick={saveSettings}
@@ -303,7 +310,7 @@ export function WhatsAppPanel() {
 
       <div>
         {/* ── Tabs ── */}
-        <div className="flex items-center gap-1 p-1 bg-gray-800/60 rounded-2xl border border-gray-700/50 mb-6">
+        <div className={`flex items-center gap-1 p-1 rounded-2xl border mb-6 ${isDark ? 'bg-gray-800/60 border-gray-700/50' : 'bg-gray-100 border-gray-200'}`}>
           {tabs.map(tab => (
             <button
               key={tab.key}
@@ -311,7 +318,7 @@ export function WhatsAppPanel() {
               className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all ${
                 activeTab === tab.key
                   ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-white shadow-lg shadow-green-500/20'
-                  : 'text-gray-400 hover:text-white hover:bg-gray-700/50'
+                  : isDark ? 'text-gray-400 hover:text-white hover:bg-gray-700/50' : 'text-gray-500 hover:text-gray-900 hover:bg-white'
               }`}
             >
               <tab.icon size={15} />
@@ -333,7 +340,7 @@ export function WhatsAppPanel() {
               className="space-y-4"
             >
               {/* WhatsApp Connection Card */}
-              <div className="relative overflow-hidden rounded-2xl border border-gray-700/50 bg-gray-800/60 backdrop-blur-sm">
+              <div className={`relative overflow-hidden rounded-2xl border backdrop-blur-sm ${cardBg}`}>
                 {/* Gradient glow */}
                 <div className={`absolute inset-0 opacity-10 bg-gradient-to-br ${
                   waStatus === 'connected' ? 'from-green-500 to-emerald-600' :
@@ -346,18 +353,18 @@ export function WhatsAppPanel() {
                     <div className="flex items-center gap-4">
                       <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-xl ${
                         waStatus === 'connected' ? 'bg-gradient-to-br from-green-500 to-emerald-600' :
-                        'bg-gray-700'
+                        isDark ? 'bg-gray-700' : 'bg-gray-200'
                       }`}>
                         {waStatus === 'connecting' || waStatus === 'qr_ready'
                           ? <Loader2 size={26} className="text-white animate-spin" />
                           : waStatus === 'connected'
                           ? <CheckCircle size={26} className="text-white" />
-                          : <WifiOff size={26} className="text-gray-400" />
+                          : <WifiOff size={26} className={isDark ? 'text-gray-400' : 'text-gray-500'} />
                         }
                       </div>
                       <div>
-                        <h2 className="text-white font-bold text-lg">WhatsApp</h2>
-                        <StatusBadge status={waStatus} />
+                        <h2 className={`${tp} font-bold text-lg`}>WhatsApp</h2>
+                        <StatusBadge status={waStatus} isDark={isDark} />
                       </div>
                     </div>
 
@@ -365,7 +372,7 @@ export function WhatsAppPanel() {
                       {waStatus === 'connected' ? (
                         <button
                           onClick={handleDisconnect}
-                          className="flex items-center gap-2 px-4 py-2 rounded-xl border border-red-500/40 text-red-400 hover:bg-red-500/10 text-sm font-semibold transition-all"
+                          className={`flex items-center gap-2 px-4 py-2 rounded-xl border text-sm font-semibold transition-all ${isDark ? 'border-red-500/40 text-red-400 hover:bg-red-500/10' : 'border-red-300 text-red-500 hover:bg-red-50'}`}
                         >
                           <XCircle size={15} />
                           Disconnect
@@ -394,7 +401,7 @@ export function WhatsAppPanel() {
                         exit={{ opacity: 0, scale: 0.95 }}
                         className="flex flex-col items-center py-4"
                       >
-                        <div className="bg-white p-4 rounded-2xl shadow-2xl shadow-black/40 mb-4">
+                        <div className={`p-4 rounded-2xl shadow-2xl mb-4 ${isDark ? 'bg-white shadow-black/40' : 'bg-white shadow-gray-300/60 border border-gray-200'}`}>
                           {qrDataUrl
                             ? <img src={qrDataUrl} alt="WhatsApp QR" className="w-56 h-56" />
                             : (
@@ -406,8 +413,8 @@ export function WhatsAppPanel() {
                           }
                         </div>
                         <div className="text-center">
-                          <p className="text-white font-semibold text-sm mb-1">Scan with WhatsApp</p>
-                          <p className="text-gray-400 text-xs">Open WhatsApp → Linked Devices → Link a Device</p>
+                          <p className={`${tp} font-semibold text-sm mb-1`}>Scan with WhatsApp</p>
+                          <p className={`${ts} text-xs`}>Open WhatsApp → Linked Devices → Link a Device</p>
                         </div>
                       </motion.div>
                     )}
@@ -415,21 +422,21 @@ export function WhatsAppPanel() {
 
                   {/* Connected State */}
                   {waStatus === 'connected' && (
-                    <div className="flex items-center gap-3 p-4 bg-green-500/10 rounded-xl border border-green-500/20">
-                      <CheckCircle size={18} className="text-green-400 flex-shrink-0" />
+                    <div className={`flex items-center gap-3 p-4 rounded-xl border ${isDark ? 'bg-green-500/10 border-green-500/20' : 'bg-green-50 border-green-200'}`}>
+                      <CheckCircle size={18} className={isDark ? 'text-green-400' : 'text-green-500'} />
                       <div>
-                        <p className="text-green-400 font-semibold text-sm">WhatsApp is connected and ready</p>
-                        <p className="text-green-400/60 text-xs">Auto thank-you messages and campaigns are active</p>
+                        <p className={`${isDark ? 'text-green-400' : 'text-green-600'} font-semibold text-sm`}>WhatsApp is connected and ready</p>
+                        <p className={`${isDark ? 'text-green-400/60' : 'text-green-500/70'} text-xs`}>Auto thank-you messages and campaigns are active</p>
                       </div>
                     </div>
                   )}
 
                   {/* Disconnected hint */}
                   {(waStatus === 'disconnected' || waStatus === 'failed') && !isConnecting && (
-                    <div className="flex items-start gap-3 p-4 bg-gray-700/40 rounded-xl border border-gray-600/30">
-                      <Info size={16} className="text-gray-400 flex-shrink-0 mt-0.5" />
-                      <p className="text-gray-400 text-xs leading-relaxed">
-                        Click <strong className="text-white">Connect</strong> to scan a QR code with your WhatsApp. The session is saved — you won't need to scan again after app restarts.
+                    <div className={`flex items-start gap-3 p-4 rounded-xl border ${isDark ? 'bg-gray-700/40 border-gray-600/30' : 'bg-gray-50 border-gray-200'}`}>
+                      <Info size={16} className={`${ts} flex-shrink-0 mt-0.5`} />
+                      <p className={`${ts} text-xs leading-relaxed`}>
+                        Click <strong className={tp}>Connect</strong> to scan a QR code with your WhatsApp. The session is saved — you won't need to scan again after app restarts.
                       </p>
                     </div>
                   )}
@@ -437,25 +444,26 @@ export function WhatsAppPanel() {
               </div>
 
               {/* Auto-reconnect setting */}
-              <div className="rounded-2xl border border-gray-700/50 bg-gray-800/60 p-5 flex items-center justify-between">
+              <div className={`rounded-2xl border p-5 flex items-center justify-between ${cardBg}`}>
                 <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-blue-500/10 flex items-center justify-center">
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${isDark ? 'bg-blue-500/10' : 'bg-blue-50'}`}>
                     <RefreshCw size={16} className="text-blue-400" />
                   </div>
                   <div>
-                    <p className="text-white font-semibold text-sm">Auto-Reconnect</p>
-                    <p className="text-gray-400 text-xs">Automatically reconnect if WhatsApp disconnects</p>
+                    <p className={`${tp} font-semibold text-sm`}>Auto-Reconnect</p>
+                    <p className={`${ts} text-xs`}>Automatically reconnect if WhatsApp disconnects</p>
                   </div>
                 </div>
                 <Toggle
                   checked={settings.auto_reconnect}
                   onChange={() => setSettings(p => ({ ...p, auto_reconnect: !p.auto_reconnect }))}
+                  isDark={isDark}
                 />
               </div>
 
               {/* How to steps */}
-              <div className="rounded-2xl border border-gray-700/50 bg-gray-800/60 p-5">
-                <h3 className="text-white font-semibold text-sm mb-4 flex items-center gap-2">
+              <div className={`rounded-2xl border p-5 ${cardBg}`}>
+                <h3 className={`${tp} font-semibold text-sm mb-4 flex items-center gap-2`}>
                   <Smartphone size={15} className="text-green-400" /> Setup Guide
                 </h3>
                 <div className="space-y-3">
@@ -467,10 +475,10 @@ export function WhatsAppPanel() {
                     { step: '5', text: 'Session is saved — no need to scan again!' },
                   ].map(s => (
                     <div key={s.step} className="flex items-center gap-3">
-                      <span className="w-6 h-6 rounded-full bg-green-500/20 text-green-400 text-xs font-bold flex items-center justify-center flex-shrink-0">
+                      <span className={`w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center flex-shrink-0 ${isDark ? 'bg-green-500/20 text-green-400' : 'bg-green-50 text-green-600'}`}>
                         {s.step}
                       </span>
-                      <p className="text-gray-300 text-sm">{s.text}</p>
+                      <p className={`${tb} text-sm`}>{s.text}</p>
                     </div>
                   ))}
                 </div>
@@ -498,11 +506,11 @@ export function WhatsAppPanel() {
                     className={`flex flex-col items-center gap-2 p-4 rounded-2xl border transition-all ${
                       activeTemplateType === t.key
                         ? `border-transparent bg-gradient-to-br ${t.color} shadow-lg`
-                        : 'border-gray-700/50 bg-gray-800/60 hover:bg-gray-700/50'
+                        : isDark ? 'border-gray-700/50 bg-gray-800/60 hover:bg-gray-700/50' : 'border-gray-200 bg-white hover:bg-gray-50 shadow-sm'
                     }`}
                   >
-                    <t.icon size={20} className={activeTemplateType === t.key ? 'text-white' : 'text-gray-400'} />
-                    <span className={`text-sm font-semibold ${activeTemplateType === t.key ? 'text-white' : 'text-gray-300'}`}>
+                    <t.icon size={20} className={activeTemplateType === t.key ? 'text-white' : ts} />
+                    <span className={`text-sm font-semibold ${activeTemplateType === t.key ? 'text-white' : tb}`}>
                       {t.label}
                     </span>
                   </button>
@@ -510,8 +518,8 @@ export function WhatsAppPanel() {
               </div>
 
               {/* Variable chips */}
-              <div className="rounded-2xl border border-gray-700/50 bg-gray-800/60 p-4">
-                <p className="text-gray-400 text-xs font-semibold mb-3 uppercase tracking-wider">
+              <div className={`rounded-2xl border p-4 ${cardBg}`}>
+                <p className={`${ts} text-xs font-semibold mb-3 uppercase tracking-wider`}>
                   Click to insert variable at cursor
                 </p>
                 <div className="flex flex-wrap gap-2">
@@ -520,7 +528,7 @@ export function WhatsAppPanel() {
                       key={v.label}
                       onClick={() => insertVariable(v.label)}
                       title={v.desc}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-500/15 border border-purple-500/25 text-purple-300 text-xs font-mono hover:bg-purple-500/25 hover:border-purple-500/40 transition-all group"
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono transition-all group ${isDark ? 'bg-purple-500/15 border border-purple-500/25 text-purple-300 hover:bg-purple-500/25 hover:border-purple-500/40' : 'bg-purple-50 border border-purple-200 text-purple-600 hover:bg-purple-100 hover:border-purple-300'}`}
                     >
                       {v.label}
                       <button
@@ -538,13 +546,13 @@ export function WhatsAppPanel() {
               </div>
 
               {/* Completed / Ready sub-tabs */}
-              <div className="flex gap-2 p-1 bg-gray-900/40 rounded-xl border border-gray-700/40">
+              <div className={`flex gap-2 p-1 rounded-xl border ${isDark ? 'bg-gray-900/40 border-gray-700/40' : 'bg-gray-100 border-gray-200'}`}>
                 <button
                   onClick={() => { setActiveTemplateStatus('completed'); setPreviewVisible(false) }}
                   className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-semibold transition-all ${
                     activeTemplateStatus === 'completed'
-                      ? 'bg-green-500/20 border border-green-500/30 text-green-400'
-                      : 'text-gray-400 hover:text-gray-300'
+                      ? isDark ? 'bg-green-500/20 border border-green-500/30 text-green-400' : 'bg-green-50 border border-green-200 text-green-600'
+                      : isDark ? 'text-gray-400 hover:text-gray-300' : 'text-gray-500 hover:text-gray-700'
                   }`}
                 >
                   <CheckCircle size={14} />
@@ -554,8 +562,8 @@ export function WhatsAppPanel() {
                   onClick={() => { setActiveTemplateStatus('ready'); setPreviewVisible(false) }}
                   className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-semibold transition-all ${
                     activeTemplateStatus === 'ready'
-                      ? 'bg-blue-500/20 border border-blue-500/30 text-blue-400'
-                      : 'text-gray-400 hover:text-gray-300'
+                      ? isDark ? 'bg-blue-500/20 border border-blue-500/30 text-blue-400' : 'bg-blue-50 border border-blue-200 text-blue-600'
+                      : isDark ? 'text-gray-400 hover:text-gray-300' : 'text-gray-500 hover:text-gray-700'
                   }`}
                 >
                   <Zap size={14} />
@@ -566,8 +574,8 @@ export function WhatsAppPanel() {
               {/* Context hint */}
               <div className={`rounded-xl px-4 py-2.5 text-xs ${
                 activeTemplateStatus === 'completed'
-                  ? 'bg-green-500/8 border border-green-500/15 text-green-400'
-                  : 'bg-blue-500/8 border border-blue-500/15 text-blue-400'
+                  ? isDark ? 'bg-green-500/8 border border-green-500/15 text-green-400' : 'bg-green-50 border border-green-200 text-green-600'
+                  : isDark ? 'bg-blue-500/8 border border-blue-500/15 text-blue-400' : 'bg-blue-50 border border-blue-200 text-blue-600'
               }`}>
                 {activeTemplateStatus === 'completed'
                   ? `Sent when order is marked Completed. Use {review_link} to include the review URL.`
@@ -580,15 +588,15 @@ export function WhatsAppPanel() {
               </div>
 
               {/* Template editor */}
-              <div className="rounded-2xl border border-gray-700/50 bg-gray-800/60 p-4">
+              <div className={`rounded-2xl border p-4 ${cardBg}`}>
                 <div className="flex items-center justify-between mb-3">
-                  <p className="text-white font-semibold text-sm">
+                  <p className={`${tp} font-semibold text-sm`}>
                     {ORDER_TYPES.find(t => t.key === activeTemplateType)?.label}
                     {' '}{activeTemplateStatus === 'completed' ? 'Completed' : 'Ready'} Template
                   </p>
                   <button
                     onClick={() => setPreviewVisible(p => !p)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-700/50 text-gray-300 text-xs hover:bg-gray-600/50 transition-all"
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-all ${isDark ? 'bg-gray-700/50 text-gray-300 hover:bg-gray-600/50' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
                   >
                     {previewVisible ? <EyeOff size={13} /> : <Eye size={13} />}
                     {previewVisible ? 'Editor' : 'Preview'}
@@ -602,10 +610,10 @@ export function WhatsAppPanel() {
                     onChange={e => setSettings(p => ({ ...p, [activeTemplateKey()]: e.target.value }))}
                     rows={8}
                     placeholder="Type your message template here..."
-                    className="w-full bg-gray-900/60 border border-gray-600/40 rounded-xl px-4 py-3 text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500/60 focus:ring-1 focus:ring-green-500/20 resize-none font-mono leading-relaxed"
+                    className={`w-full rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-green-500/60 focus:ring-1 focus:ring-green-500/20 resize-none font-mono leading-relaxed ${inputBg}`}
                   />
                 ) : (
-                  <div className="bg-gray-900/60 border border-gray-600/40 rounded-xl p-4 min-h-[180px]">
+                  <div className={`rounded-xl p-4 min-h-[180px] ${isDark ? 'bg-gray-900/60 border border-gray-600/40' : 'bg-gray-50 border border-gray-200'}`}>
                     <div className="flex justify-end">
                       <div className="max-w-xs bg-[#dcf8c6] rounded-2xl rounded-tr-sm px-4 py-3 shadow-md">
                         <p className="text-gray-800 text-sm whitespace-pre-wrap leading-relaxed">
@@ -616,7 +624,7 @@ export function WhatsAppPanel() {
                     </div>
                   </div>
                 )}
-                <p className="text-gray-500 text-xs mt-2">
+                <p className={`${tt} text-xs mt-2`}>
                   {(settings[activeTemplateKey()] || '').length} characters
                 </p>
               </div>
@@ -637,29 +645,30 @@ export function WhatsAppPanel() {
               {/* Master toggle */}
               <div className={`rounded-2xl border p-5 flex items-center justify-between ${
                 settings.auto_send_on_complete
-                  ? 'border-green-500/30 bg-green-500/5'
-                  : 'border-gray-700/50 bg-gray-800/60'
+                  ? isDark ? 'border-green-500/30 bg-green-500/5' : 'border-green-200 bg-green-50'
+                  : cardBg
               }`}>
                 <div className="flex items-center gap-3">
                   <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                    settings.auto_send_on_complete ? 'bg-green-500/20' : 'bg-gray-700'
+                    settings.auto_send_on_complete ? isDark ? 'bg-green-500/20' : 'bg-green-100' : isDark ? 'bg-gray-700' : 'bg-gray-200'
                   }`}>
-                    <Zap size={18} className={settings.auto_send_on_complete ? 'text-green-400' : 'text-gray-400'} />
+                    <Zap size={18} className={settings.auto_send_on_complete ? isDark ? 'text-green-400' : 'text-green-500' : ts} />
                   </div>
                   <div>
-                    <p className="text-white font-bold text-sm">Auto Thank-You Message</p>
-                    <p className="text-gray-400 text-xs">Send automatically when order status → Completed</p>
+                    <p className={`${tp} font-bold text-sm`}>Auto Thank-You Message</p>
+                    <p className={`${ts} text-xs`}>Send automatically when order status → Completed</p>
                   </div>
                 </div>
                 <Toggle
                   checked={settings.auto_send_on_complete}
                   onChange={() => setSettings(p => ({ ...p, auto_send_on_complete: !p.auto_send_on_complete }))}
+                  isDark={isDark}
                 />
               </div>
 
               {/* Per order type */}
-              <div className="rounded-2xl border border-gray-700/50 bg-gray-800/60 p-5">
-                <h3 className="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-4">
+              <div className={`rounded-2xl border p-5 ${cardBg}`}>
+                <h3 className={`${ts} text-xs font-semibold uppercase tracking-wider mb-4`}>
                   Enable per order type
                 </h3>
                 <div className="space-y-3">
@@ -669,12 +678,13 @@ export function WhatsAppPanel() {
                         <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${t.color} flex items-center justify-center`}>
                           <t.icon size={14} className="text-white" />
                         </div>
-                        <p className="text-white font-medium text-sm">{t.label}</p>
+                        <p className={`${tp} font-medium text-sm`}>{t.label}</p>
                       </div>
                       <Toggle
                         checked={settings[`auto_send_${t.key}`]}
                         onChange={() => setSettings(p => ({ ...p, [`auto_send_${t.key}`]: !p[`auto_send_${t.key}`] }))}
                         disabled={!settings.auto_send_on_complete}
+                        isDark={isDark}
                       />
                     </div>
                   ))}
@@ -686,24 +696,25 @@ export function WhatsAppPanel() {
                 {/* Dispatched / On-the-Way */}
                 <div className={`rounded-2xl border p-5 flex flex-col justify-between ${
                   settings.auto_send_on_ready
-                    ? 'border-blue-500/30 bg-blue-500/5'
-                    : 'border-gray-700/50 bg-gray-800/60'
+                    ? isDark ? 'border-blue-500/30 bg-blue-500/5' : 'border-blue-200 bg-blue-50'
+                    : cardBg
                 }`}>
                   <div className="flex items-center gap-3 mb-3">
                     <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                      settings.auto_send_on_ready ? 'bg-blue-500/20' : 'bg-gray-700'
+                      settings.auto_send_on_ready ? isDark ? 'bg-blue-500/20' : 'bg-blue-100' : isDark ? 'bg-gray-700' : 'bg-gray-200'
                     }`}>
-                      <Zap size={18} className={settings.auto_send_on_ready ? 'text-blue-400' : 'text-gray-400'} />
+                      <Zap size={18} className={settings.auto_send_on_ready ? isDark ? 'text-blue-400' : 'text-blue-500' : ts} />
                     </div>
                     <div>
-                      <p className="text-white font-bold text-sm">Dispatched Notification</p>
-                      <p className="text-gray-400 text-xs">Send when order status → Dispatched</p>
+                      <p className={`${tp} font-bold text-sm`}>Dispatched Notification</p>
+                      <p className={`${ts} text-xs`}>Send when order status → Dispatched</p>
                     </div>
                   </div>
                   <div className="flex justify-end">
                     <Toggle
                       checked={settings.auto_send_on_ready}
                       onChange={() => setSettings(p => ({ ...p, auto_send_on_ready: !p.auto_send_on_ready, ...(p.auto_send_on_ready ? {} : { auto_send_on_ready_status: false }) }))}
+                      isDark={isDark}
                     />
                   </div>
                 </div>
@@ -711,34 +722,35 @@ export function WhatsAppPanel() {
                 {/* Ready Notification */}
                 <div className={`rounded-2xl border p-5 flex flex-col justify-between ${
                   settings.auto_send_on_ready_status
-                    ? 'border-amber-500/30 bg-amber-500/5'
-                    : 'border-gray-700/50 bg-gray-800/60'
+                    ? isDark ? 'border-amber-500/30 bg-amber-500/5' : 'border-amber-200 bg-amber-50'
+                    : cardBg
                 }`}>
                   <div className="flex items-center gap-3 mb-3">
                     <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                      settings.auto_send_on_ready_status ? 'bg-amber-500/20' : 'bg-gray-700'
+                      settings.auto_send_on_ready_status ? isDark ? 'bg-amber-500/20' : 'bg-amber-100' : isDark ? 'bg-gray-700' : 'bg-gray-200'
                     }`}>
-                      <Zap size={18} className={settings.auto_send_on_ready_status ? 'text-amber-400' : 'text-gray-400'} />
+                      <Zap size={18} className={settings.auto_send_on_ready_status ? isDark ? 'text-amber-400' : 'text-amber-500' : ts} />
                     </div>
                     <div>
-                      <p className="text-white font-bold text-sm">Ready Notification</p>
-                      <p className="text-gray-400 text-xs">Send when order status → Ready</p>
+                      <p className={`${tp} font-bold text-sm`}>Ready Notification</p>
+                      <p className={`${ts} text-xs`}>Send when order status → Ready</p>
                     </div>
                   </div>
                   <div className="flex justify-end">
                     <Toggle
                       checked={settings.auto_send_on_ready_status}
                       onChange={() => setSettings(p => ({ ...p, auto_send_on_ready_status: !p.auto_send_on_ready_status, ...(!p.auto_send_on_ready_status ? { auto_send_on_ready: false } : {}) }))}
+                      isDark={isDark}
                     />
                   </div>
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-gray-700/50 bg-gray-800/60 p-5">
-                <h3 className="text-gray-400 text-xs font-semibold uppercase tracking-wider mb-1">
+              <div className={`rounded-2xl border p-5 ${cardBg}`}>
+                <h3 className={`${ts} text-xs font-semibold uppercase tracking-wider mb-1`}>
                   Enable per order type
                 </h3>
-                <p className="text-gray-500 text-xs mb-4">Edit templates under Templates → Ready / On the Way</p>
+                <p className={`${tt} text-xs mb-4`}>Edit templates under Templates → Ready / On the Way</p>
                 <div className="space-y-3">
                   {[
                     { key: 'walkin',   label: 'Dine-In',   icon: Package,    color: 'from-blue-500 to-cyan-500',     note: 'Table is served' },
@@ -751,14 +763,15 @@ export function WhatsAppPanel() {
                           <t.icon size={14} className="text-white" />
                         </div>
                         <div>
-                          <p className="text-white font-medium text-sm">{t.label}</p>
-                          <p className="text-gray-500 text-xs">{t.note}</p>
+                          <p className={`${tp} font-medium text-sm`}>{t.label}</p>
+                          <p className={`${tt} text-xs`}>{t.note}</p>
                         </div>
                       </div>
                       <Toggle
                         checked={settings[`auto_send_${t.key}_ready`]}
                         onChange={() => setSettings(p => ({ ...p, [`auto_send_${t.key}_ready`]: !p[`auto_send_${t.key}_ready`] }))}
                         disabled={!settings.auto_send_on_ready && !settings.auto_send_on_ready_status}
+                        isDark={isDark}
                       />
                     </div>
                   ))}
@@ -766,50 +779,29 @@ export function WhatsAppPanel() {
               </div>
 
               {/* Review link */}
-              <div className="rounded-2xl border border-gray-700/50 bg-gray-800/60 p-5 space-y-4">
+              <div className={`rounded-2xl border p-5 space-y-4 ${cardBg}`}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl bg-yellow-500/10 flex items-center justify-center">
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${isDark ? 'bg-yellow-500/10' : 'bg-yellow-50'}`}>
                       <Star size={16} className="text-yellow-400" />
                     </div>
                     <div>
-                      <p className="text-white font-semibold text-sm">Include Review Link</p>
-                      <p className="text-gray-400 text-xs">Add {'{review_link}'} to thank-you messages</p>
+                      <p className={`${tp} font-semibold text-sm`}>Include Review Link</p>
+                      <p className={`${ts} text-xs`}>Add {'{review_link}'} to thank-you messages</p>
                     </div>
                   </div>
                   <Toggle
                     checked={settings.include_review_link}
                     onChange={() => setSettings(p => ({ ...p, include_review_link: !p.include_review_link }))}
+                    isDark={isDark}
                   />
                 </div>
 
-                <AnimatePresence>
-                  {settings.include_review_link && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={{ opacity: 0, height: 0 }}
-                    >
-                      <label className="block text-gray-400 text-xs mb-1.5">Review App Base URL</label>
-                      <div className="flex items-center gap-2 bg-gray-900/60 border border-gray-600/40 rounded-xl px-3 py-2.5">
-                        <Link2 size={14} className="text-gray-500 flex-shrink-0" />
-                        <input
-                          type="url"
-                          value={settings.review_base_url}
-                          onChange={e => setSettings(p => ({ ...p, review_base_url: e.target.value }))}
-                          placeholder="https://reviews.yourdomain.com"
-                          className="flex-1 bg-transparent text-white text-sm placeholder-gray-500 focus:outline-none"
-                        />
-                      </div>
-                      <p className="text-gray-500 text-xs mt-1">Link will be: {settings.review_base_url || 'https://...'}/r/{'<token>'}</p>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
+                </div>
 
               {/* Skip logic info */}
-              <div className="rounded-2xl border border-gray-700/30 bg-gray-800/40 p-4">
-                <p className="text-gray-400 text-xs font-semibold mb-3 flex items-center gap-2">
+              <div className={`rounded-2xl border p-4 ${isDark ? 'border-gray-700/30 bg-gray-800/40' : 'border-gray-200 bg-gray-50'}`}>
+                <p className={`${ts} text-xs font-semibold mb-3 flex items-center gap-2`}>
                   <Info size={13} /> Skip rules (auto-applied)
                 </p>
                 <div className="space-y-2">
@@ -823,7 +815,7 @@ export function WhatsAppPanel() {
                   ].map((rule, i) => (
                     <div key={i} className="flex items-start gap-2">
                       <XCircle size={13} className="text-red-400 flex-shrink-0 mt-0.5" />
-                      <p className="text-gray-400 text-xs">{rule}</p>
+                      <p className={`${ts} text-xs`}>{rule}</p>
                     </div>
                   ))}
                 </div>
@@ -843,44 +835,44 @@ export function WhatsAppPanel() {
               className="space-y-4"
             >
               {/* Campaign send delay */}
-              <div className="rounded-2xl border border-gray-700/50 bg-gray-800/60 p-5">
+              <div className={`rounded-2xl border p-5 ${cardBg}`}>
                 <div className="flex items-center gap-3 mb-5">
-                  <div className="w-9 h-9 rounded-xl bg-orange-500/10 flex items-center justify-center">
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${isDark ? 'bg-orange-500/10' : 'bg-orange-50'}`}>
                     <Clock size={16} className="text-orange-400" />
                   </div>
                   <div>
-                    <p className="text-white font-semibold text-sm">Campaign Send Delay</p>
-                    <p className="text-gray-400 text-xs">Random delay between bulk messages to avoid WhatsApp ban</p>
+                    <p className={`${tp} font-semibold text-sm`}>Campaign Send Delay</p>
+                    <p className={`${ts} text-xs`}>Random delay between bulk messages to avoid WhatsApp ban</p>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-gray-400 text-xs mb-2">Minimum delay (seconds)</label>
+                    <label className={`block ${ts} text-xs mb-2`}>Minimum delay (seconds)</label>
                     <input
                       type="number"
                       min={1}
                       max={30}
                       value={settings.campaign_send_delay_min}
                       onChange={e => setSettings(p => ({ ...p, campaign_send_delay_min: parseInt(e.target.value) || 3 }))}
-                      className="w-full bg-gray-900/60 border border-gray-600/40 rounded-xl px-4 py-2.5 text-white text-sm focus:outline-none focus:border-orange-500/60"
+                      className={`w-full rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-orange-500/60 ${inputBg}`}
                     />
                   </div>
                   <div>
-                    <label className="block text-gray-400 text-xs mb-2">Maximum delay (seconds)</label>
+                    <label className={`block ${ts} text-xs mb-2`}>Maximum delay (seconds)</label>
                     <input
                       type="number"
                       min={1}
                       max={60}
                       value={settings.campaign_send_delay_max}
                       onChange={e => setSettings(p => ({ ...p, campaign_send_delay_max: parseInt(e.target.value) || 8 }))}
-                      className="w-full bg-gray-900/60 border border-gray-600/40 rounded-xl px-4 py-2.5 text-white text-sm focus:outline-none focus:border-orange-500/60"
+                      className={`w-full rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-orange-500/60 ${inputBg}`}
                     />
                   </div>
                 </div>
 
-                <div className="mt-3 p-3 bg-orange-500/10 border border-orange-500/20 rounded-xl">
-                  <p className="text-orange-400 text-xs">
+                <div className={`mt-3 p-3 rounded-xl ${isDark ? 'bg-orange-500/10 border border-orange-500/20' : 'bg-orange-50 border border-orange-200'}`}>
+                  <p className={`${isDark ? 'text-orange-400' : 'text-orange-600'} text-xs`}>
                     Current: random {settings.campaign_send_delay_min}–{settings.campaign_send_delay_max}s between each message.
                     Recommended: 3–8s minimum to avoid WhatsApp restrictions.
                   </p>
@@ -888,31 +880,31 @@ export function WhatsAppPanel() {
               </div>
 
               {/* Session info */}
-              <div className="rounded-2xl border border-gray-700/50 bg-gray-800/60 p-5">
-                <h3 className="text-white font-semibold text-sm mb-4 flex items-center gap-2">
-                  <Smartphone size={14} className="text-gray-400" /> Session Info
+              <div className={`rounded-2xl border p-5 ${cardBg}`}>
+                <h3 className={`${tp} font-semibold text-sm mb-4 flex items-center gap-2`}>
+                  <Smartphone size={14} className={ts} /> Session Info
                 </h3>
                 <div className="space-y-3 text-sm">
-                  <div className="flex items-center justify-between py-2 border-b border-gray-700/40">
-                    <span className="text-gray-400">Session storage</span>
-                    <span className="text-gray-300 font-mono text-xs">%AppData%/BizPOS/whatsapp-session</span>
+                  <div className={`flex items-center justify-between py-2 border-b ${isDark ? 'border-gray-700/40' : 'border-gray-200'}`}>
+                    <span className={ts}>Session storage</span>
+                    <span className={`${tb} font-mono text-xs`}>%AppData%/BizPOS/whatsapp-session</span>
                   </div>
-                  <div className="flex items-center justify-between py-2 border-b border-gray-700/40">
-                    <span className="text-gray-400">Auto-reconnect delay</span>
-                    <span className="text-white font-semibold">15 seconds</span>
+                  <div className={`flex items-center justify-between py-2 border-b ${isDark ? 'border-gray-700/40' : 'border-gray-200'}`}>
+                    <span className={ts}>Auto-reconnect delay</span>
+                    <span className={`${tp} font-semibold`}>15 seconds</span>
                   </div>
                   <div className="flex items-center justify-between py-2">
-                    <span className="text-gray-400">Session persistence</span>
-                    <span className="text-green-400 font-semibold">Survives app restart</span>
+                    <span className={ts}>Session persistence</span>
+                    <span className={`${isDark ? 'text-green-400' : 'text-green-600'} font-semibold`}>Survives app restart</span>
                   </div>
                 </div>
               </div>
 
               {/* Warning */}
-              <div className="rounded-2xl border border-yellow-500/20 bg-yellow-500/5 p-4 flex items-start gap-3">
-                <AlertCircle size={16} className="text-yellow-400 flex-shrink-0 mt-0.5" />
+              <div className={`rounded-2xl border p-4 flex items-start gap-3 ${isDark ? 'border-yellow-500/20 bg-yellow-500/5' : 'border-yellow-200 bg-yellow-50'}`}>
+                <AlertCircle size={16} className={`${isDark ? 'text-yellow-400' : 'text-yellow-500'} flex-shrink-0 mt-0.5`} />
                 <div>
-                  <p className="text-yellow-400 font-semibold text-sm mb-1">Important Notes</p>
+                  <p className={`${isDark ? 'text-yellow-400' : 'text-yellow-600'} font-semibold text-sm mb-1`}>Important Notes</p>
                   <ul className="space-y-1">
                     {[
                       'Keep your phone connected to internet while the app is running',
@@ -920,8 +912,8 @@ export function WhatsAppPanel() {
                       'Do not use your WhatsApp account on too many devices',
                       'Sending too many messages too fast can result in a temporary ban',
                     ].map((n, i) => (
-                      <li key={i} className="text-yellow-400/70 text-xs flex items-start gap-2">
-                        <span className="mt-1 w-1 h-1 rounded-full bg-yellow-400/60 flex-shrink-0" />
+                      <li key={i} className={`${isDark ? 'text-yellow-400/70' : 'text-yellow-600/80'} text-xs flex items-start gap-2`}>
+                        <span className={`mt-1 w-1 h-1 rounded-full flex-shrink-0 ${isDark ? 'bg-yellow-400/60' : 'bg-yellow-500/60'}`} />
                         {n}
                       </li>
                     ))}
@@ -939,17 +931,18 @@ export function WhatsAppPanel() {
 // ─── Standalone Page (navigated to directly via /settings/whatsapp) ──────────
 function WhatsAppSettingsStandalone() {
   const router = useRouter()
+  const isDark = themeManager.isDark()
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-slate-900 to-gray-900">
-      <div className="sticky top-0 z-10 bg-gray-900/80 backdrop-blur-md border-b border-gray-700/50">
+    <div className={`min-h-screen ${isDark ? 'bg-gradient-to-br from-gray-900 via-slate-900 to-gray-900' : 'bg-gray-50'}`}>
+      <div className={`sticky top-0 z-10 backdrop-blur-md border-b ${isDark ? 'bg-gray-900/80 border-gray-700/50' : 'bg-white/80 border-gray-200'}`}>
         <div className="max-w-5xl mx-auto px-6 h-14 flex items-center gap-3">
           <button
             onClick={() => router.back()}
-            className="p-2 rounded-xl text-gray-400 hover:text-white hover:bg-gray-700/50 transition-all"
+            className={`p-2 rounded-xl transition-all ${isDark ? 'text-gray-400 hover:text-white hover:bg-gray-700/50' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'}`}
           >
             <ArrowLeft size={18} />
           </button>
-          <span className="text-white font-semibold text-sm">WhatsApp Settings</span>
+          <span className={`${isDark ? 'text-white' : 'text-gray-900'} font-semibold text-sm`}>WhatsApp Settings</span>
         </div>
       </div>
       <div className="max-w-5xl mx-auto px-6 py-6">

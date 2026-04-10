@@ -6,6 +6,7 @@
 const log = require('electron-log');
 const whatsAppClient = require('./whatsappClient');
 const { formatPhoneForWhatsApp } = require('./phoneFormatter');
+const { generateReceiptImage, generateBalanceImage } = require('./receiptImageGenerator');
 
 function registerWhatsAppHandlers(ipcMain, getMainWindow) {
   // ─── Connection ───────────────────────────────────────────
@@ -91,6 +92,73 @@ function registerWhatsAppHandlers(ipcMain, getMainWindow) {
       return { exists: result };
     } catch (err) {
       return { exists: false, error: err.message };
+    }
+  });
+
+  // ─── Send receipt image with message ───────────────────────
+
+  ipcMain.handle('whatsapp:send-receipt-image', async (_event, { phone, message, receiptData }) => {
+    try {
+      log.info('[WA Handler] send-receipt-image called with:', JSON.stringify({
+        phone,
+        itemsCount: receiptData?.items?.length,
+        items: receiptData?.items,
+        total: receiptData?.total,
+      }));
+
+      const formatted = formatPhoneForWhatsApp(phone);
+      if (!formatted) {
+        return { success: false, error: 'Invalid phone number format' };
+      }
+
+      // Generate receipt image
+      const imagePath = generateReceiptImage(receiptData);
+      log.info(`[WA Handler] Receipt image generated: ${imagePath}`);
+
+      // Send image with message as caption
+      await whatsAppClient.sendMedia(formatted, imagePath, message);
+
+      // Clean up temp file
+      try {
+        const fs = require('fs');
+        fs.unlinkSync(imagePath);
+      } catch (_) {}
+
+      return { success: true, phoneSent: formatted };
+    } catch (err) {
+      log.error('[WA Handler] send-receipt-image error:', err.message);
+      return { success: false, error: err.message };
+    }
+  });
+
+  // ─── Send balance statement image (manual/bulk sends) ─────
+
+  ipcMain.handle('whatsapp:send-balance-image', async (_event, { phone, message, balanceData }) => {
+    try {
+      log.info('[WA Handler] send-balance-image called for:', balanceData?.customerName);
+
+      const formatted = formatPhoneForWhatsApp(phone);
+      if (!formatted) {
+        return { success: false, error: 'Invalid phone number format' };
+      }
+
+      // Generate balance statement image
+      const imagePath = generateBalanceImage(balanceData);
+      log.info(`[WA Handler] Balance image generated: ${imagePath}`);
+
+      // Send image with message as caption
+      await whatsAppClient.sendMedia(formatted, imagePath, message);
+
+      // Clean up temp file
+      try {
+        const fs = require('fs');
+        fs.unlinkSync(imagePath);
+      } catch (_) {}
+
+      return { success: true, phoneSent: formatted };
+    } catch (err) {
+      log.error('[WA Handler] send-balance-image error:', err.message);
+      return { success: false, error: err.message };
     }
   });
 

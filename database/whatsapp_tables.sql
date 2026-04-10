@@ -25,7 +25,6 @@ CREATE TABLE IF NOT EXISTS public.whatsapp_settings (
 
   -- Review link
   include_review_link boolean NOT NULL DEFAULT true,
-  review_base_url text NULL,
 
   -- Message templates (variables: {customer_name} {order_number} {order_type} {total_amount} {business_name} {review_link})
   walkin_template text NOT NULL DEFAULT 'Thank you {customer_name} for dining with us! 🍽️
