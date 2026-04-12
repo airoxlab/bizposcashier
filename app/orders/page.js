@@ -62,6 +62,7 @@ import ConvertToDeliveryModal from "../../components/delivery/ConvertToDeliveryM
 import ConvertToTakeawayModal from "../../components/delivery/ConvertToTakeawayModal";
 import NotificationSystem, { notify } from "../../components/ui/NotificationSystem";
 import { getOrderItemsWithChanges } from '../../lib/utils/orderChangesTracker';
+import SendBillButton from '../../components/pos/SendBillButton';
 
 const OrderSkeleton = ({ isDark }) => {
   return (
@@ -2448,6 +2449,7 @@ export default function OrdersPage() {
             {showPaymentView && selectedOrder.payment_status === 'Pending' ? (
               <InlinePaymentSection
                 order={selectedOrder}
+                orderType={selectedOrder?.order_type}
                 defaultServiceCharge={(() => { try { return JSON.parse(localStorage.getItem('pos_default_service_charge') || '{}') } catch(e) { return null } })()}
                 onPaymentComplete={handlePaymentComplete}
                 onCancel={() => setShowPaymentView(false)}
@@ -2531,6 +2533,9 @@ export default function OrdersPage() {
                     <Package className="w-3.5 h-3.5" />
                     <span>{isPrinting ? "Printing..." : "Print Token"}</span>
                   </motion.button>
+
+                  {/* Send Bill via WhatsApp (Customer Account only) */}
+                  <SendBillButton order={selectedOrder} size="md" />
 
                   {/* Status Change Buttons */}
                   {selectedOrder.order_status === "Pending" && (

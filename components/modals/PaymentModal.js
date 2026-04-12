@@ -21,7 +21,8 @@ export default function PaymentModal({
   order,
   onPaymentComplete,
   classes,
-  isDark
+  isDark,
+  orderType = null
 }) {
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState(null)
   const [cashAmount, setCashAmount] = useState('')
@@ -355,7 +356,8 @@ export default function PaymentModal({
                 )}
               </div>
 
-              {/* Service Charge Section */}
+              {/* Service Charge Section - Walkin orders only */}
+              {(orderType === 'walkin' || order?.order_type === 'walkin') && (
               <div className={`${classes.card} rounded-lg ${classes.shadow} shadow-sm ${classes.border} border p-3`}>
                 <div className="flex items-center justify-between mb-2">
                   <h3 className={`text-sm font-bold ${classes.textPrimary} flex items-center`}>
@@ -413,6 +415,7 @@ export default function PaymentModal({
                   </div>
                 )}
               </div>
+              )}
 
               {/* Payment Methods - Compact */}
               <div className={`${classes.card} rounded-lg ${classes.shadow} shadow-sm ${classes.border} border p-3 flex-1 flex flex-col overflow-hidden`}>

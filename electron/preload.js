@@ -87,6 +87,8 @@ const api = {
     getStatus: () => ipcRenderer.invoke('whatsapp:status'),
     sendOrderMessage: (data) => ipcRenderer.invoke('whatsapp:send-order-message', data),
     sendCampaignMessage: (data) => ipcRenderer.invoke('whatsapp:send-campaign-message', data),
+    sendReceiptImage: (data) => ipcRenderer.invoke('whatsapp:send-receipt-image', data),
+    sendBalanceImage: (data) => ipcRenderer.invoke('whatsapp:send-balance-image', data),
     checkNumber: (data) => ipcRenderer.invoke('whatsapp:check-number', data),
 
     onQR: (cb) => ipcRenderer.on('whatsapp:qr', (_e, d) => cb(d)),

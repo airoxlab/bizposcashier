@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
-import { Coffee, RefreshCw, ArrowLeft, Table2, ClipboardList, X, Truck, AlertCircle, User, ShoppingBag, Layers, LayoutList, ChevronDown, ChevronRight } from 'lucide-react'
+import { Coffee, RefreshCw, ArrowLeft, Table2, ClipboardList, X, Truck, AlertCircle, User, ShoppingBag, Layers, LayoutList, ChevronDown, ChevronRight, MapPin } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { authManager } from '../../lib/authManager'
 import { cacheManager } from '../../lib/cacheManager'
@@ -162,7 +162,8 @@ export default function WalkinOrdersSidebar({
             customers (
               id,
               full_name,
-              phone
+              phone,
+              addressline
             ),
             tables (
               id,
@@ -695,6 +696,16 @@ export default function WalkinOrdersSidebar({
                     <Table2 className={`w-3 h-3 ${isDark ? 'text-purple-400' : 'text-purple-600'}`} />
                     <span className={`text-xs ${isDark ? 'text-purple-400' : 'text-purple-600'} font-medium`}>
                       {order.tables.table_name || `Table ${order.tables.table_number}`}
+                    </span>
+                  </div>
+                )}
+
+                {/* Show address for delivery orders */}
+                {effectiveOrderType === 'delivery' && (order.delivery_address || order.customers?.addressline) && (
+                  <div className={`flex items-start gap-1 mt-1.5 pt-1.5 border-t ${isDark ? 'border-gray-600' : 'border-gray-200'}`}>
+                    <MapPin className={`w-3 h-3 mt-0.5 flex-shrink-0 ${isDark ? 'text-green-400' : 'text-green-600'}`} />
+                    <span className={`text-xs ${isDark ? 'text-green-400' : 'text-green-600'} line-clamp-2`}>
+                      {order.delivery_address || order.customers?.addressline}
                     </span>
                   </div>
                 )}
