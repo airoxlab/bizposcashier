@@ -4,11 +4,47 @@
  * Returns a temporary file path for sending via WhatsApp.
  */
 
-const { createCanvas } = require('canvas');
+const { createCanvas, loadImage } = require('canvas');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const log = require('electron-log');
+const https = require('https');
+const http = require('http');
+
+// ── Logo cache (avoids re-downloading for bulk sends) ──
+let _logoCache = { url: null, buffer: null };
+
+/**
+ * Download an image URL and return a canvas Image object.
+ * Returns null on any failure (network, invalid image, etc.)
+ */
+async function fetchLogo(url) {
+  if (!url) return null;
+  try {
+    // Return cached version if same URL
+    if (_logoCache.url === url && _logoCache.buffer) {
+      return await loadImage(_logoCache.buffer);
+    }
+
+    const buffer = await new Promise((resolve, reject) => {
+      const client = url.startsWith('https') ? https : http;
+      client.get(url, { timeout: 8000 }, (res) => {
+        if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode}`));
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+        res.on('error', reject);
+      }).on('error', reject);
+    });
+
+    _logoCache = { url, buffer };
+    return await loadImage(buffer);
+  } catch (e) {
+    log.warn('[Receipt] Failed to load logo:', e.message);
+    return null;
+  }
+}
 
 // ── HD 2x resolution constants ──
 const SCALE = 2;
@@ -49,7 +85,7 @@ function s(px) { return px * SCALE; }
 /**
  * Generate a professional HD receipt image.
  */
-function generateReceiptImage(data) {
+async function generateReceiptImage(data) {
   log.info('[Receipt] Generating HD receipt with data:', JSON.stringify({
     businessName: data.businessName,
     orderNumber: data.orderNumber,
@@ -62,9 +98,22 @@ function generateReceiptImage(data) {
 
   const items = data.items || [];
 
+  // ── Load logo if provided ──
+  const logoImg = await fetchLogo(data.logoUrl);
+  const LOGO_MAX_H = 60; // max logo height in design pixels
+  let logoDrawH = 0;
+  let logoDrawW = 0;
+  if (logoImg) {
+    const aspect = logoImg.width / logoImg.height;
+    logoDrawH = LOGO_MAX_H;
+    logoDrawW = LOGO_MAX_H * aspect;
+    if (logoDrawW > 180) { logoDrawW = 180; logoDrawH = logoDrawW / aspect; }
+  }
+
   // ── Calculate total height ──
   let h = 0;
   h += s(50);   // top padding
+  if (logoImg) { h += s(logoDrawH + 16); } // logo + gap
   h += s(42);   // business name
   h += s(8);    // gap
   h += s(18);   // tagline
@@ -94,6 +143,7 @@ function generateReceiptImage(data) {
   if (data.discount > 0) h += s(28);
   if (data.serviceCharge > 0) h += s(28);
   if (data.deliveryCharges > 0) h += s(28);
+  if (data.loyaltyPoints > 0) h += s(28);
   h += s(20);   // gap
 
   // Grand total bar
@@ -182,6 +232,15 @@ function generateReceiptImage(data) {
   // ════════════════════════════════════════════════════════════
   //  HEADER
   // ════════════════════════════════════════════════════════════
+
+  // Logo (centered above business name)
+  if (logoImg) {
+    const lw = s(logoDrawW);
+    const lh = s(logoDrawH);
+    const lx = CENTER - lw / 2;
+    ctx.drawImage(logoImg, lx, y - s(10), lw, lh);
+    y += s(logoDrawH + 16);
+  }
 
   // Business name — large, bold, centered
   drawText(
@@ -312,6 +371,10 @@ function generateReceiptImage(data) {
     infoRow('Delivery:', `+ ${fmt(data.deliveryCharges)}`, y, { size: 13, valueColor: C.textMuted, valueWeight: '600' });
     y += s(28);
   }
+  if (data.loyaltyPoints > 0) {
+    infoRow('Loyalty Points:', String(data.loyaltyPoints), y, { size: 13, valueColor: C.green, valueWeight: '600' });
+    y += s(28);
+  }
 
   y += s(12);
 
@@ -395,16 +458,29 @@ function generateReceiptImage(data) {
  * Generate a clean balance statement image (for manual/bulk sends).
  * Shows only business name, customer info, date, and outstanding balance.
  */
-function generateBalanceImage(data) {
+async function generateBalanceImage(data) {
   log.info('[Receipt] Generating balance statement with data:', JSON.stringify({
     businessName: data.businessName,
     customerName: data.customerName,
     balance: data.balance,
   }));
 
+  // ── Load logo if provided ──
+  const logoImg = await fetchLogo(data.logoUrl);
+  const LOGO_MAX_H = 60;
+  let logoDrawH = 0;
+  let logoDrawW = 0;
+  if (logoImg) {
+    const aspect = logoImg.width / logoImg.height;
+    logoDrawH = LOGO_MAX_H;
+    logoDrawW = LOGO_MAX_H * aspect;
+    if (logoDrawW > 180) { logoDrawW = 180; logoDrawH = logoDrawW / aspect; }
+  }
+
   // ── Calculate total height ──
   let h = 0;
   h += s(50);   // top padding
+  if (logoImg) { h += s(logoDrawH + 16); } // logo + gap
   h += s(42);   // business name
   h += s(8);
   h += s(18);   // tagline
@@ -483,6 +559,15 @@ function generateBalanceImage(data) {
   // ════════════════════════════════════════════════════════════
   //  HEADER
   // ════════════════════════════════════════════════════════════
+
+  // Logo (centered above business name)
+  if (logoImg) {
+    const lw = s(logoDrawW);
+    const lh = s(logoDrawH);
+    const lx = CENTER - lw / 2;
+    ctx.drawImage(logoImg, lx, y - s(10), lw, lh);
+    y += s(logoDrawH + 16);
+  }
 
   drawText(
     (data.businessName || 'BIZPOS').toLowerCase(),

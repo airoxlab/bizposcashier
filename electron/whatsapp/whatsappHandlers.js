@@ -112,7 +112,7 @@ function registerWhatsAppHandlers(ipcMain, getMainWindow) {
       }
 
       // Generate receipt image
-      const imagePath = generateReceiptImage(receiptData);
+      const imagePath = await generateReceiptImage(receiptData);
       log.info(`[WA Handler] Receipt image generated: ${imagePath}`);
 
       // Send image with message as caption
@@ -143,7 +143,7 @@ function registerWhatsAppHandlers(ipcMain, getMainWindow) {
       }
 
       // Generate balance statement image
-      const imagePath = generateBalanceImage(balanceData);
+      const imagePath = await generateBalanceImage(balanceData);
       log.info(`[WA Handler] Balance image generated: ${imagePath}`);
 
       // Send image with message as caption

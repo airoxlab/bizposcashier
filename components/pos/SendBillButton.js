@@ -13,16 +13,60 @@
  *   className  – optional extra classes
  */
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { CheckCircle, MessageSquare, Loader2 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { authManager } from '../../lib/authManager'
+import { permissionManager } from '../../lib/permissionManager'
 import { notify } from '../ui/NotificationSystem'
 
 export default function SendBillButton({ order, size = 'md', className = '' }) {
   // 'idle' | 'queued' | 'sent'
   const [status, setStatus] = useState('idle')
+  const [serviceEnabled, setServiceEnabled] = useState(true)
   const sendingRef = useRef(false)
+
+  const isAdmin = authManager.getRole() === 'admin'
+
+  // Check service_enabled + whether auto-send already sent for this order
+  useEffect(() => {
+    async function checkSettings() {
+      try {
+        const userId = authManager.getCurrentUser()?.id
+        if (!userId) return
+
+        const { data } = await supabase
+          .from('customer_account_settings')
+          .select('service_enabled, auto_send_on_account_payment')
+          .eq('user_id', userId)
+          .single()
+
+        if (data && data.service_enabled === false) {
+          setServiceEnabled(false)
+        }
+
+        // If auto-send is enabled, check if a message was already sent for this order
+        if (data?.auto_send_on_account_payment && order?.order_number) {
+          const { data: existingLog } = await supabase
+            .from('customer_account_send_logs')
+            .select('id')
+            .eq('user_id', userId)
+            .eq('order_number', order.order_number)
+            .eq('trigger', 'auto')
+            .eq('status', 'sent')
+            .limit(1)
+            .maybeSingle()
+
+          if (existingLog) {
+            setStatus('sent')
+            // Auto-reset after a few seconds so button becomes usable for re-send
+            setTimeout(() => setStatus('idle'), 5000)
+          }
+        }
+      } catch (_) {}
+    }
+    checkSettings()
+  }, [order?.order_number])
 
   // Only show for Customer Account orders with a customer
   if (!order) return null
@@ -34,6 +78,12 @@ export default function SendBillButton({ order, size = 'md', className = '' }) {
   const customerName = cust?.full_name || order.customer_name || 'Customer'
   const customerPhone = cust?.phone || order.customer_phone
   if (!customerId || !customerPhone) return null
+
+  // If service is disabled: hide for cashier, show warning for admin
+  if (!serviceEnabled && !isAdmin) return null
+
+  // If cashier doesn't have SEND_ACCOUNT_BILL permission, hide button
+  if (!isAdmin && !permissionManager.hasPermission('SEND_ACCOUNT_BILL')) return null
 
   function handleClick(e) {
     if (e) e.stopPropagation()
@@ -50,6 +100,14 @@ export default function SendBillButton({ order, size = 'md', className = '' }) {
   }
 
   async function sendBillInBackground() {
+    // Block sending if service is disabled
+    if (!serviceEnabled) {
+      notify.error('Customer Account Notifications are disabled by admin')
+      setStatus('idle')
+      sendingRef.current = false
+      return
+    }
+
     const isElectron = typeof window !== 'undefined' && !!window.electronAPI?.whatsapp
     if (!isElectron) {
       notify.error('WhatsApp only works in the desktop app')
@@ -97,17 +155,19 @@ export default function SendBillButton({ order, size = 'md', className = '' }) {
         } catch (_) {}
       }
 
-      // Load user's template + receipt image toggle from settings
+      // Load user's template + receipt image toggle + logo toggle from settings
       let template = null
       let sendReceiptImage = false
+      let includeLogoOnImages = true
       try {
         const { data: settings } = await supabase
           .from('customer_account_settings')
-          .select('account_template, send_receipt_image')
+          .select('account_template, send_receipt_image, include_logo_on_images')
           .eq('user_id', userId)
           .single()
         if (settings?.account_template) template = settings.account_template
         if (settings?.send_receipt_image) sendReceiptImage = true
+        if (settings?.include_logo_on_images === false) includeLogoOnImages = false
       } catch (_) {}
 
       // Fallback template
@@ -188,15 +248,17 @@ export default function SendBillButton({ order, size = 'md', className = '' }) {
         } catch (_) {}
       }
 
-      // Get business name
+      // Get business name + logo
       let businessName = ''
+      let storeLogo = null
       try {
         const { data: profile } = await supabase
           .from('users')
-          .select('store_name')
+          .select('store_name, store_logo')
           .eq('id', userId)
           .single()
         if (profile?.store_name) businessName = profile.store_name
+        if (profile?.store_logo && includeLogoOnImages) storeLogo = profile.store_logo
       } catch (_) {}
 
       // Build message
@@ -246,6 +308,7 @@ export default function SendBillButton({ order, size = 'md', className = '' }) {
           message,
           receiptData: {
             businessName,
+            logoUrl: storeLogo,
             orderNumber: order.order_number || '',
             orderDate,
             orderType: order.order_type || order.orderType || 'walkin',
@@ -325,15 +388,19 @@ export default function SendBillButton({ order, size = 'md', className = '' }) {
   }
 
   const isBusy = status === 'sending'
+  const isDisabled = !serviceEnabled
 
   // ── Size variants ──
   if (size === 'sm') {
     return (
       <button
         onClick={handleClick}
-        title="Send bill via WhatsApp"
+        disabled={isDisabled}
+        title={isDisabled ? 'Account notifications disabled by admin' : 'Send bill via WhatsApp'}
         className={`flex items-center gap-1 px-1.5 py-1.5 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap ${
-          status === 'sent'
+          isDisabled
+            ? 'bg-gray-400 cursor-not-allowed opacity-50'
+            : status === 'sent'
             ? 'bg-green-600'
             : isBusy
             ? 'bg-purple-400 pointer-events-none cursor-not-allowed'
@@ -356,8 +423,12 @@ export default function SendBillButton({ order, size = 'md', className = '' }) {
     return (
       <button
         onClick={handleClick}
+        disabled={isDisabled}
+        title={isDisabled ? 'Account notifications disabled by admin' : ''}
         className={`px-6 py-3 font-semibold rounded-xl transition-all duration-200 flex items-center justify-center w-full ${
-          status === 'sent'
+          isDisabled
+            ? 'bg-gray-400 text-white cursor-not-allowed opacity-50'
+            : status === 'sent'
             ? 'bg-green-600 text-white'
             : isBusy
             ? 'bg-purple-400 text-white pointer-events-none cursor-not-allowed'
@@ -388,8 +459,12 @@ export default function SendBillButton({ order, size = 'md', className = '' }) {
   return (
     <button
       onClick={handleClick}
+      disabled={isDisabled}
+      title={isDisabled ? 'Account notifications disabled by admin' : ''}
       className={`flex items-center space-x-1.5 px-3 py-2 text-white rounded-lg transition-all font-medium text-sm ${
-        status === 'sent'
+        isDisabled
+          ? 'bg-gray-400 cursor-not-allowed opacity-50'
+          : status === 'sent'
           ? 'bg-green-500'
           : isBusy
           ? 'bg-purple-400 pointer-events-none cursor-not-allowed'
