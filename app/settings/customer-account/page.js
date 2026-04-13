@@ -14,9 +14,6 @@ import {
   Eye,
   EyeOff,
   Info,
-  Plus,
-  Trash2,
-  Image as ImageIcon,
   MessageSquare,
   Search,
   ChevronDown,
@@ -24,16 +21,18 @@ import {
   CheckCircle,
   XCircle,
   AlertCircle,
+  AlertTriangle,
+  Power,
+  ShieldAlert,
   RefreshCw,
-  Edit2,
   X,
   Users,
   Square,
   CheckSquare,
-  Minus
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { authManager } from '../../../lib/authManager'
+import { permissionManager } from '../../../lib/permissionManager'
 import themeManager from '../../../lib/themeManager'
 import { notify } from '../../../components/ui/NotificationSystem'
 
@@ -43,7 +42,11 @@ const TEMPLATE_VARS = [
   { label: '{phone}', desc: 'Customer phone' },
   { label: '{order_number}', desc: 'Order #' },
   { label: '{order_total}', desc: 'Current order total' },
+  { label: '{subtotal}', desc: 'Order subtotal before charges' },
   { label: '{order_items}', desc: 'List of items ordered' },
+  { label: '{discount}', desc: 'Discount amount' },
+  { label: '{service_charge}', desc: 'Service charges' },
+  { label: '{loyalty_points}', desc: 'Loyalty points earned' },
   { label: '{previous_balance}', desc: 'Balance before this order' },
   { label: '{new_balance}', desc: 'Balance after this order' },
   { label: '{order_date}', desc: 'Date of order' },
@@ -128,33 +131,33 @@ export function CustomerAccountPanel() {
   const [previewVisible, setPreviewVisible] = useState(false)
   const textareaRef = useRef(null)
 
+  // Role detection
+  const isAdmin = authManager.getRole() === 'admin'
+  const isCashier = !isAdmin
+
   // Settings state
   const [settings, setSettings] = useState({
-    auto_send_on_account_payment: true,
-    send_receipt_image: true,
+    service_enabled: false,
+    auto_send_on_account_payment: false,
+    send_receipt_image: false,
+    include_logo_on_images: true,
     account_template: DEFAULT_TEMPLATE,
   })
 
   // Templates list state
   const [templates, setTemplates] = useState([])
-  const [editingTemplate, setEditingTemplate] = useState(null)
-  const [showAddTemplate, setShowAddTemplate] = useState(false)
-  const [newTemplateName, setNewTemplateName] = useState('')
-  const [newTemplateBody, setNewTemplateBody] = useState('')
 
   // Manual send state
   const [manualPhone, setManualPhone] = useState('')
   const [manualMessage, setManualMessage] = useState('Dear {customer_name},\n\nThis is a reminder that your current outstanding balance is Rs.{balance}.\n\nPlease arrange payment at your earliest convenience.\n\nThank you!\n— {business_name}')
   const [manualImage, setManualImage] = useState(null)
   const [manualSendReceiptImage, setManualSendReceiptImage] = useState(false)
-  const [manualSelectedTemplate, setManualSelectedTemplate] = useState(null)
   const [isSending, setIsSending] = useState(false)
   const [selectedCustomer, setSelectedCustomer] = useState(null)
   const [customerSearch, setCustomerSearch] = useState('')
   const [customerResults, setCustomerResults] = useState([])
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
   const [searchingCustomers, setSearchingCustomers] = useState(false)
-  const fileInputRef = useRef(null)
   const customerSearchRef = useRef(null)
   const searchTimeoutRef = useRef(null)
   const manualTextareaRef = useRef(null)
@@ -206,12 +209,6 @@ export function CustomerAccountPanel() {
     }
   }, [activeTab, userId])
 
-  // ── Ensure templates are loaded for send/bulk tabs ──────────
-  useEffect(() => {
-    if ((activeTab === 'send' || activeTab === 'bulk') && userId && templates.length === 0) {
-      loadTemplates()
-    }
-  }, [activeTab, userId])
 
   // ── Close customer dropdown on outside click ──────────────
   useEffect(() => {
@@ -360,13 +357,15 @@ export function CustomerAccountPanel() {
 
     // Load business name for template
     let businessName = 'Our Business'
+    let storeLogo = null
     try {
       const { data: profile } = await supabase
         .from('users')
-        .select('store_name')
+        .select('store_name, store_logo')
         .eq('id', userId)
         .single()
       if (profile?.store_name) businessName = profile.store_name
+      if (profile?.store_logo && settings.include_logo_on_images) storeLogo = profile.store_logo
     } catch (_) {}
 
     for (let i = 0; i < selectedCustomers.length; i++) {
@@ -397,6 +396,7 @@ export function CustomerAccountPanel() {
             message,
             balanceData: {
               businessName,
+              logoUrl: storeLogo,
               customerName: customer.full_name || 'Customer',
               customerPhone: customer.phone || '',
               balance: Number(customer.account_balance || 0),
@@ -513,8 +513,10 @@ export function CustomerAccountPanel() {
     try {
       const payload = {
         user_id: userId,
+        service_enabled: settings.service_enabled,
         auto_send_on_account_payment: settings.auto_send_on_account_payment,
         send_receipt_image: settings.send_receipt_image,
+        include_logo_on_images: settings.include_logo_on_images,
         account_template: settings.account_template,
         updated_at: new Date().toISOString(),
       }
@@ -549,101 +551,6 @@ export function CustomerAccountPanel() {
     }
   }
 
-  async function handleAddTemplate() {
-    if (!newTemplateName.trim() || !newTemplateBody.trim()) {
-      notify.error('Template name and body are required')
-      return
-    }
-
-    try {
-      const { error } = await supabase
-        .from('customer_account_templates')
-        .insert({
-          user_id: userId,
-          name: newTemplateName.trim(),
-          body: newTemplateBody.trim(),
-          is_default: false,
-        })
-
-      if (error) throw error
-
-      notify.success('Template added!')
-      setNewTemplateName('')
-      setNewTemplateBody('')
-      setShowAddTemplate(false)
-      loadTemplates()
-    } catch (e) {
-      notify.error('Failed to add template')
-    }
-  }
-
-  async function handleUpdateTemplate(template) {
-    try {
-      const { error } = await supabase
-        .from('customer_account_templates')
-        .update({
-          name: template.name,
-          body: template.body,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', template.id)
-
-      if (error) throw error
-
-      notify.success('Template updated!')
-      setEditingTemplate(null)
-      loadTemplates()
-    } catch (e) {
-      notify.error('Failed to update template')
-    }
-  }
-
-  async function handleDeleteTemplate(id) {
-    try {
-      const { error } = await supabase
-        .from('customer_account_templates')
-        .delete()
-        .eq('id', id)
-        .eq('is_default', false)
-
-      if (error) throw error
-
-      notify.success('Template deleted!')
-      loadTemplates()
-    } catch (e) {
-      notify.error('Failed to delete template')
-    }
-  }
-
-  async function handleSetDefault(id) {
-    try {
-      // Unset all defaults first
-      await supabase
-        .from('customer_account_templates')
-        .update({ is_default: false })
-        .eq('user_id', userId)
-
-      // Set new default
-      const { error } = await supabase
-        .from('customer_account_templates')
-        .update({ is_default: true })
-        .eq('id', id)
-
-      if (error) throw error
-
-      // Also update the settings template to match
-      const template = templates.find(t => t.id === id)
-      if (template) {
-        setSettings(prev => ({ ...prev, account_template: template.body }))
-      }
-
-      notify.success('Default template updated!')
-      loadTemplates()
-    } catch (e) {
-      notify.error('Failed to set default template')
-    }
-  }
-
   async function handleManualSend() {
     if (!manualPhone.trim()) {
       notify.error('Phone number is required')
@@ -670,13 +577,15 @@ export function CustomerAccountPanel() {
 
       // Resolve template variables in message
       let businessName = ''
+      let storeLogo = null
       try {
         const { data: profile } = await supabase
           .from('users')
-          .select('store_name')
+          .select('store_name, store_logo')
           .eq('id', userId)
           .single()
         if (profile?.store_name) businessName = profile.store_name
+        if (profile?.store_logo && settings.include_logo_on_images) storeLogo = profile.store_logo
       } catch (_) {}
 
       const resolvedMessage = manualMessage
@@ -695,6 +604,7 @@ export function CustomerAccountPanel() {
           message: resolvedMessage,
           balanceData: {
             businessName,
+            logoUrl: storeLogo,
             customerName: selectedCustomer?.full_name || 'Customer',
             customerPhone: selectedCustomer?.phone || manualPhone || '',
             balance: Number(selectedCustomer?.account_balance || 0),
@@ -719,9 +629,7 @@ export function CustomerAccountPanel() {
 
         notify.success('Message sent successfully!')
         handleClearCustomer()
-        setManualMessage('')
         setManualImage(null)
-        setManualSelectedTemplate(null)
       } else {
         throw new Error(result?.error || 'Failed to send')
       }
@@ -795,12 +703,13 @@ export function CustomerAccountPanel() {
     return d.toLocaleDateString('en-PK', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
   }
 
-  const tabs = [
+  const allTabs = [
     { key: 'templates', label: 'Templates', icon: FileText },
     { key: 'send', label: 'Manual Send', icon: Send },
     { key: 'bulk', label: 'Bulk Send', icon: Users },
     { key: 'logs', label: 'Send Logs', icon: Clock },
   ]
+  const tabs = allTabs.filter(t => !t.adminOnly || isAdmin)
 
   return (
     <div className="rounded-2xl overflow-hidden">
@@ -815,27 +724,82 @@ export function CustomerAccountPanel() {
             <p className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Auto-send receipts when orders are placed on account</p>
           </div>
         </div>
-        <button
-          onClick={saveSettings}
-          disabled={isSaving || !settingsLoaded}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-purple-500 to-indigo-600 text-white text-sm font-semibold hover:shadow-lg hover:shadow-purple-500/25 transition-all disabled:opacity-60"
-        >
-          {isSaving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
-          Save Settings
-        </button>
+        {isAdmin && (
+          <button
+            onClick={saveSettings}
+            disabled={isSaving || !settingsLoaded}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-purple-500 to-indigo-600 text-white text-sm font-semibold hover:shadow-lg hover:shadow-purple-500/25 transition-all disabled:opacity-60"
+          >
+            {isSaving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+            Save Settings
+          </button>
+        )}
       </div>
 
+      {/* ── Cashier: Service disabled banner ── */}
+      {isCashier && !settings.service_enabled && (
+        <div className={`flex items-start gap-3 p-4 rounded-2xl border mb-6 ${
+          isDark ? 'bg-red-500/10 border-red-500/30' : 'bg-red-50 border-red-200'
+        }`}>
+          <ShieldAlert size={18} className="text-red-500 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className={`text-sm font-semibold ${isDark ? 'text-red-400' : 'text-red-700'}`}>
+              Customer Account Notifications are disabled
+            </p>
+            <p className={`text-xs mt-1 ${isDark ? 'text-red-400/70' : 'text-red-600'}`}>
+              Your admin has turned off this service. "Send Bill" buttons and auto-send are inactive. Contact your admin to re-enable.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ── Admin: Master service toggle ── */}
+      {isAdmin && (
+        <div className={`rounded-2xl border p-4 mb-4 flex items-center justify-between ${
+          settings.service_enabled
+            ? isDark ? 'border-indigo-500/30 bg-indigo-500/10' : 'border-indigo-200 bg-indigo-50'
+            : isDark ? 'border-red-500/30 bg-red-500/10' : 'border-red-200 bg-red-50'
+        }`}>
+          <div className="flex items-center gap-3">
+            <Power size={18} className={settings.service_enabled ? 'text-indigo-400' : 'text-red-500'} />
+            <div>
+              <p className={`text-sm font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>Use Customer Account Notifications</p>
+              <p className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                Master toggle — when OFF, all bill sending and auto-send are disabled for all cashiers
+              </p>
+            </div>
+          </div>
+          <Toggle
+            checked={settings.service_enabled}
+            onChange={() => setSettings(prev => ({ ...prev, service_enabled: !prev.service_enabled }))}
+          />
+        </div>
+      )}
+
       {/* ── Global toggles ── */}
-      <div className={`rounded-2xl border ${isDark ? 'border-gray-700/50 bg-gray-800/60' : 'border-gray-200 bg-white'} p-4 mb-6 space-y-3`}>
+      <div className={`rounded-2xl border ${isDark ? 'border-gray-700/50 bg-gray-800/60' : 'border-gray-200 bg-white'} p-4 mb-6 space-y-3 ${
+        !settings.service_enabled && isAdmin ? 'opacity-50 pointer-events-none' : ''
+      }`}>
         <div className="flex items-center justify-between">
           <div>
             <p className={`text-sm font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>Auto-send on Account Payment</p>
             <p className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Automatically send WhatsApp message when a customer pays via account</p>
           </div>
-          <Toggle
-            checked={settings.auto_send_on_account_payment}
-            onChange={() => setSettings(prev => ({ ...prev, auto_send_on_account_payment: !prev.auto_send_on_account_payment }))}
-          />
+          {isAdmin ? (
+            <Toggle
+              checked={settings.auto_send_on_account_payment}
+              onChange={() => setSettings(prev => ({ ...prev, auto_send_on_account_payment: !prev.auto_send_on_account_payment }))}
+              disabled={!settings.service_enabled}
+            />
+          ) : (
+            <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
+              settings.auto_send_on_account_payment
+                ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                : 'bg-gray-500/20 text-gray-400 border border-gray-500/30'
+            }`}>
+              {settings.auto_send_on_account_payment ? 'ON' : 'OFF'}
+            </span>
+          )}
         </div>
         <div className={`border-t ${isDark ? 'border-gray-700/50' : 'border-gray-200'}`} />
         <div className="flex items-center justify-between">
@@ -843,10 +807,43 @@ export function CustomerAccountPanel() {
             <p className={`text-sm font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>Include Receipt Image</p>
             <p className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Attach a thermal-style receipt image with the message</p>
           </div>
-          <Toggle
-            checked={settings.send_receipt_image}
-            onChange={() => setSettings(prev => ({ ...prev, send_receipt_image: !prev.send_receipt_image }))}
-          />
+          {isAdmin ? (
+            <Toggle
+              checked={settings.send_receipt_image}
+              onChange={() => setSettings(prev => ({ ...prev, send_receipt_image: !prev.send_receipt_image }))}
+              disabled={!settings.service_enabled}
+            />
+          ) : (
+            <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
+              settings.send_receipt_image
+                ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                : 'bg-gray-500/20 text-gray-400 border border-gray-500/30'
+            }`}>
+              {settings.send_receipt_image ? 'ON' : 'OFF'}
+            </span>
+          )}
+        </div>
+        <div className={`border-t ${isDark ? 'border-gray-700/50' : 'border-gray-200'}`} />
+        <div className="flex items-center justify-between">
+          <div>
+            <p className={`text-sm font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>Include Logo on Images</p>
+            <p className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Show your store logo on receipt and balance images</p>
+          </div>
+          {isAdmin ? (
+            <Toggle
+              checked={settings.include_logo_on_images}
+              onChange={() => setSettings(prev => ({ ...prev, include_logo_on_images: !prev.include_logo_on_images }))}
+              disabled={!settings.service_enabled}
+            />
+          ) : (
+            <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
+              settings.include_logo_on_images
+                ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                : 'bg-gray-500/20 text-gray-400 border border-gray-500/30'
+            }`}>
+              {settings.include_logo_on_images ? 'ON' : 'OFF'}
+            </span>
+          )}
         </div>
       </div>
 
@@ -902,46 +899,49 @@ export function CustomerAccountPanel() {
               </div>
 
               <div className="p-5 space-y-4">
-                {/* Variable Chips */}
-                <div>
-                  <p className={`text-xs font-semibold mb-2 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
-                    Click to insert variable, or click copy icon:
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {TEMPLATE_VARS.map(v => (
-                      <div
-                        key={v.label}
-                        className={`group flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono cursor-pointer transition-all ${
-                          isDark
-                            ? 'bg-gray-700/60 text-purple-300 hover:bg-purple-900/30 border border-gray-600/50'
-                            : 'bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200'
-                        }`}
-                        onClick={() => insertVariable(v.label)}
-                        title={v.desc}
-                      >
-                        {v.label}
-                        <button
-                          onClick={(e) => { e.stopPropagation(); copyVar(v.label) }}
-                          className="opacity-0 group-hover:opacity-100 transition-opacity"
+                {/* Variable Chips — hidden for cashier (read-only) */}
+                {isAdmin && (
+                  <div>
+                    <p className={`text-xs font-semibold mb-2 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                      Click to insert variable, or click copy icon:
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {TEMPLATE_VARS.map(v => (
+                        <div
+                          key={v.label}
+                          className={`group flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono cursor-pointer transition-all ${
+                            isDark
+                              ? 'bg-gray-700/60 text-purple-300 hover:bg-purple-900/30 border border-gray-600/50'
+                              : 'bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200'
+                          }`}
+                          onClick={() => insertVariable(v.label)}
+                          title={v.desc}
                         >
-                          {copiedVar === v.label ? <Check size={11} className="text-green-400" /> : <Copy size={11} />}
-                        </button>
-                      </div>
-                    ))}
+                          {v.label}
+                          <button
+                            onClick={(e) => { e.stopPropagation(); copyVar(v.label) }}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            {copiedVar === v.label ? <Check size={11} className="text-green-400" /> : <Copy size={11} />}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
 
-                {/* Template Textarea */}
+                {/* Template Textarea — read-only for cashier */}
                 <textarea
                   ref={textareaRef}
                   value={settings.account_template}
-                  onChange={(e) => setSettings(prev => ({ ...prev, account_template: e.target.value }))}
+                  onChange={(e) => isAdmin && setSettings(prev => ({ ...prev, account_template: e.target.value }))}
+                  readOnly={isCashier}
                   rows={10}
                   className={`w-full rounded-xl px-4 py-3 text-sm font-mono resize-y transition-all border focus:ring-2 focus:ring-purple-500/40 focus:outline-none ${
                     isDark
                       ? 'bg-gray-900/60 text-gray-200 border-gray-600/50 placeholder-gray-500'
                       : 'bg-gray-50 text-gray-900 border-gray-200 placeholder-gray-400'
-                  }`}
+                  } ${isCashier ? 'cursor-default opacity-75' : ''}`}
                   placeholder="Type your account notification template here..."
                 />
 
@@ -966,170 +966,6 @@ export function CustomerAccountPanel() {
               </div>
             </div>
 
-            {/* Saved Templates List */}
-            <div className={`rounded-2xl border ${isDark ? 'border-gray-700/50 bg-gray-800/60' : 'border-gray-200 bg-white'} overflow-hidden`}>
-              <div className={`px-5 py-4 border-b ${isDark ? 'border-gray-700/50' : 'border-gray-200'} flex items-center justify-between`}>
-                <div className="flex items-center gap-2">
-                  <MessageSquare size={16} className={isDark ? 'text-purple-400' : 'text-purple-600'} />
-                  <h4 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>Saved Templates</h4>
-                  <span className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>({templates.length})</span>
-                </div>
-                <button
-                  onClick={() => { setShowAddTemplate(!showAddTemplate); setNewTemplateName(''); setNewTemplateBody('') }}
-                  className={`flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition-all ${
-                    showAddTemplate
-                      ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
-                      : isDark
-                        ? 'bg-purple-500/20 text-purple-400 hover:bg-purple-500/30'
-                        : 'bg-purple-100 text-purple-700 hover:bg-purple-200'
-                  }`}
-                >
-                  {showAddTemplate ? <X size={14} /> : <Plus size={14} />}
-                  {showAddTemplate ? 'Cancel' : 'Add Template'}
-                </button>
-              </div>
-
-              <div className="p-5 space-y-3">
-                {/* Add Template Form */}
-                <AnimatePresence>
-                  {showAddTemplate && (
-                    <motion.div
-                      initial={{ opacity: 0, height: 0 }}
-                      animate={{ opacity: 1, height: 'auto' }}
-                      exit={{ opacity: 0, height: 0 }}
-                      className="overflow-hidden"
-                    >
-                      <div className={`rounded-xl p-4 mb-4 border ${isDark ? 'bg-gray-900/60 border-gray-700/50' : 'bg-gray-50 border-gray-200'}`}>
-                        <input
-                          type="text"
-                          value={newTemplateName}
-                          onChange={(e) => setNewTemplateName(e.target.value)}
-                          placeholder="Template name..."
-                          className={`w-full rounded-lg px-3 py-2 text-sm mb-3 border focus:ring-2 focus:ring-purple-500/40 focus:outline-none ${
-                            isDark
-                              ? 'bg-gray-800 text-gray-200 border-gray-600/50 placeholder-gray-500'
-                              : 'bg-white text-gray-900 border-gray-200 placeholder-gray-400'
-                          }`}
-                        />
-                        <textarea
-                          value={newTemplateBody}
-                          onChange={(e) => setNewTemplateBody(e.target.value)}
-                          rows={6}
-                          placeholder="Template body... (use variables like {customer_name})"
-                          className={`w-full rounded-lg px-3 py-2 text-sm font-mono resize-y mb-3 border focus:ring-2 focus:ring-purple-500/40 focus:outline-none ${
-                            isDark
-                              ? 'bg-gray-800 text-gray-200 border-gray-600/50 placeholder-gray-500'
-                              : 'bg-white text-gray-900 border-gray-200 placeholder-gray-400'
-                          }`}
-                        />
-                        <button
-                          onClick={handleAddTemplate}
-                          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-gradient-to-r from-purple-500 to-indigo-600 text-white text-sm font-semibold hover:shadow-lg transition-all"
-                        >
-                          <Plus size={14} />
-                          Add Template
-                        </button>
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-
-                {/* Templates list */}
-                {templates.length === 0 ? (
-                  <div className={`text-center py-8 ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
-                    <FileText size={32} className="mx-auto mb-2 opacity-50" />
-                    <p className="text-sm">No templates yet. Save settings to create the default template.</p>
-                  </div>
-                ) : (
-                  templates.map((tpl) => (
-                    <div
-                      key={tpl.id}
-                      className={`rounded-xl border p-4 transition-all ${
-                        isDark
-                          ? 'border-gray-700/50 bg-gray-900/40 hover:bg-gray-900/60'
-                          : 'border-gray-200 bg-gray-50 hover:bg-gray-100'
-                      }`}
-                    >
-                      {editingTemplate === tpl.id ? (
-                        // Edit mode
-                        <div className="space-y-3">
-                          <input
-                            type="text"
-                            value={tpl.name}
-                            onChange={(e) => setTemplates(prev => prev.map(t => t.id === tpl.id ? { ...t, name: e.target.value } : t))}
-                            className={`w-full rounded-lg px-3 py-2 text-sm border focus:ring-2 focus:ring-purple-500/40 focus:outline-none ${
-                              isDark ? 'bg-gray-800 text-gray-200 border-gray-600/50' : 'bg-white text-gray-900 border-gray-200'
-                            }`}
-                          />
-                          <textarea
-                            value={tpl.body}
-                            onChange={(e) => setTemplates(prev => prev.map(t => t.id === tpl.id ? { ...t, body: e.target.value } : t))}
-                            rows={5}
-                            className={`w-full rounded-lg px-3 py-2 text-sm font-mono resize-y border focus:ring-2 focus:ring-purple-500/40 focus:outline-none ${
-                              isDark ? 'bg-gray-800 text-gray-200 border-gray-600/50' : 'bg-white text-gray-900 border-gray-200'
-                            }`}
-                          />
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => handleUpdateTemplate(tpl)}
-                              className="px-3 py-1.5 rounded-lg bg-purple-500 text-white text-xs font-semibold hover:bg-purple-600 transition-all"
-                            >
-                              Save
-                            </button>
-                            <button
-                              onClick={() => { setEditingTemplate(null); loadTemplates() }}
-                              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${isDark ? 'bg-gray-700 text-gray-300 hover:bg-gray-600' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        // View mode
-                        <div>
-                          <div className="flex items-center justify-between mb-2">
-                            <div className="flex items-center gap-2">
-                              <h5 className={`text-sm font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>{tpl.name}</h5>
-                              {tpl.is_default && (
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/20 text-purple-400 border border-purple-500/30">DEFAULT</span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-1">
-                              {!tpl.is_default && (
-                                <button
-                                  onClick={() => handleSetDefault(tpl.id)}
-                                  title="Set as default"
-                                  className={`p-1.5 rounded-lg text-xs transition-all ${isDark ? 'text-gray-400 hover:text-purple-400 hover:bg-gray-700/50' : 'text-gray-500 hover:text-purple-600 hover:bg-gray-200'}`}
-                                >
-                                  <CheckCircle size={14} />
-                                </button>
-                              )}
-                              <button
-                                onClick={() => setEditingTemplate(tpl.id)}
-                                className={`p-1.5 rounded-lg text-xs transition-all ${isDark ? 'text-gray-400 hover:text-white hover:bg-gray-700/50' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-200'}`}
-                              >
-                                <Edit2 size={14} />
-                              </button>
-                              {!tpl.is_default && (
-                                <button
-                                  onClick={() => handleDeleteTemplate(tpl.id)}
-                                  className={`p-1.5 rounded-lg text-xs transition-all ${isDark ? 'text-gray-400 hover:text-red-400 hover:bg-red-500/10' : 'text-gray-500 hover:text-red-600 hover:bg-red-50'}`}
-                                >
-                                  <Trash2 size={14} />
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                          <p className={`text-xs font-mono whitespace-pre-wrap line-clamp-3 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
-                            {tpl.body}
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
           </motion.div>
         )}
 
@@ -1246,32 +1082,16 @@ export function CustomerAccountPanel() {
                   </AnimatePresence>
                 </div>
 
-                {/* Template Selector */}
-                <div>
-                  <label className={`block text-xs font-semibold mb-1.5 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>Template (optional)</label>
-                  <select
-                    value={manualSelectedTemplate || ''}
-                    onChange={(e) => {
-                      const tplId = e.target.value
-                      setManualSelectedTemplate(tplId || null)
-                      if (tplId) {
-                        const tpl = templates.find(t => t.id === tplId)
-                        if (tpl) setManualMessage(tpl.body)
-                      }
-                    }}
-                    className={`w-full rounded-xl px-4 py-2.5 text-sm border focus:ring-2 focus:ring-purple-500/40 focus:outline-none ${
-                      isDark
-                        ? 'bg-gray-900/60 text-gray-200 border-gray-600/50'
-                        : 'bg-gray-50 text-gray-900 border-gray-200'
-                    }`}
-                  >
-                    <option value="">— Write custom message —</option>
-                    {templates.map(tpl => (
-                      <option key={tpl.id} value={tpl.id}>
-                        {tpl.name}{tpl.is_default ? ' (Default)' : ''}
-                      </option>
-                    ))}
-                  </select>
+                {/* Attach Receipt Image Toggle */}
+                <div className={`flex items-center justify-between rounded-xl p-3 border ${isDark ? 'border-gray-700/50 bg-gray-900/40' : 'border-gray-200 bg-gray-50'}`}>
+                  <div>
+                    <p className={`text-sm font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>Attach Receipt Image</p>
+                    <p className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Send a professional receipt image along with the message</p>
+                  </div>
+                  <Toggle
+                    checked={manualSendReceiptImage}
+                    onChange={() => { setManualSendReceiptImage(!manualSendReceiptImage); if (!manualSendReceiptImage) setManualImage(null) }}
+                  />
                 </div>
 
                 {/* Variable Chips */}
@@ -1313,58 +1133,6 @@ export function CustomerAccountPanel() {
                     }`}
                   />
                 </div>
-
-                {/* Attach Receipt Image Toggle */}
-                <div className={`flex items-center justify-between rounded-xl p-3 border ${isDark ? 'border-gray-700/50 bg-gray-900/40' : 'border-gray-200 bg-gray-50'}`}>
-                  <div>
-                    <p className={`text-sm font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>Attach Receipt Image</p>
-                    <p className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Send a professional receipt image along with the message</p>
-                  </div>
-                  <Toggle
-                    checked={manualSendReceiptImage}
-                    onChange={() => { setManualSendReceiptImage(!manualSendReceiptImage); if (!manualSendReceiptImage) setManualImage(null) }}
-                  />
-                </div>
-
-                {/* Image Upload (only if receipt image toggle is OFF) */}
-                {!manualSendReceiptImage && (
-                  <div>
-                    <label className={`block text-xs font-semibold mb-1.5 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>Custom Image (optional)</label>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => setManualImage(e.target.files?.[0] || null)}
-                      className="hidden"
-                    />
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={() => fileInputRef.current?.click()}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium border transition-all ${
-                          isDark
-                            ? 'border-gray-600/50 text-gray-300 hover:bg-gray-700/50'
-                            : 'border-gray-200 text-gray-700 hover:bg-gray-100'
-                        }`}
-                      >
-                        <ImageIcon size={16} />
-                        {manualImage ? 'Change Image' : 'Select Image'}
-                      </button>
-                      {manualImage && (
-                        <div className="flex items-center gap-2">
-                          <span className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
-                            {manualImage.name}
-                          </span>
-                          <button
-                            onClick={() => setManualImage(null)}
-                            className="text-red-400 hover:text-red-300"
-                          >
-                            <X size={14} />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
 
                 {/* Info */}
                 <div className={`flex items-start gap-2 rounded-xl p-3 ${isDark ? 'bg-blue-500/10 border border-blue-500/20' : 'bg-blue-50 border border-blue-200'}`}>
@@ -1411,6 +1179,18 @@ export function CustomerAccountPanel() {
                 </p>
               </div>
               <div className="p-5 space-y-4">
+                {/* Attach Receipt Image Toggle */}
+                <div className={`flex items-center justify-between rounded-xl p-3 border ${isDark ? 'border-gray-700/50 bg-gray-900/40' : 'border-gray-200 bg-gray-50'}`}>
+                  <div>
+                    <p className={`text-sm font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>Attach Receipt Image</p>
+                    <p className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Send a professional balance receipt image to every selected customer</p>
+                  </div>
+                  <Toggle
+                    checked={bulkSendReceiptImage}
+                    onChange={() => setBulkSendReceiptImage(!bulkSendReceiptImage)}
+                  />
+                </div>
+
                 {/* Variable Chips */}
                 <div>
                   <p className={`text-xs font-semibold mb-2 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
@@ -1434,33 +1214,6 @@ export function CustomerAccountPanel() {
                   </div>
                 </div>
 
-                {/* Template Selector */}
-                <div>
-                  <label className={`block text-xs font-semibold mb-1.5 ${isDark ? 'text-gray-300' : 'text-gray-700'}`}>Load from template (optional)</label>
-                  <select
-                    value=""
-                    onChange={(e) => {
-                      const tplId = e.target.value
-                      if (tplId) {
-                        const tpl = templates.find(t => t.id === tplId)
-                        if (tpl) setBulkMessage(tpl.body)
-                      }
-                    }}
-                    className={`w-full rounded-xl px-4 py-2.5 text-sm border focus:ring-2 focus:ring-purple-500/40 focus:outline-none ${
-                      isDark
-                        ? 'bg-gray-900/60 text-gray-200 border-gray-600/50'
-                        : 'bg-gray-50 text-gray-900 border-gray-200'
-                    }`}
-                  >
-                    <option value="">— Select a template to load —</option>
-                    {templates.map(tpl => (
-                      <option key={tpl.id} value={tpl.id}>
-                        {tpl.name}{tpl.is_default ? ' (Default)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
                 <textarea
                   ref={bulkTextareaRef}
                   value={bulkMessage}
@@ -1474,17 +1227,6 @@ export function CustomerAccountPanel() {
                   }`}
                 />
 
-                {/* Attach Receipt Image Toggle */}
-                <div className={`flex items-center justify-between rounded-xl p-3 border ${isDark ? 'border-gray-700/50 bg-gray-900/40' : 'border-gray-200 bg-gray-50'}`}>
-                  <div>
-                    <p className={`text-sm font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}>Attach Receipt Image</p>
-                    <p className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Send a professional balance receipt image to every selected customer</p>
-                  </div>
-                  <Toggle
-                    checked={bulkSendReceiptImage}
-                    onChange={() => setBulkSendReceiptImage(!bulkSendReceiptImage)}
-                  />
-                </div>
               </div>
             </div>
 

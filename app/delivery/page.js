@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { cacheManager } from '../../lib/cacheManager'
 import { triggerWhatsAppAutoSend } from '../../lib/whatsappAutoSend'
+import { triggerAccountAutoSend } from '../../lib/accountAutoSend'
 import { themeManager } from '../../lib/themeManager'
 import { authManager } from '../../lib/authManager'
 import loyaltyManager from '../../lib/loyaltyManager'
@@ -1094,6 +1095,18 @@ export default function DeliveryPage() {
         } catch (ledgerError) {
           console.error('❌ [Delivery Payment] Failed to handle customer ledger:', ledgerError)
           // Don't fail the payment if ledger update fails
+        }
+
+        // Auto-send WhatsApp bill (fire-and-forget)
+        const cust = order.customers || order.customer
+        if (cust?.phone) {
+          triggerAccountAutoSend({
+            orderId: order.id,
+            orderNumber: order.order_number,
+            customer: { id: order.customer_id, full_name: cust.full_name, phone: cust.phone },
+            totalAmount: paymentData.newTotal,
+            orderType: order.order_type,
+          })
         }
       }
 

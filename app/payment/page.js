@@ -37,6 +37,7 @@ import { authManager } from '../../lib/authManager'
 import { printerManager } from '../../lib/printerManager'
 import loyaltyManager from '../../lib/loyaltyManager'
 import customerLedgerManager from '../../lib/customerLedgerManager'
+import { triggerAccountAutoSend } from '../../lib/accountAutoSend'
 import { notify } from '../../components/ui/NotificationSystem'
 import { supabase } from '../../lib/supabase'
 import { permissionManager } from '../../lib/permissionManager'
@@ -578,8 +579,9 @@ const processOrder = async () => {
       takeawayTimeForDB = orderData.takeawayTime // Already in "HH:MM:SS" or "HH:MM" format
     }
 
-    // Declare newDailySerial here so it's accessible after the if/else block
+    // Declare variables here so they're accessible after the if/else block
     let newDailySerial = null
+    let finalOrderId = null
 
     // CHECK IF WE'RE MODIFYING AN EXISTING ORDER (only if online)
     if (orderData.isModifying && orderData.existingOrderId && navigator.onLine) {
@@ -733,6 +735,7 @@ const processOrder = async () => {
         }
       }
 
+      finalOrderId = orderData.existingOrderId
       setOrderNumber(orderData.existingOrderNumber)
       setIsOfflineOrder(false)
 
@@ -784,6 +787,7 @@ const processOrder = async () => {
         detailedChanges: orderData.detailedChanges || null // Pass detailed changes for history tracking
       })
       newDailySerial = _newDailySerial
+      finalOrderId = order.id || null
 
       setOrderNumber(newOrderNumber)
       setIsOfflineOrder(order._isOffline)
@@ -1015,6 +1019,26 @@ const processOrder = async () => {
       localStorage.removeItem('new_order_original_amount_paid')
       localStorage.removeItem('new_order_original_payment_method')
       localStorage.removeItem('new_order_can_decrease_qty')
+    }
+
+    // Auto-send WhatsApp bill for customer account payments (fire-and-forget)
+    if (selectedPaymentMethod?.id === 'account' && orderData.customer?.id && orderData.customer?.phone) {
+      const finalOrderNumber = orderData.isModifying ? orderData.existingOrderNumber : orderNumber
+      triggerAccountAutoSend({
+        orderId: finalOrderId,
+        orderNumber: finalOrderNumber,
+        customer: orderData.customer,
+        totalAmount: orderData.total,
+        orderType: orderData.orderType,
+        cartItems: orderData.cart,
+        previousBalance: customerLedgerBalance,
+        newBalance: customerLedgerBalance + orderData.total,
+        subtotal: orderData.subtotal,
+        discount: discountAmount || 0,
+        serviceCharge: serviceChargeAmount || 0,
+        deliveryCharges: orderData.deliveryCharges || 0,
+        loyaltyPoints: loyaltyRedemption?.pointsToRedeem || 0,
+      })
     }
 
     setOrderComplete(true)

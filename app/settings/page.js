@@ -52,6 +52,7 @@ import { useRouter } from 'next/navigation';
 import { notify } from '../../components/ui/NotificationSystem';
 import themeManager from '../../lib/themeManager';
 import { authManager } from '../../lib/authManager';
+import { permissionManager } from '../../lib/permissionManager';
 import { profileManager } from '../../lib/profileManager';
 import { supabase } from '../../lib/supabaseClient';
 import { cacheManager } from '../../lib/cacheManager';
@@ -1304,8 +1305,16 @@ export default function SettingsPage() {
       name: 'Customer Account',
       icon: CreditCard,
       description: 'Account alerts & receipts',
+      permissionKey: 'CUSTOMER_ACCOUNT',
     }
-  ];
+  ].filter(item => {
+    // If no permission required, always show
+    if (!item.permissionKey) return true
+    // Admin always sees everything
+    if (authManager.getRole() === 'admin') return true
+    // Cashier needs the permission
+    return permissionManager.hasPermission(item.permissionKey)
+  });
 
   // Get theme classes
   const classes = themeManager.getClasses();
