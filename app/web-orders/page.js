@@ -878,7 +878,8 @@ function WebOrdersPage() {
           approved_by_cashier_id: cashier?.id || null,
           approval_notes: "Approved from Web Orders page",
         })
-        .eq("id", order.id);
+        .eq("id", order.id)
+        .eq("is_approved", false); // Only approve if not already approved (idempotency guard)
 
       if (error) throw error;
 
@@ -1167,7 +1168,7 @@ function WebOrdersPage() {
         .from("orders")
         .update({
           order_status: "Cancelled",
-          is_approved: true, // Mark as "processed" so it doesn't show here anymore
+          is_approved: false, // Keep as not-approved so the rejection is clear
           approved_at: new Date().toISOString(),
           approved_by_cashier_id: cashier?.id || null,
           approval_notes: `Rejected: ${reason}`,

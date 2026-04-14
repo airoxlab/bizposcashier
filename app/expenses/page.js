@@ -1112,7 +1112,7 @@ export default function ExpensesPage() {
                         onClick={() => setExpenseForm({
                           ...expenseForm,
                           paymentAccountId: account.id,
-                          paymentMethod: account.payment_method_key || account.name
+                          paymentMethod: account.payment_method_key || 'Cash'
                         })}
                         className={`p-3 rounded-xl border-2 transition-all ${expenseForm.paymentAccountId === account.id
                             ? `border-purple-500 ${isDark ? 'bg-purple-900/50' : 'bg-purple-50'}`

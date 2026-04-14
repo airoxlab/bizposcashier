@@ -214,11 +214,15 @@ function registerMobilePrintServer() {
           return;
         }
 
-        await printReceipt(ip, port, orderData, userProfile);
-        log.info('[MobilePrint] Receipt printed for order:', orderData?.order_number || orderData?.orderNumber);
+        // Respond immediately — printer TCP connection can take a few seconds
+        // (printer waking from sleep, WiFi reconnect). Fire-and-forget so the
+        // mobile app gets instant feedback rather than timing out.
         sendJson(res, 200, { success: true });
+        printReceipt(ip, port, orderData, userProfile)
+          .then(() => log.info('[MobilePrint] Receipt printed for order:', orderData?.order_number || orderData?.orderNumber))
+          .catch(e => log.error('[MobilePrint] Receipt print error (background):', e.message));
       } catch (error) {
-        log.error('[MobilePrint] Receipt print error:', error.message);
+        log.error('[MobilePrint] Receipt parse error:', error.message);
         sendJson(res, 500, { success: false, error: error.message });
       }
       return;
@@ -248,9 +252,11 @@ function registerMobilePrintServer() {
             sendJson(res, 400, { success: false, error: 'Printer has no IP address configured.' });
             return;
           }
-          await printKitchenToken(ip, port, orderData, userProfile);
-          log.info('[MobilePrint] Kitchen token printed for order:', orderData?.order_number || orderData?.orderNumber);
+          // Respond immediately — print in background
           sendJson(res, 200, { success: true });
+          printKitchenToken(ip, port, orderData, userProfile)
+            .then(() => log.info('[MobilePrint] Kitchen token printed for order:', orderData?.order_number || orderData?.orderNumber))
+            .catch(e => log.error('[MobilePrint] Kitchen token error (background):', e.message));
           return;
         }
 
@@ -261,27 +267,18 @@ function registerMobilePrintServer() {
           return;
         }
 
-        const errors = [];
+        // Respond immediately — all printer groups fire in background
+        sendJson(res, 200, { success: true });
         for (const { printerConfig: cfg, items: groupItems } of groups) {
           const ip = cfg.ip_address || cfg.ip;
           const port = parseInt(cfg.port || '9100');
           if (!ip) continue;
-          try {
-            await printKitchenToken(ip, port, { ...orderData, items: groupItems }, userProfile);
-            log.info(`[MobilePrint] Kitchen token sent to "${cfg.name}" (${ip}:${port}) — ${groupItems.length} item(s)`);
-          } catch (e) {
-            log.error(`[MobilePrint] Kitchen token failed for printer "${cfg.name}":`, e.message);
-            errors.push(`${cfg.name}: ${e.message}`);
-          }
-        }
-
-        if (errors.length > 0 && errors.length === groups.length) {
-          sendJson(res, 500, { success: false, error: errors.join('; ') });
-        } else {
-          sendJson(res, 200, { success: true, printed: groups.length - errors.length, errors: errors.length > 0 ? errors : undefined });
+          printKitchenToken(ip, port, { ...orderData, items: groupItems }, userProfile)
+            .then(() => log.info(`[MobilePrint] Kitchen token sent to "${cfg.name}" (${ip}:${port}) — ${groupItems.length} item(s)`))
+            .catch(e => log.error(`[MobilePrint] Kitchen token failed for printer "${cfg.name}":`, e.message));
         }
       } catch (error) {
-        log.error('[MobilePrint] Kitchen print error:', error.message);
+        log.error('[MobilePrint] Kitchen parse error:', error.message);
         sendJson(res, 500, { success: false, error: error.message });
       }
       return;
