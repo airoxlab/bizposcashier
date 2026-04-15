@@ -17,6 +17,7 @@ class WhatsAppClientManager {
     this.mainWindow = null;
     this.reconnectTimer = null;
     this.isInitializing = false;
+    this._manualDisconnect = false; // true when user intentionally disconnects — suppresses auto-reconnect
   }
 
   setMainWindow(win) {
@@ -43,6 +44,10 @@ class WhatsAppClientManager {
     this.isInitializing = true;
     this.setStatus('connecting');
     log.info('[WhatsApp] Initializing client...');
+
+    // Clear stale Chrome lock files before launching (prevents "browser already running" error)
+    this._cleanupLockFiles();
+    this._manualDisconnect = false; // allow auto-reconnect again after a fresh connect
 
     const sessionPath = path.join(app.getPath('userData'), 'whatsapp-session');
 
@@ -115,6 +120,10 @@ class WhatsAppClientManager {
   }
 
   scheduleReconnect() {
+    if (this._manualDisconnect) {
+      log.info('[WhatsApp] Manual disconnect — skipping auto-reconnect');
+      return;
+    }
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     log.info('[WhatsApp] Scheduling reconnect in 15 seconds...');
     this.reconnectTimer = setTimeout(() => {
@@ -133,6 +142,7 @@ class WhatsAppClientManager {
   }
 
   async disconnect() {
+    this._manualDisconnect = true;
     this.cancelReconnect();
     if (this.client) {
       try {
@@ -155,22 +165,26 @@ class WhatsAppClientManager {
       }
       this.client = null;
       // Wait for Chrome process to fully exit before next init
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      this._cleanupLockFile();
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      this._cleanupLockFiles();
     }
   }
 
-  _cleanupLockFile() {
+  _cleanupLockFiles() {
     const sessionPath = path.join(app.getPath('userData'), 'whatsapp-session');
     // LocalAuth creates a subfolder named 'session' (default clientId)
-    const lockFile = path.join(sessionPath, 'session', 'SingletonLock');
-    try {
-      if (fs.existsSync(lockFile)) {
-        fs.unlinkSync(lockFile);
-        log.info('[WhatsApp] Removed SingletonLock file');
+    const sessionDir = path.join(sessionPath, 'session');
+    const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
+    for (const name of lockFiles) {
+      const lockFile = path.join(sessionDir, name);
+      try {
+        if (fs.existsSync(lockFile)) {
+          fs.unlinkSync(lockFile);
+          log.info(`[WhatsApp] Removed ${name}`);
+        }
+      } catch (e) {
+        log.warn(`[WhatsApp] Could not remove ${name}:`, e.message);
       }
-    } catch (e) {
-      log.warn('[WhatsApp] Could not remove lock file:', e.message);
     }
   }
 

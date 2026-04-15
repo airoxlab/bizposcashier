@@ -12,9 +12,13 @@ import {
   Tag,
   X,
   ArrowLeft,
-  Percent
+  Percent,
+  Users,
+  Gift,
+  Clock
 } from 'lucide-react'
 import Image from 'next/image'
+import { permissionManager } from '../../lib/permissionManager'
 
 export default function InlinePaymentSection({
   order,
@@ -29,6 +33,7 @@ export default function InlinePaymentSection({
   const [cashAmount, setCashAmount] = useState('')
   const [changeAmount, setChangeAmount] = useState(0)
   const [isProcessing, setIsProcessing] = useState(false)
+  const [complimentaryReason, setComplimentaryReason] = useState('')
 
   // Smart Discount States
   const [showDiscountSection, setShowDiscountSection] = useState(false)
@@ -76,8 +81,36 @@ export default function InlinePaymentSection({
       color: 'from-blue-500 to-indigo-600',
       requiresAmount: false,
       logo: '/images/meezan-bank-logo.png'
+    },
+    {
+      id: 'account',
+      name: 'Account',
+      displayName: 'Customer Account',
+      icon: Users,
+      color: 'from-purple-500 to-purple-600',
+      requiresAmount: false,
+      logo: null,
+      requiresCustomer: true
+    },
+    {
+      id: 'unpaid',
+      name: 'Unpaid',
+      icon: Clock,
+      color: 'from-gray-500 to-gray-600',
+      requiresAmount: false,
+      logo: null
+    },
+    {
+      id: 'complimentary',
+      name: 'Complimentary',
+      icon: Gift,
+      color: 'from-pink-500 to-rose-600',
+      requiresAmount: false,
+      logo: null,
+      requiresPermission: 'COMPLIMENTARY_ORDER',
+      requiresReason: true
     }
-  ]
+  ].filter(m => !m.requiresPermission || permissionManager.hasPermission(m.requiresPermission))
 
   useEffect(() => {
     if (order) {
@@ -249,6 +282,7 @@ export default function InlinePaymentSection({
 
   const canProcessPayment = () => {
     if (!selectedPaymentMethod) return false
+    if (selectedPaymentMethod.requiresReason) return complimentaryReason.trim().length > 0
     if (selectedPaymentMethod.requiresAmount) {
       return parseFloat(cashAmount) >= getCurrentTotal()
     }
@@ -265,6 +299,8 @@ export default function InlinePaymentSection({
     setIsProcessing(true)
 
     try {
+      const isComplimentary = selectedPaymentMethod.id === 'complimentary'
+      const isUnpaid = selectedPaymentMethod.id === 'unpaid'
       const paymentData = {
         paymentMethod: selectedPaymentMethod.name,
         cashReceived: selectedPaymentMethod.requiresAmount ? parseFloat(cashAmount) : null,
@@ -275,7 +311,8 @@ export default function InlinePaymentSection({
         serviceChargeType,
         serviceChargeValue,
         serviceChargeAmount,
-        newTotal: getCurrentTotal(),
+        newTotal: (isComplimentary || isUnpaid) ? 0 : getCurrentTotal(),
+        complimentaryReason: isComplimentary ? complimentaryReason.trim() : null,
         completeOrder
       }
 
@@ -450,37 +487,60 @@ export default function InlinePaymentSection({
         {/* Payment Methods */}
         <div className={`${classes.card} ${classes.shadow} shadow-sm ${classes.border} border rounded-lg p-3`}>
           <h3 className={`text-xs font-bold ${classes.textPrimary} mb-2`}>Payment Method</h3>
-          <div className="grid grid-cols-4 gap-2">
-            {paymentMethods.map((method) => (
-              <button
-                key={method.id}
-                onClick={() => handlePaymentMethodSelect(method)}
-                className={`p-2 rounded-lg transition-all border ${
-                  selectedPaymentMethod?.id === method.id
-                    ? `border-purple-500 ${isDark ? 'bg-purple-900/20' : 'bg-purple-50'} shadow`
-                    : `${classes.border} ${classes.card}`
-                }`}
-              >
-                {method.logo ? (
-                  <div className="w-8 h-8 relative mb-1 mx-auto">
-                    <Image
-                      src={method.logo}
-                      alt={method.name}
-                      fill
-                      className="object-contain"
-                    />
-                  </div>
-                ) : (
-                  <div className={`w-8 h-8 bg-gradient-to-r ${method.color} rounded flex items-center justify-center mb-1 mx-auto`}>
-                    <method.icon className="w-4 h-4 text-white" />
-                  </div>
-                )}
-                <p className={`font-semibold text-[10px] text-center ${classes.textPrimary}`}>
-                  {method.displayName || method.name}
-                </p>
-              </button>
-            ))}
+          <div className="grid grid-cols-5 gap-2">
+            {paymentMethods.map((method) => {
+              const isDisabled = method.requiresCustomer && !order?.customer_id
+              return (
+                <button
+                  key={method.id}
+                  onClick={() => !isDisabled && handlePaymentMethodSelect(method)}
+                  disabled={isDisabled}
+                  title={isDisabled ? 'Assign a customer to use Customer Account' : undefined}
+                  className={`p-2 rounded-lg transition-all border ${
+                    isDisabled
+                      ? `opacity-40 cursor-not-allowed ${classes.border} ${classes.card}`
+                      : selectedPaymentMethod?.id === method.id
+                        ? `border-purple-500 ${isDark ? 'bg-purple-900/20' : 'bg-purple-50'} shadow`
+                        : `${classes.border} ${classes.card}`
+                  }`}
+                >
+                  {method.logo ? (
+                    <div className="w-8 h-8 relative mb-1 mx-auto">
+                      <Image
+                        src={method.logo}
+                        alt={method.name}
+                        fill
+                        className="object-contain"
+                      />
+                    </div>
+                  ) : (
+                    <div className={`w-8 h-8 bg-gradient-to-r ${method.color} rounded flex items-center justify-center mb-1 mx-auto`}>
+                      <method.icon className="w-4 h-4 text-white" />
+                    </div>
+                  )}
+                  <p className={`font-semibold text-[10px] text-center ${classes.textPrimary}`}>
+                    {method.displayName || method.name}
+                  </p>
+                </button>
+              )
+            })}
           </div>
+
+          {/* Complimentary Reason */}
+          {selectedPaymentMethod?.requiresReason && (
+            <div className="mt-2">
+              <label className={`block text-[10px] font-medium ${classes.textSecondary} mb-1`}>
+                Reason (required)
+              </label>
+              <textarea
+                value={complimentaryReason}
+                onChange={e => setComplimentaryReason(e.target.value)}
+                placeholder="Enter reason for complimentary order..."
+                rows={2}
+                className={`w-full px-2 py-1.5 text-xs ${isDark ? 'bg-gray-700 border-gray-600 text-gray-100 placeholder-gray-500' : 'bg-white border-gray-300 text-gray-900 placeholder-gray-400'} border rounded focus:ring-1 focus:ring-pink-500 resize-none`}
+              />
+            </div>
+          )}
 
           {/* Split Payment Button */}
           <button

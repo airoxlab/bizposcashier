@@ -1131,17 +1131,20 @@ export default function NewOrderPage() {
 
       // Regular payment
       if (navigator.onLine) {
+        const isComplimentary = paymentData.paymentMethod === 'Complimentary'
+        const isUnpaid = paymentData.paymentMethod === 'Unpaid'
         const { error } = await supabase
           .from('orders')
           .update({
             payment_method: paymentData.paymentMethod,
-            payment_status: 'Paid',
-            amount_paid: paymentData.newTotal,
+            payment_status: isUnpaid ? 'Pending' : 'Paid',
+            amount_paid: (isComplimentary || isUnpaid) ? 0 : paymentData.newTotal,
             discount_amount: paymentData.discountAmount || 0,
             discount_percentage: paymentData.discountType === 'percentage' ? paymentData.discountValue : 0,
-            total_amount: paymentData.newTotal,
+            total_amount: isComplimentary || isUnpaid ? order.total_amount : paymentData.newTotal,
             service_charge_amount: paymentData.serviceChargeAmount || 0,
             service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0,
+            ...(isComplimentary && paymentData.complimentaryReason ? { order_instructions: [order.order_instructions, `[COMPLIMENTARY: ${paymentData.complimentaryReason}]`].filter(Boolean).join(' | ') } : {}),
             updated_at: new Date().toISOString()
           })
           .eq('id', order.id)
@@ -1233,7 +1236,7 @@ export default function NewOrderPage() {
 
       if (paymentData.completeOrder === false) {
         setSelectedOrder(prev => prev?.id === order.id
-          ? { ...prev, payment_status: 'Paid', payment_method: paymentData.paymentMethod, amount_paid: paymentData.newTotal, total_amount: paymentData.newTotal }
+          ? { ...prev, payment_status: isUnpaid ? 'Pending' : 'Paid', payment_method: paymentData.paymentMethod, amount_paid: (isComplimentary || isUnpaid) ? 0 : paymentData.newTotal, total_amount: isComplimentary || isUnpaid ? order.total_amount : paymentData.newTotal }
           : prev)
         toast.success('Payment recorded successfully')
         setOrdersRefreshTrigger(prev => prev + 1)

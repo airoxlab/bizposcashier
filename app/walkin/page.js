@@ -1313,17 +1313,20 @@ export default function WalkInPage() {
       // Update order with payment details (works both online and offline)
       if (navigator.onLine) {
         // Online: Update database directly
+        const isComplimentary = paymentData.paymentMethod === 'Complimentary'
+        const isUnpaid = paymentData.paymentMethod === 'Unpaid'
         const { error: updateError } = await supabase
           .from('orders')
           .update({
             payment_method: paymentData.paymentMethod,
-            payment_status: 'Paid',
-            amount_paid: paymentData.newTotal,
+            payment_status: isUnpaid ? 'Pending' : 'Paid',
+            amount_paid: (isComplimentary || isUnpaid) ? 0 : paymentData.newTotal,
             discount_amount: paymentData.discountAmount || 0,
             discount_percentage: paymentData.discountType === 'percentage' ? paymentData.discountValue : 0,
             service_charge_amount: paymentData.serviceChargeAmount || 0,
             service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0,
-            total_amount: paymentData.newTotal,
+            total_amount: isComplimentary || isUnpaid ? order.total_amount : paymentData.newTotal,
+            ...(isComplimentary && paymentData.complimentaryReason ? { order_instructions: [order.order_instructions, `[COMPLIMENTARY: ${paymentData.complimentaryReason}]`].filter(Boolean).join(' | ') } : {}),
             updated_at: new Date().toISOString()
           })
           .eq('id', order.id)
@@ -1349,13 +1352,13 @@ export default function WalkInPage() {
           cacheManager.cache.orders[orderIndex] = {
             ...cacheManager.cache.orders[orderIndex],
             payment_method: paymentData.paymentMethod,
-            payment_status: 'Paid',
-            amount_paid: paymentData.newTotal,
+            payment_status: isUnpaid ? 'Pending' : 'Paid',
+            amount_paid: (isComplimentary || isUnpaid) ? 0 : paymentData.newTotal,
             discount_amount: paymentData.discountAmount || 0,
             discount_percentage: paymentData.discountType === 'percentage' ? paymentData.discountValue : 0,
             service_charge_amount: paymentData.serviceChargeAmount || 0,
             service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0,
-            total_amount: paymentData.newTotal,
+            total_amount: isComplimentary || isUnpaid ? order.total_amount : paymentData.newTotal,
             updated_at: new Date().toISOString(),
             _isSynced: false
           }
@@ -1493,7 +1496,7 @@ export default function WalkInPage() {
       // Payment-only: update selectedOrder in state and return — no modal, stays in order details
       if (paymentData.completeOrder === false) {
         setSelectedOrder(prev => prev?.id === order.id
-          ? { ...prev, payment_status: 'Paid', payment_method: paymentData.paymentMethod, amount_paid: paymentData.newTotal, total_amount: paymentData.newTotal, service_charge_amount: paymentData.serviceChargeAmount || 0, service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0 }
+          ? { ...prev, payment_status: isUnpaid ? 'Pending' : 'Paid', payment_method: paymentData.paymentMethod, amount_paid: (isComplimentary || isUnpaid) ? 0 : paymentData.newTotal, total_amount: isComplimentary || isUnpaid ? order.total_amount : paymentData.newTotal, service_charge_amount: paymentData.serviceChargeAmount || 0, service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0 }
           : prev)
         toast.success('Payment recorded successfully')
         setOrdersRefreshTrigger(prev => prev + 1)

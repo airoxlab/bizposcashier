@@ -1046,18 +1046,22 @@ export default function OrdersPage() {
         notify.success('Split payment completed successfully!');
       } else {
         // Regular payment (single method)
+        const isComplimentary = paymentData.paymentMethod === 'Complimentary';
+        const isUnpaid = paymentData.paymentMethod === 'Unpaid';
         try {
           // Update order with payment details
           const { error: updateError } = await supabase
             .from('orders')
             .update({
               payment_method: paymentData.paymentMethod,
-              payment_status: 'Paid',
+              payment_status: isUnpaid ? 'Pending' : 'Paid',
+              amount_paid: (isComplimentary || isUnpaid) ? 0 : paymentData.newTotal,
               discount_amount: paymentData.discountAmount || 0,
               discount_percentage: paymentData.discountType === 'percentage' ? paymentData.discountValue : 0,
-              total_amount: paymentData.newTotal,
+              total_amount: isComplimentary || isUnpaid ? selectedOrder.total_amount : paymentData.newTotal,
               service_charge_amount: paymentData.serviceChargeAmount || 0,
               service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0,
+              ...(isComplimentary && paymentData.complimentaryReason ? { order_instructions: [selectedOrder.order_instructions, `[COMPLIMENTARY: ${paymentData.complimentaryReason}]`].filter(Boolean).join(' | ') } : {}),
               updated_at: new Date().toISOString()
             })
             .eq('id', selectedOrder.id);
@@ -1088,14 +1092,51 @@ export default function OrdersPage() {
           // Continue even if logging fails
         }
 
+        // Handle customer ledger entry for Account payments
+        if (paymentData.paymentMethod === 'Account' && selectedOrder.customer_id) {
+          try {
+            const { default: customerLedgerManager } = await import('../../lib/customerLedgerManager');
+            customerLedgerManager.setUserId(user.id);
+
+            const { data: existingEntry } = await supabase
+              .from('customer_ledger')
+              .select('id, amount')
+              .eq('order_id', selectedOrder.id)
+              .eq('user_id', user.id)
+              .eq('transaction_type', 'debit')
+              .maybeSingle();
+
+            if (!existingEntry) {
+              const currentBalance = await customerLedgerManager.getCustomerBalance(selectedOrder.customer_id);
+              const newBalance = currentBalance + paymentData.newTotal;
+              await supabase.from('customer_ledger').insert({
+                user_id: user.id,
+                customer_id: selectedOrder.customer_id,
+                transaction_type: 'debit',
+                amount: paymentData.newTotal,
+                balance_before: currentBalance,
+                balance_after: newBalance,
+                order_id: selectedOrder.id,
+                description: `Order #${selectedOrder.order_number} - ${selectedOrder.order_type?.toUpperCase() || 'ORDER'}`,
+                notes: 'Payment recorded via Orders section',
+                created_by: user.id
+              });
+              await supabase.from('customers').update({ account_balance: newBalance }).eq('id', selectedOrder.customer_id);
+            }
+          } catch (ledgerError) {
+            console.error('⚠️ Failed to create customer ledger entry:', ledgerError);
+          }
+        }
+
         // Update local selected order state
         setSelectedOrder({
           ...selectedOrder,
           payment_method: paymentData.paymentMethod,
-          payment_status: 'Paid',
+          payment_status: isUnpaid ? 'Pending' : 'Paid',
+          amount_paid: (isComplimentary || isUnpaid) ? 0 : paymentData.newTotal,
           discount_amount: paymentData.discountAmount || 0,
           discount_percentage: paymentData.discountType === 'percentage' ? paymentData.discountValue : 0,
-          total_amount: paymentData.newTotal,
+          total_amount: isComplimentary || isUnpaid ? selectedOrder.total_amount : paymentData.newTotal,
           service_charge_amount: paymentData.serviceChargeAmount || 0,
           service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0,
         });
