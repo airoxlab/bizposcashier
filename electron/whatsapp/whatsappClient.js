@@ -9,6 +9,38 @@ const fs = require('fs');
 const { app } = require('electron');
 const log = require('electron-log');
 
+/**
+ * Find an installed Chrome/Chromium executable on the system.
+ * Tries common Windows installation paths, then falls back to letting
+ * puppeteer find it on its own (which may fail if cache is missing).
+ */
+function findChrome() {
+  const candidates = [
+    // Chrome stable
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    // Chrome per-user install
+    path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe'),
+    // Chrome Beta / Canary
+    path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome Beta\\Application\\chrome.exe'),
+    path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome SxS\\Application\\chrome.exe'),
+    // MS Edge (Chromium-based, works with puppeteer)
+    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+    path.join(process.env.LOCALAPPDATA || '', 'Microsoft\\Edge\\Application\\msedge.exe'),
+  ];
+
+  for (const p of candidates) {
+    if (p && fs.existsSync(p)) {
+      log.info(`[WhatsApp] Found browser at: ${p}`);
+      return p;
+    }
+  }
+
+  log.warn('[WhatsApp] No system Chrome/Edge found — puppeteer will use its cache');
+  return null;
+}
+
 class WhatsAppClientManager {
   constructor() {
     this.client = null;
@@ -51,12 +83,15 @@ class WhatsAppClientManager {
 
     const sessionPath = path.join(app.getPath('userData'), 'whatsapp-session');
 
+    const chromePath = findChrome();
+
     this.client = new Client({
       authStrategy: new LocalAuth({
         dataPath: sessionPath,
       }),
       puppeteer: {
         headless: true,
+        ...(chromePath ? { executablePath: chromePath } : {}),
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
