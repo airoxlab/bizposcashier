@@ -579,8 +579,18 @@ export default function DeliveryPage() {
     try {
       console.log(`🔄 [Delivery] Updating order ${order.order_number} status from ${order.order_status} to: ${newStatus}`)
 
+      // Track which cashier completed/changed the order
+      const additionalData = {}
+      const cashierData = authManager.getCashier()
+      if (cashierData?.id) {
+        additionalData.modified_by_cashier_id = cashierData.id
+        if (!order.cashier_id) {
+          additionalData.cashier_id = cashierData.id
+        }
+      }
+
       // Use cacheManager for offline-capable status update
-      const result = await cacheManager.updateOrderStatus(order.id, newStatus)
+      const result = await cacheManager.updateOrderStatus(order.id, newStatus, additionalData)
 
       if (!result.success) {
         throw new Error('Failed to update order status')
@@ -939,6 +949,13 @@ export default function DeliveryPage() {
       }
 
       // Regular payment (paymentData is an object)
+      // Validate Account payment requires customer with name + phone
+      if (paymentData.paymentMethod === 'Account') {
+        const cust = order.customers || order.customer
+        if (!cust?.full_name?.trim()) { alert('Customer must have a name for Account payment!'); return }
+        if (!cust?.phone?.trim()) { alert('Customer must have a phone number for Account payment!'); return }
+      }
+
       // CRITICAL FIX: Check if online or offline
       if (navigator.onLine) {
         console.log('🌐 [Delivery Payment] ONLINE - Updating order in database')

@@ -1046,6 +1046,13 @@ export default function OrdersPage() {
         notify.success('Split payment completed successfully!');
       } else {
         // Regular payment (single method)
+        // Validate Account payment requires customer with name + phone
+        if (paymentData.paymentMethod === 'Account') {
+          const cust = selectedOrder.customers || selectedOrder.customer;
+          if (!cust?.full_name?.trim()) { notify.error('Customer must have a name for Account payment!'); return; }
+          if (!cust?.phone?.trim()) { notify.error('Customer must have a phone number for Account payment!'); return; }
+        }
+
         const isComplimentary = paymentData.paymentMethod === 'Complimentary';
         const isUnpaid = paymentData.paymentMethod === 'Unpaid';
         try {
@@ -1222,11 +1229,14 @@ export default function OrdersPage() {
         additionalData.cancellation_reason = cancelReason;
       }
 
-      // Update modified_by if cashier
+      // Update modified_by if cashier; also fill cashier_id if empty (e.g. order taker orders)
       if (userRole === "cashier") {
         const cashier = authManager.getCashier();
         if (cashier) {
           additionalData.modified_by_cashier_id = cashier.id;
+          if (selectedOrder && !selectedOrder.cashier_id) {
+            additionalData.cashier_id = cashier.id;
+          }
         }
       }
 
@@ -1363,6 +1373,57 @@ export default function OrdersPage() {
           notify.error('Cannot deduct inventory: Missing order type or user ID', {
             duration: 6000,
           })
+        }
+      }
+      // ================================================================
+
+      // ================================================================
+      // REVERSE CUSTOMER LEDGER WHEN ACCOUNT ORDER IS CANCELLED
+      // ================================================================
+      if (newStatus === 'Cancelled' && navigator.onLine &&
+          selectedOrder?.payment_method === 'Account' && selectedOrder?.customer_id) {
+        try {
+          console.log('💳 [Orders] Reversing customer ledger for cancelled Account order')
+          const { default: customerLedgerManager } = await import('../../lib/customerLedgerManager')
+          customerLedgerManager.setUserId(user.id)
+
+          const orderTotal = parseFloat(selectedOrder.total_amount || selectedOrder.amount_paid || 0)
+          if (orderTotal > 0) {
+            // Credit back the customer's account (reverse the debit)
+            const { data: currentCustomer } = await supabase
+              .from('customers')
+              .select('account_balance')
+              .eq('id', selectedOrder.customer_id)
+              .single()
+
+            const currentBalance = parseFloat(currentCustomer?.account_balance || 0)
+            const newBalance = currentBalance - orderTotal
+
+            // Create reversal ledger entry
+            await supabase.from('customer_ledger').insert({
+              user_id: user.id,
+              customer_id: selectedOrder.customer_id,
+              transaction_type: 'credit',
+              amount: orderTotal,
+              balance_before: currentBalance,
+              balance_after: newBalance,
+              order_id: orderId,
+              description: `Order cancelled - ${selectedOrder.order_number || 'N/A'}${cancelReason ? ` (${cancelReason})` : ''}`,
+              notes: 'Order cancellation - account credit reversal',
+              created_by: user.id
+            })
+
+            // Update customer balance
+            await supabase.from('customers')
+              .update({ account_balance: newBalance })
+              .eq('id', selectedOrder.customer_id)
+
+            console.log(`✅ [Orders] Customer ledger reversed: -Rs ${orderTotal} (New balance: ${newBalance})`)
+            notify.success(`Customer account credited Rs ${orderTotal} (order cancelled)`)
+          }
+        } catch (ledgerError) {
+          console.error('❌ [Orders] Failed to reverse customer ledger:', ledgerError)
+          notify.error('Order cancelled but failed to reverse customer account. Please adjust manually.')
         }
       }
       // ================================================================

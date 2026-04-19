@@ -255,6 +255,21 @@ export default function InlinePaymentSection({
   const quickAmounts = order ? generateQuickAmounts(getCurrentTotal()) : []
 
   const handlePaymentMethodSelect = (method) => {
+    // Validate customer has name and phone for Account payments
+    if (method.requiresCustomer) {
+      if (!order?.customer_id) {
+        alert('Customer Account payment requires a customer to be selected!')
+        return
+      }
+      if (!order?.customers?.full_name?.trim()) {
+        alert('Customer must have a name for Account payment!')
+        return
+      }
+      if (!order?.customers?.phone?.trim()) {
+        alert('Customer must have a phone number for Account payment!')
+        return
+      }
+    }
     setSelectedPaymentMethod(method)
     if (!method.requiresAmount) {
       setCashAmount('')

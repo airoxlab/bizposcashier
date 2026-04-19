@@ -795,8 +795,19 @@ export default function WalkInPage() {
     try {
       console.log(`🔄 [Walkin] Updating order ${order.order_number} status from ${order.order_status} to: ${newStatus}`)
 
+      // Track which cashier completed/changed the order
+      const additionalData = {}
+      const cashierData = authManager.getCashier()
+      if (cashierData?.id) {
+        additionalData.modified_by_cashier_id = cashierData.id
+        // If order has no cashier (e.g. created by order taker), assign the completing cashier
+        if (!order.cashier_id) {
+          additionalData.cashier_id = cashierData.id
+        }
+      }
+
       // Use cacheManager for offline-capable status update
-      const result = await cacheManager.updateOrderStatus(order.id, newStatus)
+      const result = await cacheManager.updateOrderStatus(order.id, newStatus, additionalData)
 
       if (!result.success) {
         throw new Error('Failed to update order status')
@@ -1307,6 +1318,19 @@ export default function WalkInPage() {
         // Refresh orders list
         setOrdersRefreshTrigger(prev => prev + 1)
         return
+      }
+
+      // Validate Account payment requires customer with name + phone
+      if (paymentData.paymentMethod === 'Account') {
+        const cust = order.customers || order.customer
+        if (!cust?.full_name?.trim()) {
+          alert('Customer must have a name for Account payment!')
+          return
+        }
+        if (!cust?.phone?.trim()) {
+          alert('Customer must have a phone number for Account payment!')
+          return
+        }
       }
 
       // Regular (non-split) payment handling

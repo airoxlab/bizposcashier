@@ -6,55 +6,129 @@
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const path = require('path');
 const fs = require('fs');
+const { execSync } = require('child_process');
 const { app } = require('electron');
 const log = require('electron-log');
 
-/**
- * Find an installed Chrome/Chromium executable on the system.
- * Tries common Windows installation paths, then falls back to letting
- * puppeteer find it on its own (which may fail if cache is missing).
- */
+// ─── Utility functions ──────────────────────────────────────────────────────
+
 function findChrome() {
+  const local = process.env.LOCALAPPDATA || '';
   const candidates = [
-    // Chrome stable
     'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-    // Chrome per-user install
-    path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe'),
-    // Chrome Beta / Canary
-    path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome Beta\\Application\\chrome.exe'),
-    path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome SxS\\Application\\chrome.exe'),
-    // MS Edge (Chromium-based, works with puppeteer)
+    path.join(local, 'Google\\Chrome\\Application\\chrome.exe'),
+    path.join(local, 'Google\\Chrome Beta\\Application\\chrome.exe'),
+    path.join(local, 'Google\\Chrome SxS\\Application\\chrome.exe'),
     'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
     'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-    path.join(process.env.LOCALAPPDATA || '', 'Microsoft\\Edge\\Application\\msedge.exe'),
+    path.join(local, 'Microsoft\\Edge\\Application\\msedge.exe'),
   ];
-
   for (const p of candidates) {
     if (p && fs.existsSync(p)) {
-      log.info(`[WhatsApp] Found browser at: ${p}`);
+      log.info(`[WhatsApp] Using browser: ${p}`);
       return p;
     }
   }
-
   log.warn('[WhatsApp] No system Chrome/Edge found — puppeteer will use its cache');
   return null;
 }
 
+/**
+ * Use WMIC to find chrome.exe / msedge.exe processes whose command line
+ * contains the given session directory, then force-kill each one.
+ * This is the only reliable way to clean up orphaned browsers on Windows
+ * after an unclean app shutdown (EXE build).
+ */
+async function killChromeForSession(sessionDir) {
+  if (process.platform !== 'win32') return;
+  log.info('[WhatsApp] Scanning for orphaned browser processes via wmic...');
+  try {
+    const raw = execSync(
+      'wmic process where "name=\'chrome.exe\' or name=\'msedge.exe\'" get ProcessId,CommandLine /value',
+      { stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000 }
+    ).toString('utf8');
+
+    const normalizedDir = sessionDir.toLowerCase();
+    let killed = 0;
+
+    for (const block of raw.split(/(?:\r?\n){2,}/)) {
+      if (!block.toLowerCase().includes(normalizedDir)) continue;
+      const m = block.match(/ProcessId=(\d+)/i);
+      if (!m) continue;
+      const pid = parseInt(m[1], 10);
+      if (!pid || isNaN(pid)) continue;
+      log.info(`[WhatsApp] Killing orphaned browser PID ${pid} (found via wmic)`);
+      try { execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' }); killed++; } catch {}
+    }
+
+    if (killed > 0) {
+      log.info(`[WhatsApp] Killed ${killed} orphaned browser process(es) — waiting for OS...`);
+      await new Promise(r => setTimeout(r, 2000));
+    } else {
+      log.info('[WhatsApp] No orphaned browser processes found');
+    }
+  } catch (e) {
+    log.warn(`[WhatsApp] wmic scan error (ignored): ${e.message}`);
+  }
+}
+
+function killTree(pid) {
+  return new Promise((resolve) => {
+    if (!pid) return resolve();
+    try {
+      if (process.platform === 'win32') {
+        execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' });
+      } else {
+        execSync(`kill -9 -${pid}`, { stdio: 'ignore' });
+      }
+      log.info(`[WhatsApp] Killed browser tree PID ${pid}`);
+    } catch (e) {
+      log.warn(`[WhatsApp] killTree(${pid}) error (ignored): ${e.message}`);
+    }
+    resolve();
+  });
+}
+
+function cleanLockFiles(sessionDir) {
+  for (const name of ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'DevToolsActivePort', 'lockfile']) {
+    const p = path.join(sessionDir, name);
+    try { if (fs.existsSync(p)) { fs.unlinkSync(p); log.info(`[WhatsApp] Removed lock file: ${name}`); } } catch {}
+  }
+}
+
+// ─── Persisted config ───────────────────────────────────────────────────────
+
+function getConfigPath() {
+  return path.join(app.getPath('userData'), 'bizpos-config.json');
+}
+function readConfig() {
+  try { return JSON.parse(fs.readFileSync(getConfigPath(), 'utf8')); } catch { return {}; }
+}
+function writeConfig(key, value) {
+  try {
+    const cfg = readConfig();
+    cfg[key] = value;
+    fs.writeFileSync(getConfigPath(), JSON.stringify(cfg, null, 2), 'utf8');
+  } catch (e) { log.warn(`[WhatsApp] Could not write config: ${e.message}`); }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 class WhatsAppClientManager {
   constructor() {
     this.client = null;
-    this.status = 'disconnected'; // disconnected | connecting | qr_ready | connected | failed
+    this.status = 'disconnected';
     this.qrCode = null;
     this.mainWindow = null;
     this.reconnectTimer = null;
-    this.isInitializing = false;
-    this._manualDisconnect = false; // true when user intentionally disconnects — suppresses auto-reconnect
+    this._manualDisconnect = false;
+    this._browserPid = null;
+    /** Active initialization promise — prevents concurrent initialize() calls */
+    this._initPromise = null;
   }
 
-  setMainWindow(win) {
-    this.mainWindow = win;
-  }
+  setMainWindow(win) { this.mainWindow = win; }
 
   emit(event, data) {
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
@@ -62,36 +136,78 @@ class WhatsAppClientManager {
     }
   }
 
-  getStatus() {
-    return {
-      status: this.status,
-      qrCode: this.qrCode,
-    };
+  getStatus() { return { status: this.status, qrCode: this.qrCode }; }
+
+  _getSessionDir() {
+    return path.join(app.getPath('userData'), 'whatsapp-session', 'session');
   }
 
-  async initialize() {
-    if (this.isInitializing && !this.client) return; // already starting up with no client yet
-    if (this.client || this.isInitializing) await this.destroy();
+  wasManuallyDisconnected() {
+    return readConfig().whatsappManualDisconnect === true;
+  }
 
-    this.isInitializing = true;
+  // ────────────────────────────────────────────────────────────────────────
+  // PUBLIC: initialize()
+  // Safe to call from anywhere — auto-connect, manual connect, reconnect.
+  // If already running, returns the existing promise (no double-launch).
+  // If already connected, no-ops.
+  // ────────────────────────────────────────────────────────────────────────
+  async initialize() {
+    // Already connected — nothing to do
+    if (this.status === 'connected' && this.client) {
+      log.info('[WhatsApp] Already connected — skipping initialize');
+      return;
+    }
+
+    // Another initialize() is in-flight — piggyback on it instead of destroying
+    if (this._initPromise) {
+      log.info('[WhatsApp] Initialize already in progress — waiting for existing attempt...');
+      return this._initPromise;
+    }
+
+    this._initPromise = this._doInitialize();
+    try {
+      await this._initPromise;
+    } finally {
+      this._initPromise = null;
+    }
+  }
+
+  /** Internal — the actual initialization work. Only one instance runs at a time. */
+  async _doInitialize() {
+    // If a previous client exists (e.g. from a failed attempt), clean it up first
+    if (this.client) await this.destroy();
+
+    this._manualDisconnect = false;
+    writeConfig('whatsappManualDisconnect', false);
     this.setStatus('connecting');
     log.info('[WhatsApp] Initializing client...');
 
-    // Clear stale Chrome lock files before launching (prevents "browser already running" error)
-    this._cleanupLockFiles();
-    this._manualDisconnect = false; // allow auto-reconnect again after a fresh connect
+    const sessionDir = this._getSessionDir();
+
+    // Kill any orphaned Chrome from a previous unclean shutdown
+    await killChromeForSession(sessionDir);
+
+    if (this._browserPid) {
+      log.info(`[WhatsApp] Killing tracked browser PID ${this._browserPid}...`);
+      await killTree(this._browserPid);
+      this._browserPid = null;
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    cleanLockFiles(sessionDir);
 
     const sessionPath = path.join(app.getPath('userData'), 'whatsapp-session');
-
     const chromePath = findChrome();
 
     this.client = new Client({
-      authStrategy: new LocalAuth({
-        dataPath: sessionPath,
-      }),
+      authStrategy: new LocalAuth({ dataPath: sessionPath }),
       puppeteer: {
         headless: true,
         ...(chromePath ? { executablePath: chromePath } : {}),
+        handleSIGINT: false,
+        handleSIGTERM: false,
+        handleSIGHUP: false,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -106,6 +222,7 @@ class WhatsAppClientManager {
 
     this.client.on('qr', (qr) => {
       log.info('[WhatsApp] QR code received');
+      this._captureBrowserPid();
       this.qrCode = qr;
       this.setStatus('qr_ready');
       this.emit('whatsapp:qr', { qr });
@@ -113,8 +230,8 @@ class WhatsAppClientManager {
 
     this.client.on('ready', () => {
       log.info('[WhatsApp] Client ready');
+      this._captureBrowserPid();
       this.qrCode = null;
-      this.isInitializing = false;
       this.setStatus('connected');
       this.emit('whatsapp:ready', {});
     });
@@ -126,14 +243,12 @@ class WhatsAppClientManager {
 
     this.client.on('auth_failure', (msg) => {
       log.error('[WhatsApp] Auth failure:', msg);
-      this.isInitializing = false;
       this.setStatus('failed');
       this.emit('whatsapp:error', { message: 'Authentication failed. Please reconnect.' });
     });
 
     this.client.on('disconnected', (reason) => {
       log.warn('[WhatsApp] Disconnected:', reason);
-      this.isInitializing = false;
       this.setStatus('disconnected');
       this.emit('whatsapp:disconnected', { reason });
       this.scheduleReconnect();
@@ -143,9 +258,25 @@ class WhatsAppClientManager {
       await this.client.initialize();
     } catch (err) {
       log.error('[WhatsApp] Init error:', err.message);
-      this.isInitializing = false;
       this.setStatus('failed');
       this.emit('whatsapp:error', { message: err.message });
+      cleanLockFiles(sessionDir);
+    }
+  }
+
+  _captureBrowserPid() {
+    try {
+      // whatsapp-web.js: pupBrowser is a property, NOT a method
+      const browser = this.client?.pupBrowser || this.client?.browser;
+      if (browser && typeof browser.process === 'function') {
+        const proc = browser.process();
+        if (proc?.pid) {
+          this._browserPid = proc.pid;
+          log.info(`[WhatsApp] Browser PID captured: ${this._browserPid}`);
+        }
+      }
+    } catch (e) {
+      log.warn('[WhatsApp] Could not capture browser PID:', e.message);
     }
   }
 
@@ -170,19 +301,15 @@ class WhatsAppClientManager {
   }
 
   cancelReconnect() {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
   }
 
   async disconnect() {
     this._manualDisconnect = true;
+    writeConfig('whatsappManualDisconnect', true);
     this.cancelReconnect();
     if (this.client) {
-      try {
-        await this.client.logout();
-      } catch (e) {
+      try { await this.client.logout(); } catch (e) {
         log.warn('[WhatsApp] Logout error (ignored):', e.message);
       }
       await this.destroy();
@@ -191,41 +318,37 @@ class WhatsAppClientManager {
   }
 
   async destroy() {
-    this.isInitializing = false;
+    // If an initialize is in progress, clear the promise so callers don't hang
+    this._initPromise = null;
+
+    const pid = this._browserPid;
+    this._browserPid = null;
+
     if (this.client) {
-      try {
-        await this.client.destroy();
-      } catch (e) {
+      try { await this.client.destroy(); } catch (e) {
         log.warn('[WhatsApp] Destroy error (ignored):', e.message);
       }
       this.client = null;
-      // Wait for Chrome process to fully exit before next init
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      this._cleanupLockFiles();
     }
+
+    if (pid) {
+      log.info(`[WhatsApp] Force-killing browser tree PID ${pid}...`);
+      await killTree(pid);
+    }
+
+    await new Promise(r => setTimeout(r, 1500));
+    cleanLockFiles(this._getSessionDir());
   }
 
-  _cleanupLockFiles() {
-    const sessionPath = path.join(app.getPath('userData'), 'whatsapp-session');
-    // LocalAuth creates a subfolder named 'session' (default clientId)
-    const sessionDir = path.join(sessionPath, 'session');
-    const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
-    for (const name of lockFiles) {
-      const lockFile = path.join(sessionDir, name);
-      try {
-        if (fs.existsSync(lockFile)) {
-          fs.unlinkSync(lockFile);
-          log.info(`[WhatsApp] Removed ${name}`);
-        }
-      } catch (e) {
-        log.warn(`[WhatsApp] Could not remove ${name}:`, e.message);
-      }
-    }
+  async forceShutdown() {
+    log.info('[WhatsApp] Force shutdown requested by app quit...');
+    this.cancelReconnect();
+    this._manualDisconnect = true;
+    await killChromeForSession(this._getSessionDir());
+    await this.destroy();
+    log.info('[WhatsApp] Force shutdown complete');
   }
 
-  /**
-   * Send a text message. phone must be in international format: '923001234567'
-   */
   async sendMessage(phone, message) {
     if (this.status !== 'connected' || !this.client) {
       throw new Error('WhatsApp is not connected');
@@ -235,9 +358,6 @@ class WhatsAppClientManager {
     log.info(`[WhatsApp] Message sent to ${phone}`);
   }
 
-  /**
-   * Send media (image, video, pdf) with optional caption
-   */
   async sendMedia(phone, mediaPath, caption = '') {
     if (this.status !== 'connected' || !this.client) {
       throw new Error('WhatsApp is not connected');
@@ -249,9 +369,7 @@ class WhatsAppClientManager {
     log.info(`[WhatsApp] Media sent to ${phone}`);
   }
 
-  isConnected() {
-    return this.status === 'connected';
-  }
+  isConnected() { return this.status === 'connected'; }
 }
 
 const whatsAppClientManager = new WhatsAppClientManager();

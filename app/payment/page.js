@@ -444,10 +444,20 @@ useEffect(() => {
   }
 
   const handlePaymentMethodSelect = async (method) => {
-    // Check if method requires customer
-    if (method.requiresCustomer && !orderData.customer) {
-      notify.error('Customer Account payment requires a customer to be selected!')
-      return
+    // Check if method requires customer with name and phone
+    if (method.requiresCustomer) {
+      if (!orderData.customer) {
+        notify.error('Customer Account payment requires a customer to be selected!')
+        return
+      }
+      if (!orderData.customer.full_name?.trim()) {
+        notify.error('Customer must have a name for Account payment!')
+        return
+      }
+      if (!orderData.customer.phone?.trim()) {
+        notify.error('Customer must have a phone number for Account payment!')
+        return
+      }
     }
 
     setSelectedPaymentMethod(method)
@@ -511,6 +521,18 @@ useEffect(() => {
 // COMPLETE UPDATED processOrder function with delivery_charges and delivery_time fixes
 const processOrder = async () => {
   if (!canProcessPayment() || !orderData) return
+
+  // Final safety check: Account payment must have customer with name + phone
+  if (selectedPaymentMethod?.requiresCustomer) {
+    if (!orderData.customer?.full_name?.trim()) {
+      notify.error('Customer must have a name for Account payment!')
+      return
+    }
+    if (!orderData.customer?.phone?.trim()) {
+      notify.error('Customer must have a phone number for Account payment!')
+      return
+    }
+  }
 
   setIsProcessing(true)
 
@@ -616,6 +638,7 @@ const processOrder = async () => {
             : (orderData.orderInstructions || ''),
           delivery_time: deliveryTimeForDB,
           takeaway_time: takeawayTimeForDB,
+          customer_id: orderData.customer?.id || null,
           updated_at: new Date().toISOString(),
           modified_by_cashier_id: cashier?.id || null
         })

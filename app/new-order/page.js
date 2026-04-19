@@ -907,7 +907,17 @@ export default function NewOrderPage() {
 
   const handleOrderStatusUpdate = async (order, newStatus) => {
     try {
-      const result = await cacheManager.updateOrderStatus(order.id, newStatus)
+      // Track which cashier completed/changed the order
+      const additionalData = {}
+      const cashierData = authManager.getCashier()
+      if (cashierData?.id) {
+        additionalData.modified_by_cashier_id = cashierData.id
+        if (!order.cashier_id) {
+          additionalData.cashier_id = cashierData.id
+        }
+      }
+
+      const result = await cacheManager.updateOrderStatus(order.id, newStatus, additionalData)
       if (!result.success) throw new Error(result.message || 'Failed to update order status')
 
       // Free the table when a walkin order is completed
@@ -1130,6 +1140,13 @@ export default function NewOrderPage() {
       }
 
       // Regular payment
+      // Validate Account payment requires customer with name + phone
+      if (paymentData.paymentMethod === 'Account') {
+        const cust = order.customers || order.customer
+        if (!cust?.full_name?.trim()) { alert('Customer must have a name for Account payment!'); return }
+        if (!cust?.phone?.trim()) { alert('Customer must have a phone number for Account payment!'); return }
+      }
+
       if (navigator.onLine) {
         const isComplimentary = paymentData.paymentMethod === 'Complimentary'
         const isUnpaid = paymentData.paymentMethod === 'Unpaid'

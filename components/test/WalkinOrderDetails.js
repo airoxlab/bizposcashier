@@ -803,6 +803,9 @@ export default function WalkinOrderDetails({
         const cashier = authManager.getCashier()
         if (cashier) {
           additionalData.modified_by_cashier_id = cashier.id
+          if (!order.cashier_id) {
+            additionalData.cashier_id = cashier.id
+          }
         }
       }
 
@@ -819,6 +822,48 @@ export default function WalkinOrderDetails({
           { from_status: order.order_status, to_status: newStatus },
           cancelReason ? `Cancelled: ${cancelReason}` : `Status changed to ${newStatus}`
         )
+      }
+
+      // Reverse customer ledger when Account order is cancelled
+      if (newStatus === 'Cancelled' && navigator.onLine &&
+          order?.payment_method === 'Account' && order?.customer_id) {
+        try {
+          const currentUser = authManager.getCurrentUser()
+          const orderTotal = parseFloat(order.total_amount || order.amount_paid || 0)
+          if (orderTotal > 0 && currentUser?.id) {
+            const { data: custData } = await supabase
+              .from('customers')
+              .select('account_balance')
+              .eq('id', order.customer_id)
+              .single()
+
+            const currentBalance = parseFloat(custData?.account_balance || 0)
+            const newBalance = currentBalance - orderTotal
+
+            await supabase.from('customer_ledger').insert({
+              user_id: currentUser.id,
+              customer_id: order.customer_id,
+              transaction_type: 'credit',
+              amount: orderTotal,
+              balance_before: currentBalance,
+              balance_after: newBalance,
+              order_id: orderId,
+              description: `Order cancelled - ${order.order_number || 'N/A'}${cancelReason ? ` (${cancelReason})` : ''}`,
+              notes: 'Order cancellation - account credit reversal',
+              created_by: currentUser.id
+            })
+
+            await supabase.from('customers')
+              .update({ account_balance: newBalance })
+              .eq('id', order.customer_id)
+
+            console.log(`✅ [Cancel] Customer ledger reversed: -Rs ${orderTotal} (New balance: ${newBalance})`)
+            toast.success(`Customer account credited Rs ${orderTotal} (order cancelled)`)
+          }
+        } catch (ledgerErr) {
+          console.error('❌ [Cancel] Failed to reverse customer ledger:', ledgerErr)
+          toast.error('Order cancelled but failed to reverse customer account. Adjust manually.')
+        }
       }
 
       // Refresh parent component
