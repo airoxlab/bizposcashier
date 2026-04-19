@@ -889,12 +889,15 @@ export default function TakeawayPage() {
       }
 
       // CRITICAL FIX: Check if online or offline
+      const isComplimentary = paymentData.paymentMethod === 'Complimentary'
+      const isUnpaid = paymentData.paymentMethod === 'Unpaid'
+      const shouldComplete = paymentData.completeOrder !== false
+
       if (navigator.onLine) {
         console.log('🌐 [Takeaway Payment] ONLINE - Updating order in database')
 
-        // Update order with payment details
-        const isComplimentary = paymentData.paymentMethod === 'Complimentary'
-        const isUnpaid = paymentData.paymentMethod === 'Unpaid'
+        // Update order with payment details + order_status in ONE atomic write
+        const cashierData = authManager.getCashier()
         const { error: updateError } = await supabase
           .from('orders')
           .update({
@@ -904,6 +907,9 @@ export default function TakeawayPage() {
             discount_amount: paymentData.discountAmount || 0,
             discount_percentage: paymentData.discountType === 'percentage' ? paymentData.discountValue : 0,
             total_amount: isComplimentary || isUnpaid ? order.total_amount : paymentData.newTotal,
+            ...(shouldComplete ? { order_status: 'Completed' } : {}),
+            ...(shouldComplete && cashierData?.id && !order.cashier_id ? { cashier_id: cashierData.id } : {}),
+            ...(shouldComplete && cashierData?.id ? { modified_by_cashier_id: cashierData.id } : {}),
             ...(isComplimentary && paymentData.complimentaryReason ? { order_instructions: [order.order_instructions, `[COMPLIMENTARY: ${paymentData.complimentaryReason}]`].filter(Boolean).join(' | ') } : {}),
             updated_at: new Date().toISOString()
           })
@@ -915,7 +921,7 @@ export default function TakeawayPage() {
       } else {
         console.log('📴 [Takeaway Payment] OFFLINE - Caching order update')
 
-        // Update order in cache
+        // Update order in cache — include order_status in the same write
         const orderIndex = cacheManager.cache.orders.findIndex(o => o.id === order.id)
         if (orderIndex !== -1) {
           cacheManager.cache.orders[orderIndex] = {
@@ -926,8 +932,9 @@ export default function TakeawayPage() {
             discount_amount: paymentData.discountAmount || 0,
             discount_percentage: paymentData.discountType === 'percentage' ? paymentData.discountValue : 0,
             total_amount: isComplimentary || isUnpaid ? order.total_amount : paymentData.newTotal,
+            ...(shouldComplete ? { order_status: 'Completed' } : {}),
             updated_at: new Date().toISOString(),
-            _isSynced: false  // Mark for sync when online
+            _isSynced: false
           }
           await cacheManager.saveCacheToStorage()
           console.log('✅ [Takeaway Payment] Order updated in cache (offline)')
@@ -1261,10 +1268,10 @@ export default function TakeawayPage() {
       // Play beep sound
       playBeepSound()
 
-      // Mark order as completed only if user chose "Paid + Complete"
-      if (paymentData.completeOrder !== false) {
-        handleOrderStatusUpdate(order, 'Completed').catch(err => {
-          console.error('Error updating order status:', err)
+      // Inventory deduction + post-completion tasks (status already set above)
+      if (shouldComplete) {
+        await handleOrderStatusUpdate(order, 'Completed').catch(err => {
+          console.error('Error during post-completion tasks:', err)
         })
       }
 

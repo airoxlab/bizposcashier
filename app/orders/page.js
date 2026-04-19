@@ -1055,8 +1055,9 @@ export default function OrdersPage() {
 
         const isComplimentary = paymentData.paymentMethod === 'Complimentary';
         const isUnpaid = paymentData.paymentMethod === 'Unpaid';
+        const cashier = authManager.getCashier();
         try {
-          // Update order with payment details
+          // Update payment details + order_status in ONE atomic write
           const { error: updateError } = await supabase
             .from('orders')
             .update({
@@ -1068,6 +1069,9 @@ export default function OrdersPage() {
               total_amount: isComplimentary || isUnpaid ? selectedOrder.total_amount : paymentData.newTotal,
               service_charge_amount: paymentData.serviceChargeAmount || 0,
               service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0,
+              order_status: 'Completed',
+              ...(cashier?.id && !selectedOrder.cashier_id ? { cashier_id: cashier.id } : {}),
+              ...(cashier?.id ? { modified_by_cashier_id: cashier.id } : {}),
               ...(isComplimentary && paymentData.complimentaryReason ? { order_instructions: [selectedOrder.order_instructions, `[COMPLIMENTARY: ${paymentData.complimentaryReason}]`].filter(Boolean).join(' | ') } : {}),
               updated_at: new Date().toISOString()
             })
@@ -1154,12 +1158,11 @@ export default function OrdersPage() {
       // Hide payment view
       setShowPaymentView(false);
 
-      // Mark order as completed
+      // Inventory deduction (status already set in the payment update above)
       try {
         await updateOrderStatus(selectedOrder.id, 'Completed');
       } catch (statusError) {
-        console.error('⚠️ Failed to mark order as completed:', statusError);
-        notify.warning('Payment recorded but order status may not be updated');
+        console.error('⚠️ Post-completion tasks error:', statusError);
       }
 
       // Refresh orders list

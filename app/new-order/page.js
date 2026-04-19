@@ -1147,9 +1147,13 @@ export default function NewOrderPage() {
         if (!cust?.phone?.trim()) { alert('Customer must have a phone number for Account payment!'); return }
       }
 
+      const isComplimentary = paymentData.paymentMethod === 'Complimentary'
+      const isUnpaid = paymentData.paymentMethod === 'Unpaid'
+      const shouldComplete = paymentData.completeOrder !== false
+
       if (navigator.onLine) {
-        const isComplimentary = paymentData.paymentMethod === 'Complimentary'
-        const isUnpaid = paymentData.paymentMethod === 'Unpaid'
+        // Update payment fields + order_status in ONE atomic write
+        const cashierData = authManager.getCashier()
         const { error } = await supabase
           .from('orders')
           .update({
@@ -1161,6 +1165,9 @@ export default function NewOrderPage() {
             total_amount: isComplimentary || isUnpaid ? order.total_amount : paymentData.newTotal,
             service_charge_amount: paymentData.serviceChargeAmount || 0,
             service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0,
+            ...(shouldComplete ? { order_status: 'Completed' } : {}),
+            ...(shouldComplete && cashierData?.id && !order.cashier_id ? { cashier_id: cashierData.id } : {}),
+            ...(shouldComplete && cashierData?.id ? { modified_by_cashier_id: cashierData.id } : {}),
             ...(isComplimentary && paymentData.complimentaryReason ? { order_instructions: [order.order_instructions, `[COMPLIMENTARY: ${paymentData.complimentaryReason}]`].filter(Boolean).join(' | ') } : {}),
             updated_at: new Date().toISOString()
           })
@@ -1238,12 +1245,13 @@ export default function NewOrderPage() {
           cacheManager.cache.orders[orderIndex] = {
             ...cacheManager.cache.orders[orderIndex],
             payment_method: paymentData.paymentMethod,
-            payment_status: 'Paid',
-            amount_paid: paymentData.newTotal,
+            payment_status: isUnpaid ? 'Pending' : 'Paid',
+            amount_paid: (isComplimentary || isUnpaid) ? 0 : paymentData.newTotal,
             discount_amount: paymentData.discountAmount || 0,
-            total_amount: paymentData.newTotal,
+            total_amount: isComplimentary || isUnpaid ? order.total_amount : paymentData.newTotal,
             service_charge_amount: paymentData.serviceChargeAmount || 0,
             service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0,
+            ...(shouldComplete ? { order_status: 'Completed' } : {}),
             updated_at: new Date().toISOString(),
             _isSynced: false
           }
@@ -1251,7 +1259,7 @@ export default function NewOrderPage() {
         }
       }
 
-      if (paymentData.completeOrder === false) {
+      if (!shouldComplete) {
         setSelectedOrder(prev => prev?.id === order.id
           ? { ...prev, payment_status: isUnpaid ? 'Pending' : 'Paid', payment_method: paymentData.paymentMethod, amount_paid: (isComplimentary || isUnpaid) ? 0 : paymentData.newTotal, total_amount: isComplimentary || isUnpaid ? order.total_amount : paymentData.newTotal }
           : prev)
@@ -1261,6 +1269,7 @@ export default function NewOrderPage() {
       }
 
       toast.success(`Order #${order.order_number} paid and completed!`)
+      // Inventory deduction + post-completion tasks (status already set above)
       await handleOrderStatusUpdate(order, 'Completed')
     } catch (error) {
       toast.error(`Payment failed: ${error?.message}`)

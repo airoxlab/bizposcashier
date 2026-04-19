@@ -792,9 +792,14 @@ const processOrder = async () => {
         amount_paid: selectedPaymentMethod.id === 'complimentary' ? 0 : undefined,
         payment_method: selectedPaymentMethod.name,
         payment_status: (selectedPaymentMethod.id === 'unpaid' || selectedPaymentMethod.id === 'account') ? 'Pending' : 'Paid',
+        // Cashiers with PLACE_AND_COMPLETE_ORDER permission can mark orders as Completed
+        // directly from the payment page (for all payment methods EXCEPT Unpaid).
+        // Modified orders keep their original status unless Dispatched.
         order_status: (orderData.isModifying && orderData.originalOrderStatus && orderData.originalOrderStatus !== 'Dispatched')
           ? orderData.originalOrderStatus
-          : 'Pending',
+          : (permissionManager.hasPermission('PLACE_AND_COMPLETE_ORDER') && selectedPaymentMethod.id !== 'unpaid')
+            ? 'Completed'
+            : 'Pending',
         order_instructions: selectedPaymentMethod.id === 'complimentary'
           ? [orderData.orderInstructions, `[COMPLIMENTARY: ${complimentaryReason}]`].filter(Boolean).join(' | ')
           : (orderData.orderInstructions || ''),
@@ -818,6 +823,38 @@ const processOrder = async () => {
       console.log(`✅ Order ${newOrderNumber} placed successfully`)
       console.log(`💰 Delivery charges: Rs ${orderData.deliveryCharges || 0}`)
       console.log(`🕐 Delivery time: ${orderData.deliveryTime || 'N/A'}`)
+
+      // If this was placed as Completed (PLACE_AND_COMPLETE_ORDER permission),
+      // trigger inventory deduction for the order — same as when marking complete
+      // from the walkin/takeaway/delivery pages.
+      const wasPlacedAsCompleted =
+        permissionManager.hasPermission('PLACE_AND_COMPLETE_ORDER') &&
+        selectedPaymentMethod.id !== 'unpaid' &&
+        !(orderData.isModifying && orderData.originalOrderStatus && orderData.originalOrderStatus !== 'Dispatched')
+
+      if (wasPlacedAsCompleted && order?.id && navigator.onLine) {
+        try {
+          const orderTypeId = orderData.orderTypeId || null
+          if (orderTypeId && currentUser?.id) {
+            console.log('📦 [Payment] Place+Complete — calling deduct_inventory_for_order')
+            const { error: deductError } = await supabase.rpc('deduct_inventory_for_order', {
+              p_order_id: order.id,
+              p_user_id: currentUser.id,
+              p_order_type_id: orderTypeId
+            })
+            if (deductError) {
+              console.error('⚠️ [Payment] Inventory deduction error:', deductError.message)
+              notify.warning(`Order completed but inventory deduction failed: ${deductError.message}`)
+            } else {
+              console.log('✅ [Payment] Inventory deducted for Place+Complete order')
+            }
+          } else {
+            console.warn('⚠️ [Payment] Skipping inventory deduction — missing order_type_id or user')
+          }
+        } catch (invErr) {
+          console.error('❌ [Payment] Inventory deduction exception:', invErr.message)
+        }
+      }
 
       // Cache item changes for reprint display
       // cacheManager.createOrder() already called authManager.logOrderAction() which handles DB writes
@@ -2771,9 +2808,13 @@ if (orderComplete) {
                   {networkStatus.isOnline
                     ? selectedPaymentMethod?.id === 'complimentary'
                       ? 'Place Complimentary Order'
-                      : (selectedPaymentMethod?.id === 'account' || selectedPaymentMethod?.id === 'unpaid'
+                      : (selectedPaymentMethod?.id === 'unpaid'
                           ? 'Place Order'
-                          : 'Complete Payment')
+                          : (permissionManager.hasPermission('PLACE_AND_COMPLETE_ORDER')
+                              ? 'Place and Complete'
+                              : (selectedPaymentMethod?.id === 'account'
+                                  ? 'Place Order'
+                                  : 'Complete Payment')))
                     : 'Save Order (Offline)'}
                 </>
               )}

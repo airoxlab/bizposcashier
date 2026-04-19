@@ -1335,10 +1335,15 @@ export default function WalkInPage() {
 
       // Regular (non-split) payment handling
       // Update order with payment details (works both online and offline)
+      const isComplimentary = paymentData.paymentMethod === 'Complimentary'
+      const isUnpaid = paymentData.paymentMethod === 'Unpaid'
+      // Determine if this payment should also mark the order as Completed
+      const shouldComplete = paymentData.completeOrder !== false
+
       if (navigator.onLine) {
-        // Online: Update database directly
-        const isComplimentary = paymentData.paymentMethod === 'Complimentary'
-        const isUnpaid = paymentData.paymentMethod === 'Unpaid'
+        // Online: Update database directly — include order_status in the SAME write
+        // to avoid race conditions where payment is saved but status stays Pending
+        const cashierData = authManager.getCashier()
         const { error: updateError } = await supabase
           .from('orders')
           .update({
@@ -1350,6 +1355,9 @@ export default function WalkInPage() {
             service_charge_amount: paymentData.serviceChargeAmount || 0,
             service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0,
             total_amount: isComplimentary || isUnpaid ? order.total_amount : paymentData.newTotal,
+            ...(shouldComplete ? { order_status: 'Completed' } : {}),
+            ...(shouldComplete && cashierData?.id && !order.cashier_id ? { cashier_id: cashierData.id } : {}),
+            ...(shouldComplete && cashierData?.id ? { modified_by_cashier_id: cashierData.id } : {}),
             ...(isComplimentary && paymentData.complimentaryReason ? { order_instructions: [order.order_instructions, `[COMPLIMENTARY: ${paymentData.complimentaryReason}]`].filter(Boolean).join(' | ') } : {}),
             updated_at: new Date().toISOString()
           })
@@ -1369,7 +1377,7 @@ export default function WalkInPage() {
           `Payment completed: ${paymentData.paymentMethod} - Rs ${paymentData.newTotal}`
         )
       } else {
-        // Offline: Update cache only
+        // Offline: Update cache only — include order_status in the same write
         console.log('📴 [Payment] Offline mode - updating order in cache')
         const orderIndex = cacheManager.cache.orders.findIndex(o => o.id === order.id)
         if (orderIndex !== -1) {
@@ -1383,6 +1391,7 @@ export default function WalkInPage() {
             service_charge_amount: paymentData.serviceChargeAmount || 0,
             service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0,
             total_amount: isComplimentary || isUnpaid ? order.total_amount : paymentData.newTotal,
+            ...(shouldComplete ? { order_status: 'Completed' } : {}),
             updated_at: new Date().toISOString(),
             _isSynced: false
           }
@@ -1759,10 +1768,11 @@ export default function WalkInPage() {
       // Play beep sound
       playBeepSound()
 
-      // Mark order as completed only if user chose "Paid + Complete"
-      if (paymentData.completeOrder !== false) {
-        handleOrderStatusUpdate(order, 'Completed').catch(err => {
-          console.error('Error updating order status:', err)
+      // Inventory deduction + refresh (status already set in the payment update above)
+      if (shouldComplete) {
+        // Run inventory deduction (the status is already Completed in DB/cache)
+        await handleOrderStatusUpdate(order, 'Completed').catch(err => {
+          console.error('Error during post-completion tasks:', err)
         })
       }
 
