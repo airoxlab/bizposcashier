@@ -838,8 +838,12 @@ export default function SettingsPage() {
         .single()
 
       if (error) {
+        if (!navigator.onLine || error.message?.includes('Failed to fetch')) {
+          console.warn('⚠️ Profile fetch skipped — device is offline')
+          return
+        }
         console.error("❌ Error fetching user:", error.message)
-        notify.error('Failed to load profile data: ' + error.message)
+        if (!silent) notify.error('Failed to load profile data: ' + error.message)
         return
       }
 

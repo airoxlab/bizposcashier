@@ -22,7 +22,8 @@ import CartSidebar from '../../components/test/CartSidebar'
 import WalkinOrdersSidebar from '../../components/test/WalkinOrdersSidebar'
 import WalkinOrderDetails from '../../components/test/WalkinOrderDetails'
 import { FileText, Check, Printer } from 'lucide-react'
-import toast, { Toaster } from 'react-hot-toast'
+import toast from 'react-hot-toast'
+import PosToaster from '@/components/ui/PosToaster'
 import { supabase } from '../../lib/supabase'
 import { motion, AnimatePresence } from 'framer-motion'
 import ProtectedPage from '../../components/ProtectedPage'
@@ -47,6 +48,9 @@ export default function TakeawayPage() {
   const [pickupTime, setPickupTime] = useState('')
   const [networkStatus, setNetworkStatus] = useState({ isOnline: true, unsyncedOrders: 0 })
   const [isDataReady, setIsDataReady] = useState(() => cacheManager.isReady())
+  // Admin-controlled flag (users.require_customer_takeaway) cached by cacheManager.
+  // Default true preserves legacy behavior of this page (customer was hard-required here).
+  const [requireCustomer, setRequireCustomer] = useState(true)
   const [isLoading, setIsLoading] = useState(() => !cacheManager.isReady())
   const [theme, setTheme] = useState('light')
   const [isReopenedOrder, setIsReopenedOrder] = useState(false)
@@ -71,6 +75,19 @@ export default function TakeawayPage() {
   const [showSuccessModal, setShowSuccessModal] = useState(false)
   const [completedOrderData, setCompletedOrderData] = useState(null)
   const [isPrinting, setIsPrinting] = useState(false)
+
+  // Load require_customer_takeaway flag on mount (cached by cacheManager).
+  // If cache is missing (fresh install / no sync yet), preserve legacy
+  // behavior: customer is required.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('pos_require_customer')
+      if (raw !== null) {
+        const parsed = JSON.parse(raw)
+        setRequireCustomer(!!parsed?.takeaway)
+      }
+    } catch {}
+  }, [])
 
   // Save cart to localStorage
   useEffect(() => {
@@ -709,6 +726,11 @@ export default function TakeawayPage() {
       // ================================================================
 
       // WhatsApp auto-send
+      if (newStatus === 'Preparing') {
+        triggerWhatsAppAutoSend(order, user?.id, 'Preparing')
+          .then(r => { if (r?.success) toast.success('WhatsApp: preparing notification sent', { duration: 3000 }) })
+          .catch(err => console.error('[Takeaway] WA preparing-send error:', err.message))
+      }
       if (newStatus === 'Ready') {
         triggerWhatsAppAutoSend(order, user?.id, 'Ready')
           .then(r => { if (r?.success) toast.success('WhatsApp: order ready for pickup notification sent', { duration: 3000 }) })
@@ -1999,8 +2021,8 @@ export default function TakeawayPage() {
       return
     }
 
-    if (!customer) {
-      notify.warning('Please select a customer before proceeding')
+    if (requireCustomer && !customer) {
+      notify.warning('Customer is required for takeaway orders — please select a customer')
       return
     }
 
@@ -2125,33 +2147,7 @@ export default function TakeawayPage() {
   return (
     <ProtectedPage permissionKey="SALES_TAKEAWAY" pageName="Takeaway Orders">
       <div className={`h-screen flex ${classes.background} overflow-hidden transition-all duration-500`}>
-      <Toaster
-        position="top-right"
-        reverseOrder={false}
-        gutter={8}
-        toastOptions={{
-          duration: 3000,
-          style: {
-            background: isDark ? '#1f2937' : '#fff',
-            color: isDark ? '#f3f4f6' : '#111827',
-            border: isDark ? '1px solid #374151' : '1px solid #e5e7eb',
-          },
-          success: {
-            duration: 3000,
-            iconTheme: {
-              primary: '#10b981',
-              secondary: '#fff',
-            },
-          },
-          error: {
-            duration: 4000,
-            iconTheme: {
-              primary: '#ef4444',
-              secondary: '#fff',
-            },
-          },
-        }}
-      />
+      <PosToaster isDark={isDark} />
 
       {/* Left Sidebar - Categories or Orders List */}
       {showOrdersView ? (

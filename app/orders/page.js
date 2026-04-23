@@ -46,6 +46,7 @@ import {
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 import { triggerWhatsAppAutoSend } from "../../lib/whatsappAutoSend";
+import { triggerAccountAutoSend } from "../../lib/accountAutoSend";
 import { themeManager } from "../../lib/themeManager";
 import { authManager } from "../../lib/authManager";
 import { printerManager } from "../../lib/printerManager";
@@ -500,7 +501,9 @@ export default function OrdersPage() {
             .from("orders")
             .select(`
               id,
+              user_id,
               order_number,
+              daily_serial,
               order_type,
               order_status,
               payment_status,
@@ -1117,15 +1120,17 @@ export default function OrdersPage() {
               .eq('transaction_type', 'debit')
               .maybeSingle();
 
+            let previousBalance = 0;
+            let newBalance = 0;
             if (!existingEntry) {
-              const currentBalance = await customerLedgerManager.getCustomerBalance(selectedOrder.customer_id);
-              const newBalance = currentBalance + paymentData.newTotal;
+              previousBalance = await customerLedgerManager.getCustomerBalance(selectedOrder.customer_id);
+              newBalance = previousBalance + paymentData.newTotal;
               await supabase.from('customer_ledger').insert({
                 user_id: user.id,
                 customer_id: selectedOrder.customer_id,
                 transaction_type: 'debit',
                 amount: paymentData.newTotal,
-                balance_before: currentBalance,
+                balance_before: previousBalance,
                 balance_after: newBalance,
                 order_id: selectedOrder.id,
                 description: `Order #${selectedOrder.order_number} - ${selectedOrder.order_type?.toUpperCase() || 'ORDER'}`,
@@ -1133,6 +1138,23 @@ export default function OrdersPage() {
                 created_by: user.id
               });
               await supabase.from('customers').update({ account_balance: newBalance }).eq('id', selectedOrder.customer_id);
+            } else {
+              previousBalance = await customerLedgerManager.getCustomerBalance(selectedOrder.customer_id);
+              newBalance = previousBalance;
+            }
+
+            // Fire Account WhatsApp bill (includes balance, receipt image, etc.)
+            const cust = selectedOrder.customers || selectedOrder.customer;
+            if (cust?.phone) {
+              triggerAccountAutoSend({
+                orderId: selectedOrder.id,
+                orderNumber: selectedOrder.order_number,
+                customer: { id: selectedOrder.customer_id, full_name: cust.full_name, phone: cust.phone },
+                totalAmount: paymentData.newTotal,
+                orderType: selectedOrder.order_type,
+                previousBalance,
+                newBalance,
+              });
             }
           } catch (ledgerError) {
             console.error('⚠️ Failed to create customer ledger entry:', ledgerError);
@@ -1432,20 +1454,18 @@ export default function OrdersPage() {
       // ================================================================
 
       // WhatsApp auto-send
-      // For delivery: send on Dispatched (not Ready), for others: send on Ready
-      // ReadyStatus: send on Ready for delivery orders (mutually exclusive with Dispatch)
-      if (newStatus === 'Ready' && selectedOrder.order_type !== 'delivery') {
+      if (newStatus === 'Preparing') {
+        triggerWhatsAppAutoSend(selectedOrder, user?.id, 'Preparing')
+          .then(r => { if (r?.success) notify.success('WhatsApp: preparing notification sent') })
+          .catch(err => console.error('[Orders] WA preparing-send error:', err.message))
+      }
+      if (newStatus === 'Ready') {
         triggerWhatsAppAutoSend(selectedOrder, user?.id, 'Ready')
           .then(r => { if (r?.success) notify.success('WhatsApp: order ready notification sent') })
           .catch(err => console.error('[Orders] WA ready-send error:', err.message))
       }
-      if (newStatus === 'Ready' && selectedOrder.order_type === 'delivery') {
-        triggerWhatsAppAutoSend(selectedOrder, user?.id, 'ReadyStatus')
-          .then(r => { if (r?.success) notify.success('WhatsApp: order ready notification sent') })
-          .catch(err => console.error('[Orders] WA ready-status-send error:', err.message))
-      }
-      if (newStatus === 'Dispatched' && selectedOrder.order_type === 'delivery') {
-        triggerWhatsAppAutoSend(selectedOrder, user?.id, 'Ready')
+      if (newStatus === 'Dispatched') {
+        triggerWhatsAppAutoSend(selectedOrder, user?.id, 'Dispatched')
           .then(r => { if (r?.success) notify.success('WhatsApp: dispatch notification sent') })
           .catch(err => console.error('[Orders] WA dispatch-send error:', err.message))
       }
@@ -3896,6 +3916,50 @@ export default function OrdersPage() {
                   history.order_item_changes.length > 0;
                 const priceDiff = history.price_difference;
 
+                // Order-level field changes (payment method, discount,
+                // service charge, etc.) from modify_order_atomic RPC
+                const parsedChanges = (() => {
+                  if (!history.changes) return null;
+                  if (typeof history.changes === 'string') {
+                    try { return JSON.parse(history.changes); } catch { return null; }
+                  }
+                  return history.changes;
+                })();
+                const fieldChanges = parsedChanges?.fieldChanges || null;
+                const fieldChangeEntries = fieldChanges
+                  ? Object.entries(fieldChanges)
+                  : [];
+                // Human-readable labels for field keys
+                const FIELD_LABELS = {
+                  payment_method: 'Payment method',
+                  payment_status: 'Payment status',
+                  order_status: 'Order status',
+                  order_type: 'Order type',
+                  order_instructions: 'Instructions',
+                  discount_amount: 'Discount (Rs)',
+                  discount_percentage: 'Discount (%)',
+                  service_charge_amount: 'Service charge (Rs)',
+                  service_charge_percentage: 'Service charge (%)',
+                  delivery_charges: 'Delivery charges',
+                  delivery_address: 'Delivery address',
+                  delivery_time: 'Delivery time',
+                  takeaway_time: 'Takeaway time',
+                  table_id: 'Table',
+                  delivery_boy_id: 'Rider',
+                  customer_id: 'Customer',
+                  order_taker_id: 'Order taker',
+                  tax_amount: 'Tax (Rs)',
+                  tax_percentage: 'Tax (%)',
+                  loyalty_points_redeemed: 'Loyalty points redeemed',
+                  loyalty_discount_amount: 'Loyalty discount',
+                  cancellation_reason: 'Cancellation reason',
+                };
+                const fmtFieldVal = (v) => {
+                  if (v === null || v === undefined || v === '') return '—';
+                  if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+                  return String(v);
+                };
+
                 // Get action icon and color
                 const getActionIcon = () => {
                   if (isReopened)
@@ -4024,8 +4088,15 @@ export default function OrdersPage() {
                     >
                       {history.action_type === "reopened" &&
                         "🔄 Order reopened"}
-                      {history.action_type === "modified" &&
-                        "✏️ Items & pricing modified"}
+                      {history.action_type === "modified" && (
+                        hasItemChanges && fieldChangeEntries.length > 0
+                          ? "✏️ Items & order details modified"
+                          : hasItemChanges
+                          ? "✏️ Items modified"
+                          : fieldChangeEntries.length > 0
+                          ? "✏️ Order details modified"
+                          : "✏️ Order modified"
+                      )}
                       {history.action_type ===
                         "status_changed_to_pending" &&
                         "⏳ Changed to Pending"}
@@ -4042,6 +4113,45 @@ export default function OrdersPage() {
                         "status_changed_to_cancelled" &&
                         "❌ Cancelled"}
                     </p>
+
+                    {/* Field Changes — payment method / discount / service charge / etc.
+                        Populated by modify_order_atomic RPC in changes.fieldChanges */}
+                    {fieldChangeEntries.length > 0 && (
+                      <div className={`mt-2 pt-2 border-t ${
+                        isDark ? "border-purple-700/30" : "border-purple-200"
+                      }`}>
+                        <div
+                          className={`text-[10px] font-semibold ${
+                            isDark ? "text-purple-300" : "text-purple-700"
+                          } uppercase mb-1.5 flex items-center`}
+                        >
+                          <Edit3 className="w-2.5 h-2.5 mr-1" />
+                          Field Changes
+                        </div>
+                        <div className="space-y-1">
+                          {fieldChangeEntries.map(([key, diff]) => {
+                            const label = FIELD_LABELS[key] || key;
+                            return (
+                              <div
+                                key={key}
+                                className={`flex items-center justify-between p-1.5 rounded text-[10px] ${
+                                  isDark
+                                    ? "bg-amber-900/20 text-amber-300"
+                                    : "bg-amber-50 text-amber-800"
+                                }`}
+                              >
+                                <span className="font-medium truncate flex-shrink-0 mr-2">{label}</span>
+                                <span className="flex items-center gap-1.5 min-w-0 flex-1 justify-end">
+                                  <span className="truncate opacity-70 line-through">{fmtFieldVal(diff?.before)}</span>
+                                  <span className="opacity-50">→</span>
+                                  <span className="truncate font-semibold">{fmtFieldVal(diff?.after)}</span>
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Item Changes - Ultra Compact */}
                     {hasItemChanges && (

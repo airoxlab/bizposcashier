@@ -1134,76 +1134,50 @@ const autoDiscoverPrinters = async () => {
     <ProtectedPage permissionKey="PRINTERS" pageName="Printer Management">
       <div className={`h-screen flex ${classes.background} overflow-hidden transition-all duration-500`}>
       {/* Left Sidebar */}
-      <div className={`w-[420px] ${classes.card} ${classes.shadow} shadow-xl ${classes.border} border-r flex flex-col`}>
-        {/* Header */}
-        <div className="p-4 border-b border-gray-200 bg-gradient-to-r from-purple-600 to-blue-600">
-          <div className="flex items-center justify-between mb-3">
+      <div className={`w-[320px] ${classes.card} ${classes.shadow} shadow-xl ${classes.border} border-r flex flex-col`}>
+        {/* Compact Header */}
+        <div className="px-3 py-2.5 border-b border-gray-200 bg-gradient-to-r from-purple-600 to-blue-600">
+          <div className="flex items-center justify-between mb-2">
             <motion.button
               whileHover={{ x: -2 }}
               whileTap={{ scale: 0.98 }}
               onClick={() => router.push('/dashboard')}
-              className="flex items-center text-white/90 hover:text-white transition-all text-sm"
+              className="flex items-center text-white/90 hover:text-white transition-all text-xs"
             >
-              <ArrowLeft className="w-4 h-4 mr-2" />
+              <ArrowLeft className="w-3.5 h-3.5 mr-1.5" />
               <span className="font-medium">Dashboard</span>
             </motion.button>
 
-            {/* Theme Toggle & Network Status */}
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center space-x-1.5">
               <motion.button
                 whileHover={{ scale: 1.05 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={toggleTheme}
-                className="p-2 rounded-lg bg-white/10 hover:bg-white/20 transition-all"
+                className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 transition-all"
               >
-                <AnimatePresence mode="wait">
-                  {isDark ? (
-                    <motion.div
-                      key="sun"
-                      initial={{ rotate: -90, opacity: 0 }}
-                      animate={{ rotate: 0, opacity: 1 }}
-                      exit={{ rotate: 90, opacity: 0 }}
-                      transition={{ duration: 0.3 }}
-                    >
-                      <Sun className="w-4 h-4 text-yellow-300" />
-                    </motion.div>
-                  ) : (
-                    <motion.div
-                      key="moon"
-                      initial={{ rotate: 90, opacity: 0 }}
-                      animate={{ rotate: 0, opacity: 1 }}
-                      exit={{ rotate: -90, opacity: 0 }}
-                      transition={{ duration: 0.3 }}
-                    >
-                      <Moon className="w-4 h-4 text-white/90" />
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                {isDark ? <Sun className="w-3.5 h-3.5 text-yellow-300" /> : <Moon className="w-3.5 h-3.5 text-white/90" />}
               </motion.button>
-
               {networkStatus.isOnline ? (
-                <Wifi className="w-5 h-5 text-green-300" />
+                <Wifi className="w-4 h-4 text-green-300" />
               ) : (
-                <WifiOff className="w-5 h-5 text-red-300" />
+                <WifiOff className="w-4 h-4 text-red-300" />
               )}
             </div>
           </div>
 
-          <div className="mb-4">
-            <h1 className="text-lg font-bold text-white">Printer Management</h1>
-            <p className="text-purple-100 text-xs">Configure thermal receipt printers</p>
-          </div>
+          <h1 className="text-sm font-bold text-white leading-tight">Printers</h1>
+          <p className="text-purple-100 text-[10px] mb-2">Configure thermal receipt printers</p>
 
-          {/* Action Buttons */}
-          <div className="space-y-2">
+          {/* Action Buttons — compact row */}
+          <div className="grid grid-cols-2 gap-1.5">
             <motion.button
               whileHover={{ scale: 1.01 }}
               whileTap={{ scale: 0.99 }}
               onClick={() => setShowAddModal(true)}
-              className="w-full bg-purple-500 hover:bg-purple-400 text-white font-semibold py-2.5 rounded-xl shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center space-x-2"
+              className="bg-purple-500 hover:bg-purple-400 text-white font-semibold py-1.5 rounded-lg shadow transition-all flex items-center justify-center space-x-1.5 text-xs"
             >
-              <Plus className="w-4 h-4" />
-              <span>Add Printer</span>
+              <Plus className="w-3.5 h-3.5" />
+              <span>Add</span>
             </motion.button>
 
             <motion.button
@@ -1211,121 +1185,14 @@ const autoDiscoverPrinters = async () => {
               whileTap={{ scale: 0.99 }}
               onClick={detectUSBPrinters}
               disabled={isDetectingUSB}
-              className="w-full bg-blue-500 hover:bg-blue-400 text-white font-semibold py-2.5 rounded-xl shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="bg-blue-500 hover:bg-blue-400 text-white font-semibold py-1.5 rounded-lg shadow transition-all flex items-center justify-center space-x-1.5 text-xs disabled:opacity-50"
             >
               {isDetectingUSB ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>Detecting...</span>
-                </>
+                <><RefreshCw className="w-3.5 h-3.5 animate-spin" /><span>...</span></>
               ) : (
-                <>
-                  <Usb className="w-4 h-4" />
-                  <span>Detect USB</span>
-                </>
+                <><Usb className="w-3.5 h-3.5" /><span>Detect USB</span></>
               )}
             </motion.button>
-          </div>
-
-          {/* Network Printing Settings */}
-          <div className={`mt-4 pt-4 border-t ${isDark ? 'border-purple-700/30' : 'border-purple-200'}`}>
-            <h3 className="text-white text-sm font-bold mb-3 flex items-center">
-              <Network className="w-4 h-4 mr-2" />
-              Network Printing
-            </h3>
-
-            {/* Share Printer Mode Toggle */}
-            <div className={`${isDark ? 'bg-white/5' : 'bg-white/20'} backdrop-blur-sm rounded-xl p-3 mb-2`}>
-              <div className="flex items-center justify-between mb-1">
-                <div>
-                  <p className="text-white text-sm font-medium">Share Printer Mode</p>
-                  <p className="text-purple-100 text-xs">For terminals WITHOUT printer</p>
-                </div>
-                <button
-                  onClick={() => handleToggleShareMode(!sharePrinterMode)}
-                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                    sharePrinterMode ? 'bg-green-500' : 'bg-gray-400'
-                  }`}
-                >
-                  <span
-                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                      sharePrinterMode ? 'translate-x-6' : 'translate-x-1'
-                    }`}
-                  />
-                </button>
-              </div>
-              {sharePrinterMode && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  className="flex items-center text-green-300 text-xs mt-2"
-                >
-                  <Check className="w-3 h-3 mr-1" />
-                  <span>Network printing active</span>
-                </motion.div>
-              )}
-            </div>
-
-            {/* I am Server Toggle */}
-            <div className={`${isDark ? 'bg-white/5' : 'bg-white/20'} backdrop-blur-sm rounded-xl p-3`}>
-              <div className="flex items-center justify-between mb-1">
-                <div>
-                  <p className="text-white text-sm font-medium">I am Server</p>
-                  <p className="text-purple-100 text-xs">For terminal WITH printer</p>
-                </div>
-                <button
-                  onClick={() => handleToggleServerMode(!isServer)}
-                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                    isServer ? 'bg-blue-500' : 'bg-gray-400'
-                  }`}
-                >
-                  <span
-                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                      isServer ? 'translate-x-6' : 'translate-x-1'
-                    }`}
-                  />
-                </button>
-              </div>
-              {isServer && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  className="flex items-center text-blue-300 text-xs mt-2"
-                >
-                  <Signal className="w-3 h-3 mr-1" />
-                  <span>Listening for print jobs...</span>
-                </motion.div>
-              )}
-            </div>
-
-            {!sharePrinterMode && !isServer && (
-              <div className="mt-2 text-purple-200 text-xs flex items-center">
-                <Info className="w-3 h-3 mr-1" />
-                <span>Turn on "Share Printer" on client terminals OR "I am Server" on terminal with printer</span>
-              </div>
-            )}
-
-            {/* Mobile App Print Server — always visible */}
-            {localIP && (
-              <div className="mt-3 bg-blue-900/30 border border-blue-500/30 rounded-xl p-3">
-                <p className="text-blue-200 text-xs font-medium mb-2 flex items-center">
-                  <Monitor className="w-3 h-3 mr-1" />
-                  Mobile App Print Server Address
-                </p>
-                <div className="flex items-center justify-between">
-                  <code className="text-white text-sm font-mono font-bold">{localIP}:3940</code>
-                  <button
-                    onClick={() => { navigator.clipboard.writeText(`${localIP}:3940`); notify.success('IP copied!'); }}
-                    className="text-blue-300 hover:text-white text-xs underline ml-2"
-                  >
-                    Copy
-                  </button>
-                </div>
-                <p className="text-blue-300 text-xs mt-1">
-                  Paste this in BizPOS Admin → Settings → Mobile App Print Server
-                </p>
-              </div>
-            )}
           </div>
         </div>
 
@@ -1438,87 +1305,77 @@ const autoDiscoverPrinters = async () => {
           )}
         </AnimatePresence>
 
-        {/* Printers List */}
-        <div className="flex-1 overflow-y-auto p-4">
+        {/* Printers List — compact */}
+        <div className="flex-1 overflow-y-auto px-2.5 py-2">
           {printers.length === 0 ? (
-            <div className="text-center py-8">
-              <div className={`w-16 h-16 ${isDark ? 'bg-gray-700' : 'bg-gray-200'} rounded-full flex items-center justify-center mx-auto mb-4`}>
-                <Printer className={`w-8 h-8 ${classes.textSecondary}`} />
+            <div className="text-center py-6">
+              <div className={`w-12 h-12 ${isDark ? 'bg-gray-700' : 'bg-gray-200'} rounded-full flex items-center justify-center mx-auto mb-2`}>
+                <Printer className={`w-6 h-6 ${classes.textSecondary}`} />
               </div>
-              <h3 className={`text-lg font-semibold ${classes.textSecondary} mb-2`}>No Printers</h3>
-              <p className={`${classes.textSecondary} text-sm`}>Add your first printer to get started</p>
+              <h3 className={`text-sm font-semibold ${classes.textSecondary} mb-1`}>No Printers</h3>
+              <p className={`${classes.textSecondary} text-xs`}>Add your first printer</p>
             </div>
           ) : (
-            <div className="space-y-3">
-              <h3 className={`text-xs font-semibold ${classes.textSecondary} uppercase tracking-wider mb-3`}>
+            <div className="space-y-1.5">
+              <h3 className={`text-[10px] font-semibold ${classes.textSecondary} uppercase tracking-wider px-1 sticky top-0 ${isDark ? 'bg-gray-900' : 'bg-white'} py-1 z-10`}>
                 Configured Printers ({printers.length})
               </h3>
               <AnimatePresence>
                 {printers.map((printer, index) => (
                   <motion.div
                     key={printer.id}
-                    initial={{ opacity: 0, y: 20 }}
+                    initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, x: -20 }}
-                    transition={{ delay: index * 0.05 }}
-                    className={`${classes.card} rounded-xl ${classes.shadow} shadow-lg hover:shadow-xl transition-all duration-300 ${classes.border} border overflow-hidden group`}
+                    transition={{ delay: index * 0.03 }}
+                    className={`${classes.card} rounded-lg ${classes.border} border hover:shadow-md transition-all`}
                   >
-                    <div className="p-4">
-                      {/* Header */}
-                      <div className="flex items-center justify-between mb-3">
-                        <div className="flex items-center space-x-3">
-                          <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-                            printer.is_default 
-                              ? 'bg-gradient-to-br from-purple-500 to-blue-500' 
+                    <div className="px-2.5 py-2">
+                      {/* Compact header row */}
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center space-x-2 min-w-0 flex-1">
+                          <div className={`w-7 h-7 shrink-0 rounded-lg flex items-center justify-center ${
+                            printer.is_default
+                              ? 'bg-gradient-to-br from-purple-500 to-blue-500'
                               : isDark ? 'bg-gray-600' : 'bg-gray-300'
                           }`}>
                             {printer.is_default ? (
-                              <Star className="w-6 h-6 text-white" />
+                              <Star className="w-3.5 h-3.5 text-white" />
                             ) : (
-                              <Printer className={`w-6 h-6 ${isDark ? 'text-gray-300' : 'text-gray-600'}`} />
+                              <Printer className={`w-3.5 h-3.5 ${isDark ? 'text-gray-300' : 'text-gray-600'}`} />
                             )}
                           </div>
-                          <div>
-                            <div className="flex items-center space-x-2">
-                              <h4 className={`font-bold ${classes.textPrimary} text-sm`}>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center space-x-1.5">
+                              <h4 className={`font-semibold ${classes.textPrimary} text-xs truncate`}>
                                 {printer.name}
                               </h4>
                               {printer.is_default && (
-                                <span className="px-2 py-0.5 bg-purple-100 text-purple-600 text-xs font-medium rounded-full">
+                                <span className="px-1.5 py-0 bg-purple-100 text-purple-600 text-[9px] font-medium rounded-full shrink-0">
                                   Default
                                 </span>
                               )}
                             </div>
-                            <p className={`${classes.textSecondary} text-xs flex items-center space-x-2`}>
+                            <p className={`${classes.textSecondary} text-[10px] flex items-center space-x-1 truncate`}>
                               {printer.connection_type === 'windows_usb' ? (
-                                <>
-                                  <Monitor className="w-3 h-3" />
-                                  <span>{printer.usb_printer_name || 'Windows USB Printer'}</span>
-                                </>
+                                <><Monitor className="w-2.5 h-2.5 shrink-0" /><span className="truncate">{printer.usb_printer_name || 'Windows USB'}</span></>
                               ) : printer.printer_type === 'usb' ? (
-                                <>
-                                  <Usb className="w-3 h-3" />
-                                  <span>{printer.usb_port || 'USB Printer'}</span>
-                                </>
+                                <><Usb className="w-2.5 h-2.5 shrink-0" /><span className="truncate">{printer.usb_port || 'USB'}</span></>
                               ) : (
-                                <>
-                                  <Network className="w-3 h-3" />
-                                  <span>{printer.ip_address}:{printer.port}</span>
-                                </>
+                                <><Network className="w-2.5 h-2.5 shrink-0" /><span className="truncate">{printer.ip_address}:{printer.port}</span></>
                               )}
                             </p>
                           </div>
                         </div>
-
-                        {/* Status Badge */}
-                        {getConnectionStatusBadge(printer)}
+                        <div className="shrink-0 ml-1">
+                          {getConnectionStatusBadge(printer)}
+                        </div>
                       </div>
 
-                      {/* Quick Actions */}
-                      <div className="flex items-center justify-between space-x-2">
-                        <div className="flex items-center space-x-2">
+                      {/* Compact action row */}
+                      <div className="flex items-center justify-between gap-1">
+                        <div className="flex items-center gap-1">
                           <motion.button
-                            whileHover={{ scale: 1.05 }}
                             whileTap={{ scale: 0.95 }}
                             onClick={() => testPrinterConnection(
                               printer.id,
@@ -1528,74 +1385,56 @@ const autoDiscoverPrinters = async () => {
                               true
                             )}
                             disabled={testingPrinter === printer.id}
-                            className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors flex items-center space-x-2 ${
+                            className={`px-2 py-1 rounded text-[10px] font-medium flex items-center space-x-1 ${
                               testingPrinter === printer.id
-                                ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                ? 'bg-gray-100 text-gray-400'
                                 : 'bg-blue-100 text-blue-600 hover:bg-blue-200'
                             }`}
                           >
-                            <Signal className="w-3 h-3" />
-                            <span>Test</span>
+                            <Signal className="w-2.5 h-2.5" /><span>Test</span>
                           </motion.button>
-
                           <motion.button
-                            whileHover={{ scale: 1.05 }}
                             whileTap={{ scale: 0.95 }}
                             onClick={() => testPrintReceipt(printer)}
                             disabled={testingPrinter === printer.id}
-                            className={`px-3 py-2 rounded-lg text-xs font-medium transition-colors flex items-center space-x-2 ${
+                            className={`px-2 py-1 rounded text-[10px] font-medium flex items-center space-x-1 ${
                               testingPrinter === printer.id
-                                ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                ? 'bg-gray-100 text-gray-400'
                                 : 'bg-green-100 text-green-600 hover:bg-green-200'
                             }`}
                           >
-                            <Printer className="w-3 h-3" />
-                            <span>Print</span>
+                            <Printer className="w-2.5 h-2.5" /><span>Print</span>
                           </motion.button>
                         </div>
-
-                        <div className="flex items-center space-x-1">
+                        <div className="flex items-center gap-0.5">
                           {!printer.is_default && (
                             <motion.button
-                              whileHover={{ scale: 1.05 }}
                               whileTap={{ scale: 0.95 }}
                               onClick={() => setAsDefault(printer.id)}
-                              className="p-2 rounded-lg bg-purple-100 text-purple-600 hover:bg-purple-200 transition-colors"
+                              className="p-1 rounded bg-purple-100 text-purple-600 hover:bg-purple-200"
                               title="Set as default"
                             >
-                              <Star className="w-3 h-3" />
+                              <Star className="w-2.5 h-2.5" />
                             </motion.button>
                           )}
-
                           <motion.button
-                            whileHover={{ scale: 1.05 }}
                             whileTap={{ scale: 0.95 }}
                             onClick={() => handleEdit(printer)}
-                            className="p-2 rounded-lg bg-orange-100 text-orange-600 hover:bg-orange-200 transition-colors"
-                            title="Edit printer"
+                            className="p-1 rounded bg-orange-100 text-orange-600 hover:bg-orange-200"
+                            title="Edit"
                           >
-                            <Edit3 className="w-3 h-3" />
+                            <Edit3 className="w-2.5 h-2.5" />
                           </motion.button>
-
                           <motion.button
-                            whileHover={{ scale: 1.05 }}
                             whileTap={{ scale: 0.95 }}
                             onClick={() => openDeleteModal(printer.id, printer.name)}
-                            className="p-2 rounded-lg bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
-                            title="Delete printer"
+                            className="p-1 rounded bg-red-100 text-red-600 hover:bg-red-200"
+                            title="Delete"
                           >
-                            <Trash2 className="w-3 h-3" />
+                            <Trash2 className="w-2.5 h-2.5" />
                           </motion.button>
                         </div>
                       </div>
-
-                      {/* Last Connected */}
-                      {printer.last_connected_at && (
-                        <div className={`mt-3 pt-3 ${classes.border} border-t text-xs ${classes.textSecondary} flex items-center space-x-2`}>
-                          <Activity className="w-3 h-3" />
-                          <span>Last active: {new Date(printer.last_connected_at).toLocaleString()}</span>
-                        </div>
-                      )}
                     </div>
                   </motion.div>
                 ))}
@@ -1605,35 +1444,35 @@ const autoDiscoverPrinters = async () => {
         </div>
       </div>
 
-      {/* Right Side - Enhanced Main Content */}
+      {/* Right Side - Main Content */}
       <div className={`flex-1 flex flex-col ${isDark ? 'bg-gray-900' : 'bg-gray-50'}`}>
-        {/* Enhanced Header */}
-        <div className={`${classes.card} ${classes.shadow} shadow-sm ${classes.border} border-b p-6`}>
+        {/* Compact Header */}
+        <div className={`${classes.card} ${classes.shadow} shadow-sm ${classes.border} border-b px-4 py-3`}>
           <div className="flex items-center justify-between">
             <div>
-              <h1 className={`text-2xl font-bold ${classes.textPrimary} flex items-center space-x-3`}>
-                <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-blue-500 rounded-xl flex items-center justify-center">
-                  <Printer className="w-5 h-5 text-white" />
+              <h1 className={`text-base font-bold ${classes.textPrimary} flex items-center space-x-2`}>
+                <div className="w-7 h-7 bg-gradient-to-br from-purple-500 to-blue-500 rounded-lg flex items-center justify-center">
+                  <Printer className="w-4 h-4 text-white" />
                 </div>
                 <span>Thermal Printer Management</span>
               </h1>
-              <p className={`${classes.textSecondary} text-sm mt-1`}>
-                Configure and manage your thermal printers for order receipts
+              <p className={`${classes.textSecondary} text-xs mt-0.5 ml-9`}>
+                Configure and manage thermal printers for receipts
               </p>
             </div>
             <div className="text-right">
-              <div className={`text-xs ${classes.textSecondary}`}>
+              <div className={`text-[10px] ${classes.textSecondary}`}>
                 {new Date().toLocaleDateString()}
               </div>
-              <div className={`text-sm font-semibold ${classes.textPrimary}`}>
+              <div className={`text-xs font-semibold ${classes.textPrimary}`}>
                 {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}
               </div>
             </div>
           </div>
         </div>
 
-        {/* Enhanced Main Content */}
-        <div className="flex-1 overflow-y-auto p-6">
+        {/* Main Content */}
+        <div className="flex-1 overflow-y-auto p-4">
           {printers.length === 0 && discoveredPrinters.length === 0 ? (
             <div className="text-center py-20">
               <div className={`w-32 h-32 ${isDark ? 'bg-gray-700' : 'bg-gray-200'} rounded-full flex items-center justify-center mx-auto mb-8`}>
@@ -1658,52 +1497,123 @@ const autoDiscoverPrinters = async () => {
               </div>
             </div>
           ) : (
-            <div className="space-y-6">
+            <div className="space-y-3">
+              {/* Network Printing Settings — compact */}
+              <div className={`${classes.card} rounded-xl ${classes.border} border px-4 py-3`}>
+                <div className="flex items-center space-x-2 mb-2">
+                  <Network className="w-4 h-4 text-indigo-500" />
+                  <h2 className={`text-sm font-bold ${classes.textPrimary}`}>Network Printing</h2>
+                  <span className={`text-[10px] ${classes.textSecondary}`}>— share printers across terminals</span>
+                </div>
+
+                <div className="grid md:grid-cols-2 gap-2">
+                  {/* Share Printer Mode */}
+                  <div className={`rounded-lg px-3 py-2 border ${classes.border} ${isDark ? 'bg-gray-800/50' : 'bg-gray-50'}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className={`${classes.textPrimary} text-xs font-semibold truncate`}>Share Printer Mode</p>
+                        <p className={`${classes.textSecondary} text-[10px] truncate`}>Terminals WITHOUT printer</p>
+                        {sharePrinterMode && (
+                          <div className="flex items-center text-green-600 text-[10px] mt-0.5">
+                            <Check className="w-2.5 h-2.5 mr-0.5" /><span>Active</span>
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => handleToggleShareMode(!sharePrinterMode)}
+                        className={`shrink-0 relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${sharePrinterMode ? 'bg-green-500' : 'bg-gray-400'}`}
+                      >
+                        <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${sharePrinterMode ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* I am Server */}
+                  <div className={`rounded-lg px-3 py-2 border ${classes.border} ${isDark ? 'bg-gray-800/50' : 'bg-gray-50'}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className={`${classes.textPrimary} text-xs font-semibold truncate`}>I am Server</p>
+                        <p className={`${classes.textSecondary} text-[10px] truncate`}>Terminal WITH printer</p>
+                        {isServer && (
+                          <div className="flex items-center text-blue-600 text-[10px] mt-0.5">
+                            <Signal className="w-2.5 h-2.5 mr-0.5" /><span>Listening...</span>
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => handleToggleServerMode(!isServer)}
+                        className={`shrink-0 relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${isServer ? 'bg-blue-500' : 'bg-gray-400'}`}
+                      >
+                        <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${isServer ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Mobile App Print Server — inline compact */}
+                {localIP && (
+                  <div className={`mt-2 rounded-lg px-3 py-2 border flex items-center justify-between gap-2 ${isDark ? 'border-blue-500/30 bg-blue-900/20' : 'border-blue-200 bg-blue-50'}`}>
+                    <div className="min-w-0 flex items-center gap-2">
+                      <Monitor className={`w-3.5 h-3.5 shrink-0 ${isDark ? 'text-blue-300' : 'text-blue-700'}`} />
+                      <div className="min-w-0">
+                        <p className={`text-[10px] font-semibold ${isDark ? 'text-blue-300' : 'text-blue-700'}`}>Mobile App Print Server</p>
+                        <code className={`text-xs font-mono font-bold ${classes.textPrimary}`}>{localIP}:3940</code>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(`${localIP}:3940`); notify.success('IP copied!'); }}
+                      className={`shrink-0 text-[10px] px-2 py-1 rounded font-medium ${isDark ? 'bg-blue-500/20 text-blue-300 hover:bg-blue-500/30' : 'bg-blue-100 text-blue-700 hover:bg-blue-200'}`}
+                    >
+                      Copy
+                    </button>
+                  </div>
+                )}
+              </div>
+
               {/* Kitchen Token Routing */}
               {printers.length > 0 && (categories.length > 0 || deals.length > 0) && (
-                <div className={`${classes.card} rounded-2xl ${classes.shadow} shadow-lg ${classes.border} border p-6`}>
+                <div className={`${classes.card} rounded-xl ${classes.border} border px-4 py-3`}>
                   <div className="flex items-center justify-between mb-2">
-                    <div>
-                      <h2 className={`text-xl font-bold ${classes.textPrimary} flex items-center space-x-2`}>
-                        <Settings className="w-5 h-5 text-orange-500" />
+                    <div className="min-w-0">
+                      <h2 className={`text-sm font-bold ${classes.textPrimary} flex items-center space-x-2`}>
+                        <Settings className="w-4 h-4 text-orange-500" />
                         <span>Kitchen Token Routing</span>
                       </h2>
-                      <p className={`text-xs ${classes.textSecondary} mt-1`}>
-                        Per printer: toggle <strong>All Items</strong> to receive every order item, or pick specific categories/deals.
+                      <p className={`text-[10px] ${classes.textSecondary} mt-0.5`}>
+                        Toggle <strong>All Items</strong> or pick categories/deals per printer.
                       </p>
                     </div>
                     <motion.button
-                      whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.98 }}
                       onClick={saveRoutingMappings}
                       disabled={savingMappings}
-                      className="px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-semibold rounded-xl text-sm flex items-center space-x-2 transition-colors"
+                      className="px-3 py-1.5 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white font-semibold rounded-lg text-xs flex items-center space-x-1.5"
                     >
                       {savingMappings ? (
-                        <><RefreshCw className="w-4 h-4 animate-spin" /><span>Saving…</span></>
+                        <><RefreshCw className="w-3 h-3 animate-spin" /><span>Saving…</span></>
                       ) : (
-                        <><Check className="w-4 h-4" /><span>Save Routing</span></>
+                        <><Check className="w-3 h-3" /><span>Save</span></>
                       )}
                     </motion.button>
                   </div>
 
-                  <div className="space-y-3 mt-4">
+                  <div className="space-y-2 mt-2">
                     {printers.map(printer => {
                       const isBroadcast = broadcastPrinterIds.includes(printer.id)
                       const connInfo = printer.ip_address || printer.usb_port || printer.connection_type || ''
                       return (
-                        <div key={printer.id} className={`rounded-xl border ${classes.border} overflow-hidden`}>
+                        <div key={printer.id} className={`rounded-lg border ${classes.border} overflow-hidden`}>
                           {/* Printer header */}
-                          <div className={`flex items-center justify-between px-4 py-3 ${isDark ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                          <div className={`flex items-center justify-between px-3 py-2 ${isDark ? 'bg-gray-800' : 'bg-gray-50'}`}>
                             <div className="flex items-center gap-2 min-w-0">
-                              <span className={`text-sm font-semibold ${classes.textPrimary} truncate`}>{printer.name}</span>
-                              {connInfo && <span className={`text-xs ${classes.textSecondary} shrink-0`}>{connInfo}</span>}
+                              <span className={`text-xs font-semibold ${classes.textPrimary} truncate`}>{printer.name}</span>
+                              {connInfo && <span className={`text-[10px] ${classes.textSecondary} shrink-0`}>{connInfo}</span>}
                             </div>
                             <button
                               onClick={() => setBroadcastPrinterIds(prev =>
                                 isBroadcast ? prev.filter(id => id !== printer.id) : [...prev, printer.id]
                               )}
-                              className={`ml-3 shrink-0 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                              className={`ml-2 shrink-0 px-2.5 py-1 rounded-md text-[10px] font-semibold transition-colors ${
                                 isBroadcast
                                   ? 'bg-green-500 hover:bg-green-600 text-white'
                                   : `${isDark ? 'bg-gray-700 hover:bg-gray-600 text-gray-300' : 'bg-white hover:bg-gray-100 text-gray-600 border border-gray-300'}`
@@ -1715,11 +1625,11 @@ const autoDiscoverPrinters = async () => {
 
                           {/* Categories / Deals — hidden when broadcast is on */}
                           {isBroadcast ? (
-                            <div className={`px-4 py-2.5 ${isDark ? 'bg-gray-900/40' : 'bg-green-50'}`}>
-                              <p className="text-xs text-green-600 font-medium">Receives every item from every order — no need to select categories.</p>
+                            <div className={`px-3 py-1.5 ${isDark ? 'bg-gray-900/40' : 'bg-green-50'}`}>
+                              <p className="text-[10px] text-green-600 font-medium">Receives every item from every order.</p>
                             </div>
                           ) : (
-                            <div className={`px-4 py-3 ${isDark ? 'bg-gray-900/20' : 'bg-white'}`}>
+                            <div className={`px-3 py-2 ${isDark ? 'bg-gray-900/20' : 'bg-white'}`}>
                               {categories.length > 0 && (
                                 <div className="mb-2">
                                   <p className={`text-xs font-medium ${classes.textSecondary} mb-1.5`}>Categories</p>
@@ -1807,7 +1717,7 @@ const autoDiscoverPrinters = async () => {
                 value={formData.name}
                 onChange={handleInputChange}
                 placeholder="Kitchen Printer, Receipt Printer, etc."
-                className={`w-full px-4 py-3 ${classes.border} border rounded-xl ${classes.card} ${classes.textPrimary} focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all`}
+                className="w-full px-4 py-3 border rounded-xl bg-white dark:bg-gray-900 border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
                 required
               />
               <p className={`text-xs ${classes.textSecondary} mt-1`}>Give your printer a descriptive name</p>
@@ -1826,15 +1736,15 @@ const autoDiscoverPrinters = async () => {
                   onClick={() => setFormData(prev => ({ ...prev, printer_type: 'ip' }))}
                   className={`p-3 rounded-xl border-2 transition-all ${
                     formData.printer_type === 'ip'
-                      ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20'
-                      : `${classes.border} ${classes.card}`
+                      ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30'
+                      : 'border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-900'
                   }`}
                 >
-                  <Network className={`w-5 h-5 mx-auto mb-1 ${formData.printer_type === 'ip' ? 'text-purple-600' : classes.textSecondary}`} />
-                  <div className={`text-xs font-medium ${formData.printer_type === 'ip' ? 'text-purple-600' : classes.textPrimary}`}>
+                  <Network className={`w-5 h-5 mx-auto mb-1 ${formData.printer_type === 'ip' ? 'text-purple-600 dark:text-purple-400' : 'text-gray-500 dark:text-gray-400'}`} />
+                  <div className={`text-xs font-medium ${formData.printer_type === 'ip' ? 'text-purple-600 dark:text-purple-400' : 'text-gray-900 dark:text-white'}`}>
                     Network (IP)
                   </div>
-                  <div className={`text-xs ${classes.textSecondary} mt-0.5`}>Ethernet/WiFi</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Ethernet/WiFi</div>
                 </motion.button>
 
                 <motion.button
@@ -1844,15 +1754,15 @@ const autoDiscoverPrinters = async () => {
                   onClick={() => setFormData(prev => ({ ...prev, printer_type: 'usb' }))}
                   className={`p-3 rounded-xl border-2 transition-all ${
                     formData.printer_type === 'usb'
-                      ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/20'
-                      : `${classes.border} ${classes.card}`
+                      ? 'border-purple-500 bg-purple-50 dark:bg-purple-900/30'
+                      : 'border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-900'
                   }`}
                 >
-                  <Usb className={`w-5 h-5 mx-auto mb-1 ${formData.printer_type === 'usb' ? 'text-purple-600' : classes.textSecondary}`} />
-                  <div className={`text-xs font-medium ${formData.printer_type === 'usb' ? 'text-purple-600' : classes.textPrimary}`}>
+                  <Usb className={`w-5 h-5 mx-auto mb-1 ${formData.printer_type === 'usb' ? 'text-purple-600 dark:text-purple-400' : 'text-gray-500 dark:text-gray-400'}`} />
+                  <div className={`text-xs font-medium ${formData.printer_type === 'usb' ? 'text-purple-600 dark:text-purple-400' : 'text-gray-900 dark:text-white'}`}>
                     USB/Serial
                   </div>
-                  <div className={`text-xs ${classes.textSecondary} mt-0.5`}>COM port</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">COM port</div>
                 </motion.button>
 
                 <motion.button
@@ -1865,15 +1775,15 @@ const autoDiscoverPrinters = async () => {
                   }}
                   className={`p-3 rounded-xl border-2 transition-all ${
                     formData.printer_type === 'windows_usb'
-                      ? 'border-green-500 bg-green-50 dark:bg-green-900/20'
-                      : `${classes.border} ${classes.card}`
+                      ? 'border-green-500 bg-green-50 dark:bg-green-900/30'
+                      : 'border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-900'
                   }`}
                 >
-                  <Monitor className={`w-5 h-5 mx-auto mb-1 ${formData.printer_type === 'windows_usb' ? 'text-green-600' : classes.textSecondary}`} />
-                  <div className={`text-xs font-medium ${formData.printer_type === 'windows_usb' ? 'text-green-600' : classes.textPrimary}`}>
+                  <Monitor className={`w-5 h-5 mx-auto mb-1 ${formData.printer_type === 'windows_usb' ? 'text-green-600 dark:text-green-400' : 'text-gray-500 dark:text-gray-400'}`} />
+                  <div className={`text-xs font-medium ${formData.printer_type === 'windows_usb' ? 'text-green-600 dark:text-green-400' : 'text-gray-900 dark:text-white'}`}>
                     Windows USB
                   </div>
-                  <div className={`text-xs ${classes.textSecondary} mt-0.5`}>USB001 device</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">USB001 device</div>
                 </motion.button>
               </div>
             </div>
@@ -1891,7 +1801,7 @@ const autoDiscoverPrinters = async () => {
                     value={formData.ip_address}
                     onChange={handleInputChange}
                     placeholder="192.168.1.100"
-                    className={`w-full px-4 py-3 ${classes.border} border rounded-xl ${classes.card} ${classes.textPrimary} focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all`}
+                    className="w-full px-4 py-3 border rounded-xl bg-white dark:bg-gray-900 border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
                     required
                   />
                 </div>
@@ -1908,7 +1818,7 @@ const autoDiscoverPrinters = async () => {
                     placeholder="9100"
                     min="1"
                     max="65535"
-                    className={`w-full px-4 py-3 ${classes.border} border rounded-xl ${classes.card} ${classes.textPrimary} focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all`}
+                    className="w-full px-4 py-3 border rounded-xl bg-white dark:bg-gray-900 border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
                     required
                   />
                 </div>
@@ -1923,7 +1833,7 @@ const autoDiscoverPrinters = async () => {
                     name="usb_printer_name"
                     value={formData.usb_printer_name}
                     onChange={handleInputChange}
-                    className={`flex-1 px-4 py-3 ${classes.border} border rounded-xl ${classes.card} ${classes.textPrimary} focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all`}
+                    className="flex-1 px-4 py-3 border rounded-xl bg-white dark:bg-gray-900 border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-transparent transition-all"
                     required
                   >
                     <option value="">-- Select a printer --</option>
@@ -1964,7 +1874,7 @@ const autoDiscoverPrinters = async () => {
                   value={formData.usb_port}
                   onChange={handleInputChange}
                   placeholder="COM3 (Windows) or /dev/usb/lp0 (Linux)"
-                  className={`w-full px-4 py-3 ${classes.border} border rounded-xl ${classes.card} ${classes.textPrimary} focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all`}
+                  className="w-full px-4 py-3 border rounded-xl bg-white dark:bg-gray-900 border-gray-300 dark:border-gray-600 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all"
                   required
                 />
                 <p className={`text-xs ${classes.textSecondary} mt-1`}>

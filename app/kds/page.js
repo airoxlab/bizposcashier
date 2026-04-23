@@ -47,6 +47,7 @@ import { printerManager } from '../../lib/printerManager'
 import dailySerialManager from '../../lib/utils/dailySerialManager'
 import { getTodaysBusinessDate, filterOrdersByBusinessDate, getBusinessDayRange } from '../../lib/utils/businessDayUtils'
 import { getOrderChanges, getOrderItemsWithChanges } from '../../lib/utils/orderChangesTracker'
+import { triggerWhatsAppAutoSend } from '../../lib/whatsappAutoSend'
 import NotificationSystem, { notify } from '../../components/ui/NotificationSystem'
 import ProtectedPage from '../../components/ProtectedPage'
 
@@ -305,11 +306,13 @@ export default function KDSPage() {
             .from('orders')
             .select(`
               id,
+              user_id,
               order_number,
               daily_serial,
               order_type,
               order_status,
               order_time,
+              order_date,
               total_amount,
               subtotal,
               discount_amount,
@@ -317,7 +320,9 @@ export default function KDSPage() {
               order_instructions,
               delivery_charges,
               delivery_address,
+              customer_id,
               cashier_id,
+              payment_method,
               updated_at,
               order_items (
                 id,
@@ -614,6 +619,9 @@ export default function KDSPage() {
         }
       }
 
+      // Capture the order object BEFORE React state update flushes
+      const orderForWA = allOrders.find(o => o.id === orderId)
+
       // Update local state immediately for instant feedback
       setAllOrders(prevOrders =>
         prevOrders.map(order =>
@@ -625,6 +633,41 @@ export default function KDSPage() {
 
       // Show success message
       playNotificationSound()
+
+      // ─── WhatsApp auto-send triggers ──────────────────────────────────
+      if (isOnline && user?.id) {
+        // orderForWA captured above before state update
+        if (orderForWA) {
+          if (newStatus === 'Preparing') {
+            triggerWhatsAppAutoSend(orderForWA, user.id, 'Preparing')
+              .then(r => { if (r?.success) notify.success('WhatsApp: preparing notification sent') })
+              .catch(err => console.error('[KDS] WA preparing-send error:', err.message))
+          }
+          if (newStatus === 'Ready' && orderForWA.order_type !== 'delivery') {
+            triggerWhatsAppAutoSend(orderForWA, user.id, 'Ready')
+              .then(r => { if (r?.success) notify.success('WhatsApp: order ready notification sent') })
+              .catch(err => console.error('[KDS] WA ready-send error:', err.message))
+          }
+          if (newStatus === 'Ready' && orderForWA.order_type === 'delivery') {
+            triggerWhatsAppAutoSend(orderForWA, user.id, 'Ready')
+              .then(r => { if (r?.success) notify.success('WhatsApp: order ready notification sent') })
+              .catch(err => console.error('[KDS] WA ready-status-send error:', err.message))
+          }
+          if (newStatus === 'Dispatched') {
+            triggerWhatsAppAutoSend(orderForWA, user.id, 'Dispatched')
+              .then(r => { if (r?.success) notify.success('WhatsApp: dispatch notification sent') })
+              .catch(err => console.error('[KDS] WA dispatch-send error:', err.message))
+          }
+          if (newStatus === 'Completed') {
+            triggerWhatsAppAutoSend(orderForWA, user.id, 'Completed')
+              .then(r => {
+                if (r?.success) notify.success('WhatsApp thank-you message sent to customer')
+                else if (r?.error) notify.error(`WhatsApp: ${r.error}`)
+              })
+              .catch(err => console.error('[KDS] WA auto-send error:', err.message))
+          }
+        }
+      }
 
       // Always close the detail popup after any status action
       setSelectedOrder(null)

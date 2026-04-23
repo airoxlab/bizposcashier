@@ -24,7 +24,8 @@ import WalkinOrdersSidebar from '../../components/test/WalkinOrdersSidebar'
 import WalkinOrderDetails from '../../components/test/WalkinOrderDetails'
 import SplitPaymentModal from '../../components/pos/SplitPaymentModal'
 import { FileText, Check, Eye, Printer } from 'lucide-react'
-import toast, { Toaster } from 'react-hot-toast'
+import toast from 'react-hot-toast'
+import PosToaster from '@/components/ui/PosToaster'
 import { supabase } from '../../lib/supabase'
 import { motion, AnimatePresence } from 'framer-motion'
 import ProtectedPage from '../../components/ProtectedPage'
@@ -68,6 +69,7 @@ export default function WalkInPage() {
   const [orderTakers, setOrderTakers] = useState([])
   const [selectedOrderTaker, setSelectedOrderTaker] = useState(null)
   const [requireOrderTaker, setRequireOrderTaker] = useState(false)
+  const [requireCustomer, setRequireCustomer] = useState(false) // from pos_require_customer.walkin
 
   // Orders view
   const [showOrdersView, setShowOrdersView] = useState(false)
@@ -390,6 +392,11 @@ export default function WalkInPage() {
     try {
       const req = localStorage.getItem('pos_require_order_taker')
       if (req !== null) setRequireOrderTaker(JSON.parse(req))
+      const reqCust = localStorage.getItem('pos_require_customer')
+      if (reqCust !== null) {
+        const parsed = JSON.parse(reqCust)
+        setRequireCustomer(!!parsed?.walkin)
+      }
     } catch {}
 
 
@@ -1009,6 +1016,11 @@ export default function WalkInPage() {
       }
 
       // WhatsApp auto-send
+      if (newStatus === 'Preparing') {
+        triggerWhatsAppAutoSend(order, user?.id, 'Preparing')
+          .then(r => { if (r?.success) toast.success('WhatsApp: preparing notification sent', { duration: 3000 }) })
+          .catch(err => console.error('[Walkin] WA preparing-send error:', err.message))
+      }
       if (newStatus === 'Ready') {
         triggerWhatsAppAutoSend(order, user?.id, 'Ready')
           .then(r => { if (r?.success) toast.success('WhatsApp: order ready notification sent', { duration: 3000 }) })
@@ -2548,12 +2560,20 @@ export default function WalkInPage() {
     console.log('🔵 [Walkin] originalOrderId:', originalOrderId)
 
     if (cart.length === 0) {
+      console.warn('🚫 [Walkin] Blocked: cart is empty')
       notify.warning('Please add items to cart before proceeding')
       return
     }
 
     if (requireOrderTaker && !selectedOrderTaker) {
+      console.warn('🚫 [Walkin] Blocked: requireOrderTaker is true but no order taker selected')
       notify.warning('Please select an order taker before proceeding')
+      return
+    }
+
+    if (requireCustomer && !customer) {
+      console.warn('🚫 [Walkin] Blocked: requireCustomer is true but no customer selected. Check admin settings → Customer Requirement → Walk-in')
+      notify.warning('Customer is required for walk-in orders — please select a customer')
       return
     }
 
@@ -2690,34 +2710,8 @@ export default function WalkInPage() {
   return (
     <ProtectedPage permissionKey="SALES_WALKIN" pageName="Walk-in Orders">
       <div className={`h-screen flex ${classes.background} overflow-hidden transition-all duration-500`}>
-      {/* Toast Notifications */}
-      <Toaster
-        position="top-right"
-        reverseOrder={false}
-        gutter={8}
-        toastOptions={{
-          duration: 3000,
-          style: {
-            background: isDark ? '#1f2937' : '#fff',
-            color: isDark ? '#f3f4f6' : '#111827',
-            border: isDark ? '1px solid #374151' : '1px solid #e5e7eb',
-          },
-          success: {
-            duration: 3000,
-            iconTheme: {
-              primary: '#10b981',
-              secondary: '#fff',
-            },
-          },
-          error: {
-            duration: 4000,
-            iconTheme: {
-              primary: '#ef4444',
-              secondary: '#fff',
-            },
-          },
-        }}
-      />
+      {/* Toast Notifications — top-center, respects admin toggle */}
+      <PosToaster isDark={isDark} />
 
       {/* Left Sidebar - Categories or Orders List */}
       {showOrdersView ? (

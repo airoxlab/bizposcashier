@@ -190,13 +190,24 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
   // Check if business name should be shown (default true)
   const showBusinessNameOnReceipt = userProfile?.show_business_name_on_receipt !== false;
 
-  // Store name - Bold + Double size + Centered (only if enabled)
+  // Store name - auto-scale so it always fits on one line
+  // DOUBLE_ON  = double width+height → 21 chars per line
+  // DOUBLE_HEIGHT = double height only → 42 chars per line
+  // BOLD only  = normal width+height → 42 chars per line
   if (showBusinessNameOnReceipt) {
     commands.push(CMD.ALIGN_CENTER);
     commands.push(CMD.BOLD_ON);
-    commands.push(CMD.DOUBLE_ON);
-    commands.push(text(storeName + '\n'));
-    commands.push(CMD.DOUBLE_OFF);
+    if (storeName.length <= 21) {
+      commands.push(CMD.DOUBLE_ON);
+      commands.push(text(storeName + '\n'));
+      commands.push(CMD.DOUBLE_OFF);
+    } else if (storeName.length <= 42) {
+      commands.push(CMD.DOUBLE_HEIGHT);
+      commands.push(text(storeName + '\n'));
+      commands.push(CMD.NORMAL);
+    } else {
+      commands.push(text(storeName + '\n'));
+    }
     commands.push(CMD.BOLD_OFF);
     commands.push(CMD.FEED);
   }

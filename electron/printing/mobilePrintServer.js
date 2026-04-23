@@ -58,15 +58,27 @@ function groupItemsByPrinter(items, mappings, printers) {
     else if (m.type === 'deal') dealToPrinter[m.id] = m.printer_id;
   });
 
-  // Group items by printer id (or 'default')
+  // Detect whether ANY routing is configured. When it is, unmapped items must
+  // NOT fall back to the default printer — only broadcast printers receive
+  // items that don't match a specific category/deal mapping.
+  const hasAnyRouting =
+    broadcastPrinterIds.length > 0 ||
+    Object.keys(categoryToPrinter).length > 0 ||
+    Object.keys(dealToPrinter).length > 0;
+
+  // Group items by printer id
   const groups = {};
   items.forEach(item => {
-    let targetPrinterId = 'default';
+    let targetPrinterId = null;
     if (item.isDeal && item.deal_id && dealToPrinter[item.deal_id]) {
       targetPrinterId = dealToPrinter[item.deal_id];
     } else if (!item.isDeal && item.category_id && categoryToPrinter[item.category_id]) {
       targetPrinterId = categoryToPrinter[item.category_id];
+    } else if (!hasAnyRouting) {
+      // No routing configured at all — fall back to default printer
+      targetPrinterId = 'default';
     }
+    if (!targetPrinterId) return; // orphaned — broadcast printers may still receive it
     if (!groups[targetPrinterId]) groups[targetPrinterId] = [];
     groups[targetPrinterId].push(item);
   });
@@ -75,15 +87,16 @@ function groupItemsByPrinter(items, mappings, printers) {
   const result = [];
 
   Object.entries(groups).forEach(([printerId, groupItems]) => {
-    const config = printerId === 'default' ? defaultPrinter : (printerById[printerId] || defaultPrinter);
-    if (config) {
-      // Merge with existing group for same printer if already present
-      const existing = result.find(r => r.printerConfig.id === config.id);
-      if (existing) {
-        existing.items.push(...groupItems);
-      } else {
-        result.push({ printerConfig: config, items: groupItems });
-      }
+    // When routing is configured, unknown printer_id means stale mapping — skip.
+    const config = printerId === 'default'
+      ? defaultPrinter
+      : (printerById[printerId] || (hasAnyRouting ? null : defaultPrinter));
+    if (!config) return;
+    const existing = result.find(r => r.printerConfig.id === config.id);
+    if (existing) {
+      existing.items.push(...groupItems);
+    } else {
+      result.push({ printerConfig: config, items: groupItems });
     }
   });
 
@@ -99,8 +112,9 @@ function groupItemsByPrinter(items, mappings, printers) {
     }
   });
 
-  // If nothing resolved, fall back to single default print
-  if (result.length === 0 && defaultPrinter) {
+  // Fall back to default ONLY if there's truly zero routing configured.
+  // When routing IS configured but matched no printers, respect the config.
+  if (result.length === 0 && !hasAnyRouting && defaultPrinter) {
     result.push({ printerConfig: defaultPrinter, items });
   }
 

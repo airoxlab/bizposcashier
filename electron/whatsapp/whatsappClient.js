@@ -37,8 +37,11 @@ function findChrome() {
 /**
  * Use WMIC to find chrome.exe / msedge.exe processes whose command line
  * contains the given session directory, then force-kill each one.
- * This is the only reliable way to clean up orphaned browsers on Windows
- * after an unclean app shutdown (EXE build).
+ * Only called at startup to clean up orphaned processes from a previous crash.
+ *
+ * NOTE: WMIC on Windows uses \r\r\n line endings (not \r\n). We must strip
+ * all \r before parsing, otherwise multiple entries merge into one block and
+ * the wrong PID (e.g. the user's real Chrome) gets killed.
  */
 async function killChromeForSession(sessionDir) {
   if (process.platform !== 'win32') return;
@@ -52,15 +55,31 @@ async function killChromeForSession(sessionDir) {
     const normalizedDir = sessionDir.toLowerCase();
     let killed = 0;
 
-    for (const block of raw.split(/(?:\r?\n){2,}/)) {
-      if (!block.toLowerCase().includes(normalizedDir)) continue;
-      const m = block.match(/ProcessId=(\d+)/i);
-      if (!m) continue;
-      const pid = parseInt(m[1], 10);
-      if (!pid || isNaN(pid)) continue;
-      log.info(`[WhatsApp] Killing orphaned browser PID ${pid} (found via wmic)`);
-      try { execSync(`taskkill /F /T /PID ${pid}`, { stdio: 'ignore' }); killed++; } catch {}
+    // Strip \r so that \r\r\n becomes \n — fixes WMIC's non-standard line endings
+    const lines = raw.replace(/\r/g, '').split('\n');
+    let currentCmd = '';
+    let currentPid = null;
+
+    const tryKill = () => {
+      if (currentPid && currentCmd.includes(normalizedDir)) {
+        log.info(`[WhatsApp] Killing orphaned browser PID ${currentPid} (found via wmic)`);
+        try { execSync(`taskkill /F /T /PID ${currentPid}`, { stdio: 'ignore' }); killed++; } catch {}
+      }
+      currentCmd = '';
+      currentPid = null;
+    };
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        tryKill();
+      } else if (trimmed.toLowerCase().startsWith('commandline=')) {
+        currentCmd = trimmed.slice('commandline='.length).toLowerCase();
+      } else if (trimmed.toLowerCase().startsWith('processid=')) {
+        currentPid = parseInt(trimmed.slice('processid='.length), 10) || null;
+      }
     }
+    tryKill(); // handle last entry if no trailing blank line
 
     if (killed > 0) {
       log.info(`[WhatsApp] Killed ${killed} orphaned browser process(es) — waiting for OS...`);
@@ -344,7 +363,8 @@ class WhatsAppClientManager {
     log.info('[WhatsApp] Force shutdown requested by app quit...');
     this.cancelReconnect();
     this._manualDisconnect = true;
-    await killChromeForSession(this._getSessionDir());
+    // Use the tracked browser PID only — never scan all Chrome processes at shutdown,
+    // as the wmic scan can accidentally match and kill the user's own Chrome windows.
     await this.destroy();
     log.info('[WhatsApp] Force shutdown complete');
   }

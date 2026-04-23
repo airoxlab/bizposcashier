@@ -22,7 +22,8 @@ import loyaltyManager from '../../lib/loyaltyManager'
 import { webOrderNotificationManager } from '../../lib/webOrderNotification'
 import { usePermissions } from '../../lib/permissionManager'
 import { Users, ShoppingBag, Truck, FileText } from 'lucide-react'
-import toast, { Toaster } from 'react-hot-toast'
+import toast from 'react-hot-toast'
+import PosToaster from '@/components/ui/PosToaster'
 import SplitPaymentModal from '../../components/pos/SplitPaymentModal'
 
 const ORDER_TABS = [
@@ -132,6 +133,9 @@ export default function NewOrderPage() {
   const [orderTakers, setOrderTakers] = useState([])
   const [selectedOrderTaker, setSelectedOrderTaker] = useState(null)
   const [requireOrderTaker, setRequireOrderTaker] = useState(false)
+  // Per-order-type "customer required" flags from admin settings (users.require_customer_*).
+  // Cached in localStorage.pos_require_customer by cacheManager.
+  const [requireCustomer, setRequireCustomer] = useState({ walkin: false, takeaway: false, delivery: true })
 
   // Persist shared cart/instructions to localStorage
   useEffect(() => {
@@ -367,6 +371,15 @@ export default function NewOrderPage() {
     try {
       const req = localStorage.getItem('pos_require_order_taker')
       if (req !== null) setRequireOrderTaker(JSON.parse(req))
+      const reqCust = localStorage.getItem('pos_require_customer')
+      if (reqCust !== null) {
+        const parsed = JSON.parse(reqCust)
+        setRequireCustomer({
+          walkin:   !!parsed?.walkin,
+          takeaway: !!parsed?.takeaway,
+          delivery: !!parsed?.delivery,
+        })
+      }
     } catch {}
   }
 
@@ -627,6 +640,14 @@ export default function NewOrderPage() {
     }
     if (activeOrderType === 'walkin' && requireOrderTaker && !selectedOrderTaker) {
       notify.warning('Please select an order taker before proceeding')
+      return
+    }
+    // Per-tab "require customer" from admin settings
+    if (requireCustomer[activeOrderType] && !customer) {
+      const typeLabel = activeOrderType === 'walkin' ? 'walk-in'
+        : activeOrderType === 'takeaway' ? 'takeaway'
+        : 'delivery'
+      notify.warning(`Customer is required for ${typeLabel} orders — please select a customer`)
       return
     }
     const tab = ORDER_TABS.find(t => t.id === activeOrderType)
@@ -1071,11 +1092,21 @@ export default function NewOrderPage() {
         setCurrentView('products')
         setOrdersRefreshTrigger(prev => prev + 1)
       } else {
-        // WhatsApp auto-send on Ready
+        // WhatsApp auto-send on intermediate statuses
+        if (newStatus === 'Preparing') {
+          triggerWhatsAppAutoSend(order, user?.id, 'Preparing')
+            .then(r => { if (r?.success) toast.success('WhatsApp: preparing notification sent', { duration: 3000 }) })
+            .catch(err => console.error('[NewOrder] WA preparing-send error:', err.message))
+        }
         if (newStatus === 'Ready') {
           triggerWhatsAppAutoSend(order, user?.id, 'Ready')
             .then(r => { if (r?.success) toast.success('WhatsApp: order ready notification sent', { duration: 3000 }) })
             .catch(err => console.error('[NewOrder] WA ready-send error:', err.message))
+        }
+        if (newStatus === 'Dispatched') {
+          triggerWhatsAppAutoSend(order, user?.id, 'Dispatched')
+            .then(r => { if (r?.success) toast.success('WhatsApp: dispatch notification sent', { duration: 3000 }) })
+            .catch(err => console.error('[NewOrder] WA dispatch-send error:', err.message))
         }
         setOrdersRefreshTrigger(prev => prev + 1)
       }
@@ -1288,7 +1319,7 @@ export default function NewOrderPage() {
 
   return (
     <div className={`h-screen flex ${classes.background} overflow-hidden transition-all duration-500`}>
-      <Toaster position="top-center" toastOptions={{ duration: 2000 }} />
+      <PosToaster isDark={isDark} toastOptions={{ duration: 2000 }} />
 
       {/* Main POS Layout */}
       <div className="flex flex-1 overflow-hidden">

@@ -17,6 +17,19 @@ import {
 
 let notificationId = 0
 
+// Read the admin-controlled POS toast enabled flag from localStorage.
+// Written by cacheManager on login/resync. Default: true (show notifications).
+function areToastsEnabled() {
+  if (typeof window === 'undefined') return true
+  try {
+    const raw = localStorage.getItem('pos_toast_enabled')
+    if (raw === null) return true
+    return JSON.parse(raw) !== false
+  } catch {
+    return true
+  }
+}
+
 class NotificationManager {
   constructor() {
     this.notifications = []
@@ -77,6 +90,16 @@ class NotificationManager {
   }
 
   add(notification) {
+    // Respect the POS-wide toast toggle — BUT never silence errors or warnings.
+    // Those indicate blocked actions (customer required, permission denied,
+    // order placement failure, etc.) and if hidden the cashier sees the button
+    // apparently do nothing, which is worse than an unwanted notification.
+    // Admin toggle only mutes 'success' / 'info' / 'loading' chatter.
+    const isBlocking = notification.type === 'error' || notification.type === 'warning'
+    if (!areToastsEnabled() && !isBlocking) {
+      return -1
+    }
+
     const id = ++notificationId
     const newNotification = {
       id,
@@ -260,20 +283,20 @@ export default function NotificationSystem() {
   }
 
   return (
-    <div className="fixed top-4 right-4 z-[9999] space-y-2 max-w-sm w-full">
+    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[9999] space-y-2 max-w-sm w-[min(24rem,calc(100vw-2rem))] pointer-events-none">
       <AnimatePresence>
         {notifications.map((notification) => {
           const Icon = getNotificationIcon(notification.type, notification.icon)
           const styles = getNotificationStyle(notification.type)
-          
+
           return (
             <motion.div
               key={notification.id}
-              initial={{ opacity: 0, x: 300, scale: 0.9 }}
-              animate={{ opacity: 1, x: 0, scale: 1 }}
-              exit={{ opacity: 0, x: 300, scale: 0.9 }}
-              transition={{ duration: 0.3, ease: "easeOut" }}
-              className={`${styles.bg} ${styles.border} border rounded-lg shadow-lg backdrop-blur-sm`}
+              initial={{ opacity: 0, y: -24, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -24, scale: 0.95 }}
+              transition={{ duration: 0.25, ease: "easeOut" }}
+              className={`${styles.bg} ${styles.border} border rounded-lg shadow-lg backdrop-blur-sm pointer-events-auto`}
             >
               <div className="p-4">
                 <div className="flex items-start">

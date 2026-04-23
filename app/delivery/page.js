@@ -22,7 +22,8 @@ import CartSidebar from '../../components/test/CartSidebar'
 import WalkinOrdersSidebar from '../../components/test/WalkinOrdersSidebar'
 import WalkinOrderDetails from '../../components/test/WalkinOrderDetails'
 import { FileText, Check, Printer } from 'lucide-react'
-import toast, { Toaster } from 'react-hot-toast'
+import toast from 'react-hot-toast'
+import PosToaster from '@/components/ui/PosToaster'
 import { supabase } from '../../lib/supabase'
 import { motion, AnimatePresence } from 'framer-motion'
 import ProtectedPage from '../../components/ProtectedPage'
@@ -50,6 +51,9 @@ export default function DeliveryPage() {
   const [networkStatus, setNetworkStatus] = useState({ isOnline: true, unsyncedOrders: 0 })
   const [isDataReady, setIsDataReady] = useState(() => cacheManager.isReady())
   const [isLoading, setIsLoading] = useState(() => !cacheManager.isReady())
+  // Admin-controlled flag (users.require_customer_delivery) cached by cacheManager.
+  // Default true — delivery needs an address/contact, so legacy behavior is preserved.
+  const [requireCustomer, setRequireCustomer] = useState(true)
   const [theme, setTheme] = useState('light')
   const [isReopenedOrder, setIsReopenedOrder] = useState(false)
   const [originalOrderId, setOriginalOrderId] = useState(null)
@@ -73,6 +77,18 @@ export default function DeliveryPage() {
   const [showSuccessModal, setShowSuccessModal] = useState(false)
   const [completedOrderData, setCompletedOrderData] = useState(null)
   const [isPrinting, setIsPrinting] = useState(false)
+
+  // Load require_customer_delivery flag on mount (cached by cacheManager).
+  // If cache is missing, preserve legacy default (customer required).
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('pos_require_customer')
+      if (raw !== null) {
+        const parsed = JSON.parse(raw)
+        setRequireCustomer(!!parsed?.delivery)
+      }
+    } catch {}
+  }, [])
 
   // Save cart to localStorage
   useEffect(() => {
@@ -769,14 +785,19 @@ export default function DeliveryPage() {
     }
       // ================================================================
 
-      // WhatsApp auto-send — for delivery, send on Dispatched or Ready (mutually exclusive)
+      // WhatsApp auto-send
+      if (newStatus === 'Preparing') {
+        triggerWhatsAppAutoSend(order, user?.id, 'Preparing')
+          .then(r => { if (r?.success) toast.success('WhatsApp: preparing notification sent to customer', { duration: 3000 }) })
+          .catch(err => console.error('[Delivery] WA preparing-send error:', err.message))
+      }
       if (newStatus === 'Ready') {
-        triggerWhatsAppAutoSend(order, user?.id, 'ReadyStatus')
+        triggerWhatsAppAutoSend(order, user?.id, 'Ready')
           .then(r => { if (r?.success) toast.success('WhatsApp: order ready notification sent to customer', { duration: 3000 }) })
-          .catch(err => console.error('[Delivery] WA ready-status-send error:', err.message))
+          .catch(err => console.error('[Delivery] WA ready-send error:', err.message))
       }
       if (newStatus === 'Dispatched') {
-        triggerWhatsAppAutoSend(order, user?.id, 'Ready')
+        triggerWhatsAppAutoSend(order, user?.id, 'Dispatched')
           .then(r => { if (r?.success) toast.success('WhatsApp: dispatch notification sent to customer', { duration: 3000 }) })
           .catch(err => console.error('[Delivery] WA dispatch-send error:', err.message))
       }
@@ -2074,8 +2095,8 @@ export default function DeliveryPage() {
       return
     }
 
-    if (!customer) {
-      notify.warning('Please select a customer before proceeding')
+    if (requireCustomer && !customer) {
+      notify.warning('Customer is required for delivery orders — please select a customer')
       return
     }
 
@@ -2222,33 +2243,7 @@ export default function DeliveryPage() {
   return (
     <ProtectedPage permissionKey="SALES_DELIVERY" pageName="Delivery Orders">
       <div className={`h-screen flex ${classes.background} overflow-hidden transition-all duration-500`}>
-      <Toaster
-        position="top-right"
-        reverseOrder={false}
-        gutter={8}
-        toastOptions={{
-          duration: 3000,
-          style: {
-            background: isDark ? '#1f2937' : '#fff',
-            color: isDark ? '#f3f4f6' : '#111827',
-            border: isDark ? '1px solid #374151' : '1px solid #e5e7eb',
-          },
-          success: {
-            duration: 3000,
-            iconTheme: {
-              primary: '#10b981',
-              secondary: '#fff',
-            },
-          },
-          error: {
-            duration: 4000,
-            iconTheme: {
-              primary: '#ef4444',
-              secondary: '#fff',
-            },
-          },
-        }}
-      />
+      <PosToaster isDark={isDark} />
 
       {/* Left Sidebar - Categories or Orders List */}
       {showOrdersView ? (

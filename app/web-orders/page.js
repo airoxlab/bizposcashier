@@ -1172,10 +1172,28 @@ function WebOrdersPage() {
           approved_at: new Date().toISOString(),
           approved_by_cashier_id: cashier?.id || null,
           approval_notes: `Rejected: ${reason}`,
+          cancellation_reason: reason,
         })
         .eq("id", orderToReject.id);
 
       if (error) throw error;
+
+      // Audit-log the cancellation — previously this path did not write to
+      // order_history, leaving cancelled orders with no "who/when/why" record.
+      try {
+        await authManager.logOrderAction(
+          orderToReject.id,
+          'cancelled',
+          {
+            previousStatus: orderToReject.order_status || null,
+            newStatus: 'Cancelled',
+            cancellation_reason: reason,
+          },
+          `Web order rejected by ${cashier?.name || 'Admin'} — ${reason}`
+        );
+      } catch (histErr) {
+        console.error('[Web Orders] order_history log failed:', histErr?.message || histErr);
+      }
 
       notify.success(`Order ${orderToReject.order_number} rejected`);
 

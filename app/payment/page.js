@@ -38,6 +38,7 @@ import { printerManager } from '../../lib/printerManager'
 import loyaltyManager from '../../lib/loyaltyManager'
 import customerLedgerManager from '../../lib/customerLedgerManager'
 import { triggerAccountAutoSend } from '../../lib/accountAutoSend'
+import { triggerWhatsAppAutoSend } from '../../lib/whatsappAutoSend'
 import { notify } from '../../components/ui/NotificationSystem'
 import { supabase } from '../../lib/supabase'
 import { permissionManager } from '../../lib/permissionManager'
@@ -58,6 +59,7 @@ export default function PaymentPage() {
   const [isProcessing, setIsProcessing] = useState(false)
   const [orderComplete, setOrderComplete] = useState(false)
   const [orderNumber, setOrderNumber] = useState('')
+  const [dailySerial, setDailySerial] = useState(null)
   const [changeAmount, setChangeAmount] = useState(0)
   const [networkStatus, setNetworkStatus] = useState({ isOnline: true, unsyncedOrders: 0 })
   const [isOfflineOrder, setIsOfflineOrder] = useState(false)
@@ -137,6 +139,16 @@ useEffect(() => {
   // If cashier cannot accept payment, auto-select Unpaid
   if (!allowPayment) {
     setSelectedPaymentMethod({ id: 'unpaid', name: 'Unpaid', icon: Clock, color: 'from-gray-500 to-gray-600', requiresAmount: false, logo: null })
+  } else if (parsedOrderData.isModifying && parsedOrderData.originalPaymentMethod) {
+    // When modifying an existing order, pre-select the original payment method
+    // so the cashier doesn't accidentally change it (e.g. to Unpaid).
+    const origName = String(parsedOrderData.originalPaymentMethod).toLowerCase()
+    const matched = paymentMethods.find(m =>
+      m.name.toLowerCase() === origName || m.id.toLowerCase() === origName
+    )
+    if (matched) {
+      setSelectedPaymentMethod(matched)
+    }
   }
 
   // 🆕 CRITICAL FIX: Calculate amount due for modified PAID orders
@@ -605,9 +617,21 @@ const processOrder = async () => {
     let newDailySerial = null
     let finalOrderId = null
 
-    // CHECK IF WE'RE MODIFYING AN EXISTING ORDER (only if online)
-    if (orderData.isModifying && orderData.existingOrderId && navigator.onLine) {
-      console.log('🔄 Modifying existing order (ONLINE):', orderData.existingOrderId)
+    // CHECK IF WE'RE MODIFYING AN EXISTING ORDER
+    //
+    // We intentionally DO NOT gate this on navigator.onLine. That flag is
+    // notoriously flaky in Electron/Chromium — it can read `false` briefly
+    // during LAN reconnects or any network blip even when the actual
+    // connection is fine. A false reading used to route modify-flows to
+    // cacheManager.createOrder, which (before the cache-miss fix) would
+    // silently create a new order — producing the duplicate-paid-order bug.
+    //
+    // Now we always prefer modify_order_atomic when we have a real UUID.
+    // If it genuinely fails due to no network, the caught error at
+    // handleProcessPayment shows the cashier a clear toast and they can retry,
+    // which is safer than silently creating a second order.
+    if (orderData.isModifying && orderData.existingOrderId) {
+      console.log('🔄 Modifying existing order:', orderData.existingOrderId)
 
       // Update existing order - WITH delivery_charges and delivery_time
       // Preserve kitchen status (Preparing/Ready) so editing doesn't revert it to Pending.
@@ -615,55 +639,126 @@ const processOrder = async () => {
       const preservedOrderStatus = (orderData.originalOrderStatus && orderData.originalOrderStatus !== 'Dispatched')
         ? orderData.originalOrderStatus
         : 'Pending'
-      const { error: updateError } = await supabase
-        .from('orders')
-        .update({
-          order_type: orderData.orderType, // Preserve order_type so kitchen shows correct type
-          subtotal: orderData.subtotal,
-          discount_amount: discountAmount || 0,
-          discount_percentage: discountType === 'percentage' ? discountValue : 0,
-          service_charge_amount: serviceChargeAmount || 0,
-          service_charge_percentage: serviceChargeType === 'percentage' ? serviceChargeValue : 0,
-          delivery_charges: orderData.deliveryCharges || 0,
-          delivery_boy_id: orderData.deliveryBoyId || null,
-          delivery_address: orderData.deliveryAddress || '',
-          table_id: orderData.tableId || null,
-          total_amount: orderData.total,
-          amount_paid: selectedPaymentMethod.id === 'complimentary' ? 0 : orderData.total,
-          payment_method: selectedPaymentMethod.name,
-          payment_status: (selectedPaymentMethod.id === 'unpaid' || selectedPaymentMethod.id === 'account') ? 'Pending' : 'Paid',
-          order_status: preservedOrderStatus,
-          order_instructions: selectedPaymentMethod.id === 'complimentary'
-            ? [orderData.orderInstructions, `[COMPLIMENTARY: ${complimentaryReason}]`].filter(Boolean).join(' | ')
-            : (orderData.orderInstructions || ''),
-          delivery_time: deliveryTimeForDB,
-          takeaway_time: takeawayTimeForDB,
-          customer_id: orderData.customer?.id || null,
-          updated_at: new Date().toISOString(),
-          modified_by_cashier_id: cashier?.id || null
-        })
-        .eq('id', orderData.existingOrderId)
 
-      if (updateError) throw updateError
+      // Atomic: orders UPDATE + order_items REPLACE + order_history INSERT +
+      // order_item_changes INSERT — all in ONE server-side transaction.
+      // Payment completing an unpaid order is always permitted, so pass
+      // p_allow_locked=true here (the calling UI has already decided payment is valid).
+      const p_order_data = {
+        order_type: orderData.orderType,
+        subtotal: orderData.subtotal,
+        discount_amount: discountAmount || 0,
+        discount_percentage: discountType === 'percentage' ? discountValue : 0,
+        service_charge_amount: serviceChargeAmount || 0,
+        service_charge_percentage: serviceChargeType === 'percentage' ? serviceChargeValue : 0,
+        delivery_charges: orderData.deliveryCharges || 0,
+        delivery_boy_id: orderData.deliveryBoyId || null,
+        delivery_address: orderData.deliveryAddress || '',
+        table_id: orderData.tableId || null,
+        total_amount: orderData.total,
+        amount_paid: selectedPaymentMethod.id === 'complimentary' ? 0 : orderData.total,
+        payment_method: selectedPaymentMethod.name,
+        payment_status: (selectedPaymentMethod.id === 'unpaid' || selectedPaymentMethod.id === 'account') ? 'Pending' : 'Paid',
+        order_status: preservedOrderStatus,
+        order_instructions: selectedPaymentMethod.id === 'complimentary'
+          ? [orderData.orderInstructions, `[COMPLIMENTARY: ${complimentaryReason}]`].filter(Boolean).join(' | ')
+          : (orderData.orderInstructions || ''),
+        delivery_time: deliveryTimeForDB,
+        takeaway_time: takeawayTimeForDB,
+        customer_id: orderData.customer?.id || null,
+      }
 
-      // Delete old order items
-      const { error: deleteError } = await supabase
-        .from('order_items')
-        .delete()
-        .eq('order_id', orderData.existingOrderId)
+      const p_items = orderItems.map(i => ({
+        product_id: i.product_id ?? null,
+        variant_id: i.variant_id ?? null,
+        product_name: i.product_name,
+        variant_name: i.variant_name ?? null,
+        base_price: i.base_price,
+        variant_price: i.variant_price ?? 0,
+        final_price: i.final_price,
+        quantity: i.quantity,
+        total_price: i.total_price,
+        is_deal: i.is_deal ?? false,
+        deal_id: i.deal_id ?? null,
+        deal_products: i.deal_products ? (typeof i.deal_products === 'string' ? i.deal_products : JSON.stringify(i.deal_products)) : null,
+        item_instructions: i.item_instructions ?? null,
+        user_id: i.user_id ?? currentUser?.id ?? null,
+      }))
 
-      if (deleteError) throw deleteError
-
-      // Insert new order items
-      for (const item of orderItems) {
-        const { error: itemError } = await supabase
-          .from('order_items')
-          .insert({
-            order_id: orderData.existingOrderId,
-            ...item
+      // Call modify_order_atomic. If it fails with a NETWORK error (truly offline),
+      // fall back to the cacheManager path so offline-created orders that ARE in
+      // the cache still modify correctly for sync-later. Domain errors
+      // (order_not_found / order_locked / etc.) propagate so the cashier sees them.
+      let rpcResult = null
+      let rpcError = null
+      let usedFallback = false
+      try {
+        const { data, error } = await supabase
+          .rpc('modify_order_atomic', {
+            p_order_id:              orderData.existingOrderId,
+            p_expected_order_number: orderData.existingOrderNumber,
+            p_order_data,
+            p_items,
+            p_changes: orderData.detailedChanges || null,
+            p_modifier_user_id:      currentUser?.id || null,
+            p_modifier_cashier_id:   cashier?.id || null,
+            p_modifier_name:         cashier?.name || currentUser?.customer_name || 'Admin',
+            p_modifier_source:       'Desktop POS',
+            p_notes:                 `Order modified and payment completed by ${cashier?.name || 'Admin'}`,
+            p_allow_locked:          true,
           })
+        rpcResult = data
+        rpcError = error
+      } catch (e) {
+        // supabase-js throws TypeError: Failed to fetch on network errors
+        const msg = String(e?.message || e || '')
+        const isNetworkError = /failed to fetch|fetch failed|networkerror|network request failed|err_internet_disconnected|err_network_changed|err_network|err_connection|err_name_not_resolved|aborterror|timeout/i.test(msg)
+        if (!isNetworkError) throw e
+        console.warn('⚠️ [Payment] Modify RPC hit network error — falling back to cacheManager for offline queueing:', msg)
+        usedFallback = true
+      }
 
-        if (itemError) throw itemError
+      if (!usedFallback) {
+        if (rpcError) {
+          // Supabase returns postgrest-level errors here. Treat generic
+          // connection errors as "fall back to cache"; treat everything else
+          // (domain errors, policy errors) as hard errors.
+          const errMsg = String(rpcError?.message || '')
+          const isNetworkError = /failed to fetch|fetch failed|networkerror|network request failed|err_internet_disconnected|err_network_changed|err_network|err_connection|err_name_not_resolved|aborterror|timeout/i.test(errMsg)
+          if (isNetworkError) {
+            console.warn('⚠️ [Payment] Modify RPC network error via postgrest — falling back to cacheManager:', errMsg)
+            usedFallback = true
+          } else {
+            throw rpcError
+          }
+        } else if (!rpcResult?.success) {
+          throw new Error(rpcResult?.message || rpcResult?.error || 'Failed to modify order')
+        }
+      }
+
+      // If we fell back, re-enter via cacheManager.createOrder below by
+      // letting control flow into the else branch's logic. Re-package as the
+      // same call that branch would make.
+      if (usedFallback) {
+        const cashierObj = cashier
+        const currentSession = authManager.getCurrentSession?.() || null
+        const { order: fallbackOrder } = await cacheManager.createOrder({
+          isModifying: true,
+          existingOrderId:     orderData.existingOrderId,
+          existingOrderNumber: orderData.existingOrderNumber,
+          user_id:             currentUser?.id,
+          cashier_id:          cashierObj?.id || null,
+          session_id:          currentSession?.id || null,
+          customer_id:         orderData.customer?.id || null,
+          order_type:          orderData.orderType,
+          ...p_order_data,
+          items:               p_items,
+          detailedChanges:     orderData.detailedChanges || null,
+          order_taker_id:      orderData.orderTakerId || null,
+          // cacheManager will either update in-cache (offline-friendly) or
+          // throw if the order isn't in cache and we're offline.
+        })
+        rpcResult = { success: true, order: fallbackOrder }
       }
 
       // Update customer ledger entry if payment method is Account with a customer
@@ -737,24 +832,14 @@ const processOrder = async () => {
         }
       }
 
-      // Log detailed modification with item changes (authManager also saves to order_item_changes)
-      await authManager.logOrderAction(
-        orderData.existingOrderId,
-        'modified',
-        orderData.detailedChanges || {
-          items_count: orderItems.length,
-          total_amount: orderData.total,
-          delivery_charges: orderData.deliveryCharges || 0
-        },
-        `Order modified and payment completed by ${cashier?.name || 'Admin'}`
-      )
-
-      // Cache item changes for reprint display (authManager.logOrderAction already wrote to DB above)
+      // Order history + order_item_changes were written atomically inside
+      // modify_order_atomic above. Here we only cache them locally for the
+      // reprint display — no extra DB call.
       if (orderData.detailedChanges) {
         const { saveChangesOffline } = await import('../../lib/utils/orderChangesTracker')
         const result = await saveChangesOffline(orderData.existingOrderId, orderData.existingOrderNumber, orderData.detailedChanges, { cacheOnly: true })
         if (result?.success) {
-          console.log(`💾 Cached ${result.changesCount} item changes for reprint (DB already written by logOrderAction)`)
+          console.log(`💾 Cached ${result.changesCount} item changes for reprint (DB already written by modify_order_atomic)`)
         }
       }
 
@@ -765,6 +850,7 @@ const processOrder = async () => {
       // Restore daily_serial for printing — it was saved to localStorage when reopening
       const savedSerial = localStorage.getItem(`${orderData.orderType}_modifying_daily_serial`)
       if (savedSerial) newDailySerial = parseInt(savedSerial) || null
+      setDailySerial(newDailySerial)
 
       console.log(`✅ Order ${orderData.existingOrderNumber} modified successfully`)
 
@@ -818,6 +904,7 @@ const processOrder = async () => {
       finalOrderId = order.id || null
 
       setOrderNumber(newOrderNumber)
+      setDailySerial(newDailySerial)
       setIsOfflineOrder(order._isOffline)
 
       console.log(`✅ Order ${newOrderNumber} placed successfully`)
@@ -825,34 +912,37 @@ const processOrder = async () => {
       console.log(`🕐 Delivery time: ${orderData.deliveryTime || 'N/A'}`)
 
       // If this was placed as Completed (PLACE_AND_COMPLETE_ORDER permission),
-      // trigger inventory deduction for the order — same as when marking complete
-      // from the walkin/takeaway/delivery pages.
+      // trigger inventory deduction + WhatsApp completion — same as the
+      // complete flow from orders/walkin/takeaway/delivery pages.
       const wasPlacedAsCompleted =
         permissionManager.hasPermission('PLACE_AND_COMPLETE_ORDER') &&
         selectedPaymentMethod.id !== 'unpaid' &&
         !(orderData.isModifying && orderData.originalOrderStatus && orderData.originalOrderStatus !== 'Dispatched')
 
-      if (wasPlacedAsCompleted && order?.id && navigator.onLine) {
+      if (wasPlacedAsCompleted && order?.id) {
+        // Inventory deduction is handled by cacheManager.syncOrder when order_status='Completed'
+        if (order._isOffline) {
+          notify.success('Order saved offline — inventory will be deducted when back online.')
+        } else {
+          notify.success('Order placed and completed! Inventory deducted.')
+        }
+
+        // ── WhatsApp "thank-you" on Completed ───────────────────────────
         try {
-          const orderTypeId = orderData.orderTypeId || null
-          if (orderTypeId && currentUser?.id) {
-            console.log('📦 [Payment] Place+Complete — calling deduct_inventory_for_order')
-            const { error: deductError } = await supabase.rpc('deduct_inventory_for_order', {
-              p_order_id: order.id,
-              p_user_id: currentUser.id,
-              p_order_type_id: orderTypeId
-            })
-            if (deductError) {
-              console.error('⚠️ [Payment] Inventory deduction error:', deductError.message)
-              notify.warning(`Order completed but inventory deduction failed: ${deductError.message}`)
-            } else {
-              console.log('✅ [Payment] Inventory deducted for Place+Complete order')
-            }
-          } else {
-            console.warn('⚠️ [Payment] Skipping inventory deduction — missing order_type_id or user')
+          const orderForWA = {
+            id: order.id,
+            order_number: newOrderNumber,
+            order_type: orderData.orderType,
+            order_date: new Date().toISOString().split('T')[0],
+            total_amount: orderData.total,
+            customer_id: orderData.customer?.id || null,
+            customers: orderData.customer || null,
           }
-        } catch (invErr) {
-          console.error('❌ [Payment] Inventory deduction exception:', invErr.message)
+          triggerWhatsAppAutoSend(orderForWA, currentUser.id, 'Completed')
+            .then(r => { if (r?.success) console.log('✅ [Payment] WhatsApp thank-you sent') })
+            .catch(err => console.error('[Payment] WA auto-send error:', err.message))
+        } catch (waErr) {
+          console.error('[Payment] WA trigger exception:', waErr.message)
         }
       }
 
@@ -1639,6 +1729,7 @@ const handlePrintKitchenToken = async () => {
       })
 
       setOrderNumber(newOrderNumber)
+      setDailySerial(newDailySerial)
       setIsOfflineOrder(order._isOffline)
 
       console.log(`✅ Order ${newOrderNumber} created with split payment`)
@@ -1873,9 +1964,21 @@ if (orderComplete) {
           </div>
         )}
 
-        <div className={`${isDark ? 'bg-gray-800/50' : 'bg-gray-50'} rounded-2xl p-4 mb-6 ${classes.border} border`}>
-          <p className={`text-sm ${classes.textSecondary} mb-1`}>Order Number</p>
-          <p className="text-2xl font-bold text-purple-600">{orderNumber}</p>
+        <div className={`${isDark ? 'bg-gray-800/50' : 'bg-gray-50'} rounded-2xl p-4 mb-6 ${classes.border} border text-center`}>
+          {dailySerial ? (
+            <>
+              <p className={`text-xs ${classes.textSecondary} mb-1 uppercase tracking-wider`}>Token Number</p>
+              <p className="text-6xl font-black text-purple-600 leading-none mb-3">
+                #{String(dailySerial).padStart(3, '0')}
+              </p>
+              <p className={`text-[11px] ${classes.textSecondary} font-mono break-all`}>{orderNumber}</p>
+            </>
+          ) : (
+            <>
+              <p className={`text-sm ${classes.textSecondary} mb-1`}>Order Number</p>
+              <p className="text-2xl font-bold text-purple-600">{orderNumber}</p>
+            </>
+          )}
         </div>
 
         <div className="space-y-2 mb-6 text-left">
@@ -2806,16 +2909,18 @@ if (orderComplete) {
                     <Volume2 className="w-4 h-4" />
                   )}
                   {networkStatus.isOnline
-                    ? selectedPaymentMethod?.id === 'complimentary'
-                      ? 'Place Complimentary Order'
-                      : (selectedPaymentMethod?.id === 'unpaid'
-                          ? 'Place Order'
-                          : (permissionManager.hasPermission('PLACE_AND_COMPLETE_ORDER')
-                              ? 'Place and Complete'
-                              : (selectedPaymentMethod?.id === 'account'
-                                  ? 'Place Order'
-                                  : 'Complete Payment')))
-                    : 'Save Order (Offline)'}
+                    ? (orderData?.isModifying
+                        ? 'Update Order'
+                        : selectedPaymentMethod?.id === 'complimentary'
+                          ? 'Place Complimentary Order'
+                          : (selectedPaymentMethod?.id === 'unpaid'
+                              ? 'Place Order'
+                              : (permissionManager.hasPermission('PLACE_AND_COMPLETE_ORDER')
+                                  ? 'Place and Complete'
+                                  : (selectedPaymentMethod?.id === 'account'
+                                      ? 'Place Order'
+                                      : 'Complete Payment'))))
+                    : (orderData?.isModifying ? 'Update Order (Offline)' : 'Save Order (Offline)')}
                 </>
               )}
             </button>
