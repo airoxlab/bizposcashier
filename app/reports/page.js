@@ -53,6 +53,7 @@ import { themeManager } from '../../lib/themeManager'
 import { getTodaysBusinessDate, getBusinessDate } from '../../lib/utils/businessDayUtils'
 import dailySerialManager from '../../lib/utils/dailySerialManager'
 import LedgerTab from '../../components/reports/LedgerTab'
+import { ledgerManager } from '../../lib/ledgerManager'
 import NotificationSystem, { notify } from '../../components/ui/NotificationSystem'
 import ProtectedPage from '../../components/ProtectedPage'
 import PinPad from '../../components/ui/PinPad'
@@ -67,6 +68,7 @@ export default function ReportsPage() {
   const [pin, setPin] = useState('')
   const [pinError, setPinError] = useState('')
   const [pinLoading, setPinLoading] = useState(false)
+  const [prefetchedLedgerCustomers, setPrefetchedLedgerCustomers] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
   const [showFilters, setShowFilters] = useState(false)
   const [theme, setTheme] = useState('light')
@@ -256,6 +258,15 @@ export default function ReportsPage() {
       setPinLoading(false)
     }
   }
+
+  // Prefetch ledger customers while user is entering PIN so LedgerTab loads instantly
+  useEffect(() => {
+    if (user?.id && !isAuthenticated) {
+      ledgerManager.getAllCustomersForLedger(user.id)
+        .then(result => { if (result.success) setPrefetchedLedgerCustomers(result.data || []) })
+        .catch(() => {})
+    }
+  }, [user?.id])
 
   useEffect(() => {
     if (user && isAuthenticated) {
@@ -3407,6 +3418,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                   userId={user?.id}
                   startDate={dateFrom}
                   endDate={dateTo}
+                  prefetchedCustomers={prefetchedLedgerCustomers}
                 />
               )}
 

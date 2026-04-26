@@ -10,7 +10,7 @@ import { notify } from '../ui/NotificationSystem';
 import RecordPaymentModal from './RecordPaymentModal';
 import { themeManager } from '../../lib/themeManager';
 
-export default function LedgerTab({ userId, startDate, endDate }) {
+export default function LedgerTab({ userId, startDate, endDate, prefetchedCustomers }) {
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [customers, setCustomers] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -30,12 +30,12 @@ export default function LedgerTab({ userId, startDate, endDate }) {
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
 
-  // Fetch all customers on component mount
+  // Fetch all customers on component mount (or use prefetched data instantly)
   useEffect(() => {
     if (userId) {
       fetchCustomers();
     }
-  }, [userId]);
+  }, [userId, prefetchedCustomers]);
 
   // Fetch ledger when customer is selected or time period changes
   useEffect(() => {
@@ -45,6 +45,10 @@ export default function LedgerTab({ userId, startDate, endDate }) {
   }, [selectedCustomer, userId, timePeriod, customStartDate, customEndDate]);
 
   const fetchCustomers = async () => {
+    if (prefetchedCustomers) {
+      setCustomers(prefetchedCustomers);
+      return;
+    }
     setIsLoading(true);
     try {
       const result = await ledgerManager.getAllCustomersForLedger(userId);

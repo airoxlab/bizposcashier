@@ -161,13 +161,15 @@ export default function Dashboard() {
     // Start background sync
     cacheManager.startBackgroundSync()
 
+    // Clock — updates currentTime every second
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000)
+
     // Fetch active orders and poll every 30s
     fetchActiveOrders()
     const ordersRefreshTimer = setInterval(fetchActiveOrders, 30000)
 
     return () => {
       clearInterval(timer)
-      clearInterval(countRefreshTimer)
       clearInterval(ordersRefreshTimer)
       webOrderNotificationManager.stopListening()
       // Don't stop networkPrintListener here - it should persist across pages
