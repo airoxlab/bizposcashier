@@ -179,6 +179,7 @@ export function CustomerAccountPanel() {
   const [logsPage, setLogsPage] = useState(1)
   const [logsSearch, setLogsSearch] = useState('')
   const [expandedLog, setExpandedLog] = useState(null)
+  const [resendingLog, setResendingLog] = useState(null)
   const LOGS_PER_PAGE = 15
 
   const currentUser = authManager.getCurrentUser()
@@ -370,6 +371,7 @@ export function CustomerAccountPanel() {
 
     for (let i = 0; i < selectedCustomers.length; i++) {
       const customer = selectedCustomers[i]
+      let message = bulkMessage
 
       try {
         // Format phone
@@ -383,7 +385,7 @@ export function CustomerAccountPanel() {
         }
 
         // Build message from template
-        const message = bulkMessage
+        message = bulkMessage
           .replace(/\{customer_name\}/g, customer.full_name || 'Customer')
           .replace(/\{phone\}/g, customer.phone || '')
           .replace(/\{balance\}/g, Number(customer.account_balance || 0).toLocaleString('en-PK'))
@@ -430,7 +432,7 @@ export function CustomerAccountPanel() {
           phone: customer.phone,
           customer_name: customer.full_name,
           message_type: 'text',
-          message_preview: bulkMessage.substring(0, 200),
+          message_preview: message.substring(0, 200),
           status: 'failed',
           trigger: 'bulk',
           error_message: e.message,
@@ -568,6 +570,7 @@ export function CustomerAccountPanel() {
     }
 
     setIsSending(true)
+    let resolvedMessage = manualMessage
     try {
       // Format the phone number
       let phone = manualPhone.trim().replace(/[\s\-\.\(\)]/g, '')
@@ -588,7 +591,7 @@ export function CustomerAccountPanel() {
         if (profile?.store_logo && settings.include_logo_on_images) storeLogo = profile.store_logo
       } catch (_) {}
 
-      const resolvedMessage = manualMessage
+      resolvedMessage = manualMessage
         .replace(/\{customer_name\}/g, selectedCustomer?.full_name || 'Customer')
         .replace(/\{phone\}/g, selectedCustomer?.phone || manualPhone || '')
         .replace(/\{balance\}/g, Number(selectedCustomer?.account_balance || 0).toLocaleString('en-PK'))
@@ -642,7 +645,7 @@ export function CustomerAccountPanel() {
         phone: manualPhone,
         customer_name: selectedCustomer?.full_name || 'Manual Send',
         message_type: manualImage ? 'image' : manualSendReceiptImage ? 'balance_image' : 'text',
-        message_preview: manualMessage?.substring(0, 200) || '(Image)',
+        message_preview: resolvedMessage?.substring(0, 200) || '(Image)',
         status: 'failed',
         trigger: 'manual',
         error_message: e.message,
@@ -695,6 +698,93 @@ export function CustomerAccountPanel() {
       .replace(/\{new_balance\}/g, '4,750')
       .replace(/\{order_date\}/g, '09 Apr 2026')
       .replace(/\{business_name\}/g, 'BizPOS Restaurant')
+  }
+
+  async function handleResend(log) {
+    const isElectron = typeof window !== 'undefined' && !!window.electronAPI?.whatsapp
+    if (!isElectron) {
+      notify.error('WhatsApp only works in the desktop app')
+      return
+    }
+    if (!log.phone) {
+      notify.error('No phone number stored in this log')
+      return
+    }
+
+    setResendingLog(log.id)
+    let resolvedResendMessage = log.message_preview || ''
+    try {
+      // Fetch business name for variable resolution
+      let businessName = ''
+      try {
+        const { data: profile } = await supabase
+          .from('users')
+          .select('store_name')
+          .eq('id', userId)
+          .single()
+        if (profile?.store_name) businessName = profile.store_name
+      } catch (_) {}
+
+      // Fetch customer by last 10 digits of stored phone (handles any formatting differences)
+      let customerName = log.customer_name || 'Customer'
+      let customerBalance = 0
+      try {
+        const last10 = log.phone.replace(/\D/g, '').slice(-10)
+        const { data: customers } = await supabase
+          .from('customers')
+          .select('full_name, account_balance')
+          .eq('user_id', userId)
+          .ilike('phone', `%${last10}`)
+          .limit(1)
+        if (customers?.[0]) {
+          customerName = customers[0].full_name || customerName
+          customerBalance = Number(customers[0].account_balance || 0)
+        }
+      } catch (_) {}
+
+      // Resolve any template variables still present in the stored preview
+      resolvedResendMessage = (log.message_preview || '')
+        .replace(/\{customer_name\}/g, customerName)
+        .replace(/\{phone\}/g, log.phone || '')
+        .replace(/\{balance\}/g, customerBalance.toLocaleString('en-PK'))
+        .replace(/\{business_name\}/g, businessName)
+
+      const result = await window.electronAPI.whatsapp.sendOrderMessage({
+        phone: log.phone,
+        message: resolvedResendMessage,
+      })
+
+      if (result?.success === false) throw new Error(result?.error || 'Send failed')
+
+      await supabase.from('customer_account_send_logs').insert({
+        user_id: userId,
+        phone: log.phone,
+        customer_name: customerName,
+        message_type: 'text',
+        message_preview: resolvedResendMessage.substring(0, 200),
+        status: 'sent',
+        trigger: 'manual',
+        order_number: log.order_number,
+      })
+
+      notify.success('Message resent successfully!')
+      loadLogs()
+    } catch (e) {
+      notify.error(`Resend failed: ${e.message}`)
+      await supabase.from('customer_account_send_logs').insert({
+        user_id: userId,
+        phone: log.phone,
+        customer_name: log.customer_name,
+        message_type: 'text',
+        message_preview: resolvedResendMessage.substring(0, 200),
+        status: 'failed',
+        trigger: 'manual',
+        order_number: log.order_number,
+        error_message: e.message,
+      })
+    } finally {
+      setResendingLog(null)
+    }
   }
 
   function formatDate(dateStr) {
@@ -1524,6 +1614,23 @@ export function CustomerAccountPanel() {
 
                         <div className="flex items-center gap-3 flex-shrink-0">
                           <LogStatusBadge status={log.status} />
+                          {log.status === 'failed' && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleResend(log) }}
+                              disabled={resendingLog === log.id}
+                              className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold transition-all border disabled:opacity-50 ${
+                                isDark
+                                  ? 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 border-blue-500/30'
+                                  : 'bg-blue-100 text-blue-700 hover:bg-blue-200 border-blue-200'
+                              }`}
+                            >
+                              {resendingLog === log.id
+                                ? <Loader2 size={11} className="animate-spin" />
+                                : <Send size={11} />
+                              }
+                              {resendingLog === log.id ? 'Sending...' : 'Resend'}
+                            </button>
+                          )}
                           <span className={`text-[11px] ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
                             {formatDate(log.created_at)}
                           </span>

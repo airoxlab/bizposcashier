@@ -71,6 +71,9 @@ export default function WalkinOrderDetails({
   const router = useRouter()
   const permissions = usePermissions()
   const contentRef = useRef(null)
+  // Tracks which order ID the current fetchOrderDetails call is for.
+  // Prevents a slow fetch for order A from overwriting state after order B is selected.
+  const fetchOrderIdRef = useRef(null)
 
   const handlePrintReceipt = async () => {
     try {
@@ -80,8 +83,10 @@ export default function WalkinOrderDetails({
       const printer = await printerManager.getPrinterForPrinting()
       if (!printer) { toast.error('No printer configured. Please configure a printer in settings.'); return }
 
-      let items = orderItems
-      if (!items.length && order.id && navigator.onLine) {
+      // Always fetch fresh — never read from orderItems state which may hold
+      // the previous order's items during async fetchOrderDetails gap.
+      let items = []
+      if (order.id && navigator.onLine) {
         const { data } = await supabase.from('order_items').select('*').eq('order_id', order.id)
         items = data || []
       }
@@ -150,8 +155,10 @@ export default function WalkinOrderDetails({
       const printer = await printerManager.getPrinterForPrinting()
       if (!printer) { toast.error('No printer configured. Please configure a printer in settings.'); return }
 
-      let items = orderItems
-      if (!items.length && order.id && navigator.onLine) {
+      // Always fetch fresh — never read from orderItems state which may hold
+      // the previous order's items during async fetchOrderDetails gap.
+      let items = []
+      if (order.id && navigator.onLine) {
         const { data } = await supabase.from('order_items').select('*').eq('order_id', order.id)
         items = data || []
       }
@@ -231,6 +238,11 @@ export default function WalkinOrderDetails({
     try {
       setLoading(true)
 
+      // Capture this fetch's target order ID. If the order prop changes while
+      // this async function is running, we discard stale state updates.
+      const myOrderId = order.id
+      fetchOrderIdRef.current = myOrderId
+
       console.log('📦 Order Details:', { id: order.id, order_number: order.order_number, order })
 
       // Check if order has items already (from cache/localStorage)
@@ -240,7 +252,7 @@ export default function WalkinOrderDetails({
       if (cachedItems && cachedItems.length > 0) {
         // Use cached items immediately (works offline / fast display)
         console.log('Using cached order items:', cachedItems.length)
-        setOrderItems(cachedItems)
+        if (fetchOrderIdRef.current === myOrderId) setOrderItems(cachedItems)
 
         // Try to fetch history and loyalty if online
         if (navigator.onLine) {
@@ -251,7 +263,7 @@ export default function WalkinOrderDetails({
               .select('*')
               .eq('order_id', order.id)
               .order('created_at')
-            if (freshItems && freshItems.length > 0) {
+            if (freshItems && freshItems.length > 0 && fetchOrderIdRef.current === myOrderId) {
               setOrderItems(freshItems)
             }
 
@@ -353,7 +365,7 @@ export default function WalkinOrderDetails({
           .order('created_at')
 
         if (itemsError) throw itemsError
-        setOrderItems(items || [])
+        if (fetchOrderIdRef.current === myOrderId) setOrderItems(items || [])
 
         // Fetch order history (authManager will cache it automatically)
         const history = await authManager.getOrderHistory(order.id)
@@ -418,7 +430,7 @@ export default function WalkinOrderDetails({
       } else {
         // Offline and no cached items
         console.log('📴 Offline: No cached items available for order', order.id)
-        setOrderItems([])
+        if (fetchOrderIdRef.current === myOrderId) setOrderItems([])
 
         // Still try to load history from cache
         const cachedHistory = cacheManager.getOrderHistory(order.id)
@@ -618,20 +630,27 @@ export default function WalkinOrderDetails({
   }
 
   // Reopen order handler
-  const handleReopenOrder = () => {
-    console.log('🔄 Reopening order:', order)
-    console.log('🔄 Order items:', orderItems)
+  const handleReopenOrder = async () => {
+    // Use items from the order prop first — guaranteed to belong to this order.
+    // Never use orderItems state which may hold a previous order's data.
+    let reopenItems = order.order_items || order.items || []
+    if (!reopenItems.length && order.id && navigator.onLine) {
+      const { data } = await supabase.from('order_items').select('*').eq('order_id', order.id)
+      reopenItems = data || []
+    }
 
-    if (!orderItems || orderItems.length === 0) {
+    console.log('🔄 Reopening order:', order)
+    console.log('🔄 Order items:', reopenItems)
+
+    if (!reopenItems || reopenItems.length === 0) {
       console.error('❌ No order items available to reopen')
-   //   alert('Unable to reopen order. Order items not loaded.')
       return
     }
 
     try {
       // Prepare order data for reopening
       const orderData = {
-        cart: orderItems.map((item, index) => ({
+        cart: reopenItems.map((item, index) => ({
         id: `${item.product_id}-${item.variant_id || 'base'}-${Date.now()}-${index}`,
         productId: item.product_id,
         variantId: item.variant_id,
@@ -660,7 +679,7 @@ export default function WalkinOrderDetails({
       existingOrderNumber: order.order_number,
       isModifying: true,
       originalState: {
-        items: orderItems.map(item => ({
+        items: reopenItems.map(item => ({
           productName: item.product_name,
           variantName: item.variant_name,
           quantity: item.quantity,
@@ -675,7 +694,7 @@ export default function WalkinOrderDetails({
         subtotal: order.subtotal,
         discountAmount: order.discount_amount,
         total: order.total_amount,
-        itemCount: orderItems.length,
+        itemCount: reopenItems.length,
         service_charge_amount: order.service_charge_amount || 0,
         service_charge_percentage: order.service_charge_percentage || 0
       }

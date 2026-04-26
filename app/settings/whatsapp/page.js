@@ -901,11 +901,11 @@ export function WhatsAppPanel() {
                 <div className="space-y-3 text-sm">
                   <div className={`flex items-center justify-between py-2 border-b ${isDark ? 'border-gray-700/40' : 'border-gray-200'}`}>
                     <span className={ts}>Session storage</span>
-                    <span className={`${tb} font-mono text-xs`}>%AppData%/BizPOS/whatsapp-session</span>
+                    <span className={`${tb} font-mono text-xs`}>%AppData%/BizPOS/whatsapp-baileys-auth</span>
                   </div>
                   <div className={`flex items-center justify-between py-2 border-b ${isDark ? 'border-gray-700/40' : 'border-gray-200'}`}>
                     <span className={ts}>Auto-reconnect delay</span>
-                    <span className={`${tp} font-semibold`}>15 seconds</span>
+                    <span className={`${tp} font-semibold`}>5 seconds</span>
                   </div>
                   <div className="flex items-center justify-between py-2">
                     <span className={ts}>Session persistence</span>

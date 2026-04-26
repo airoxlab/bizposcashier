@@ -47,7 +47,21 @@ export default function DeliveryPage() {
   const [orderData, setOrderData] = useState({})
   const [orderInstructions, setOrderInstructions] = useState('')
   const [deliveryTime, setDeliveryTime] = useState('')
-  const [deliveryCharges, setDeliveryCharges] = useState(0)
+  const getDefaultDeliveryCharge = () => {
+    // Read directly from localStorage first (same pattern as pos_default_service_charge)
+    // so the value is available instantly regardless of cacheManager init state.
+    try {
+      const raw = localStorage.getItem('pos_default_delivery_charge')
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (parsed?.type === 'fixed' && parsed?.value > 0) return parsed.value
+      }
+    } catch {}
+    // Fallback to cacheManager in-memory value
+    const dc = cacheManager.getDefaultDeliveryCharge()
+    return (dc.type === 'fixed' && dc.value > 0) ? dc.value : 0
+  }
+  const [deliveryCharges, setDeliveryCharges] = useState(getDefaultDeliveryCharge)
   const [networkStatus, setNetworkStatus] = useState({ isOnline: true, unsyncedOrders: 0 })
   const [isDataReady, setIsDataReady] = useState(() => cacheManager.isReady())
   const [isLoading, setIsLoading] = useState(() => !cacheManager.isReady())
@@ -159,7 +173,12 @@ export default function DeliveryPage() {
       }
       if (savedInstructions) setOrderInstructions(savedInstructions)
       if (savedDeliveryTime) setDeliveryTime(savedDeliveryTime)
-      if (savedDeliveryCharges) setDeliveryCharges(parseFloat(savedDeliveryCharges) || 0)
+      const savedChargeNum2 = parseFloat(savedDeliveryCharges)
+      if (savedDeliveryCharges !== null && (savedChargeNum2 > 0 || !!savedModifyingOrderId)) {
+        setDeliveryCharges(savedChargeNum2)
+      } else if (!savedModifyingOrderId) {
+        setDeliveryCharges(getDefaultDeliveryCharge())
+      }
       if (savedModifyingOrderId && savedModifyingOrderId !== 'undefined') {
         setIsReopenedOrder(true)
         setOriginalOrderId(savedModifyingOrderId)
@@ -167,7 +186,13 @@ export default function DeliveryPage() {
       }
       const savedOrderData = localStorage.getItem('delivery_order_data')
       if (savedOrderData) {
-        try { setOrderData(JSON.parse(savedOrderData)) } catch {}
+        try {
+          const parsed = JSON.parse(savedOrderData)
+          if (!savedModifyingOrderId && !parsed.deliveryCharges) {
+            parsed.deliveryCharges = getDefaultDeliveryCharge()
+          }
+          setOrderData(parsed)
+        } catch {}
       }
     }
 
@@ -248,7 +273,12 @@ export default function DeliveryPage() {
       }
       if (savedInstructions) setOrderInstructions(savedInstructions)
       if (savedDeliveryTime) setDeliveryTime(savedDeliveryTime)
-      if (savedDeliveryCharges) setDeliveryCharges(parseFloat(savedDeliveryCharges))
+      const savedChargeNum = parseFloat(savedDeliveryCharges)
+      if (savedDeliveryCharges !== null && (savedChargeNum > 0 || !!savedModifyingOrderId)) {
+        setDeliveryCharges(savedChargeNum)
+      } else if (!savedModifyingOrderId) {
+        setDeliveryCharges(getDefaultDeliveryCharge())
+      }
       if (savedModifyingOrderId && savedModifyingOrderId !== 'undefined') {
         console.log('🔄 [Delivery] Setting as reopened order:', savedModifyingOrderId)
         setIsReopenedOrder(true)
@@ -257,7 +287,13 @@ export default function DeliveryPage() {
       }
       const savedOrderData = localStorage.getItem('delivery_order_data')
       if (savedOrderData) {
-        try { setOrderData(JSON.parse(savedOrderData)) } catch {}
+        try {
+          const parsed = JSON.parse(savedOrderData)
+          if (!savedModifyingOrderId && !parsed.deliveryCharges) {
+            parsed.deliveryCharges = getDefaultDeliveryCharge()
+          }
+          setOrderData(parsed)
+        } catch {}
       }
     }
 
@@ -399,6 +435,20 @@ export default function DeliveryPage() {
       products: cachedProducts.length,
       deals: cachedDeals.length
     })
+
+    // Cache is now ready — apply default delivery charge if this is a new order still at 0.
+    // cacheManager.getDefaultDeliveryCharge() now has the real value from Supabase.
+    const savedModifyingOrderId = localStorage.getItem('delivery_modifying_order')
+    const savedCharges = localStorage.getItem('delivery_charges')
+    const isNewOrder = !savedModifyingOrderId
+    const chargeAlreadySet = savedCharges !== null && parseFloat(savedCharges) > 0
+    if (isNewOrder && !chargeAlreadySet) {
+      const defaultCharge = getDefaultDeliveryCharge()
+      if (defaultCharge > 0) {
+        setDeliveryCharges(defaultCharge)
+        setOrderData(prev => (prev.deliveryCharges > 0 ? prev : { ...prev, deliveryCharges: defaultCharge }))
+      }
+    }
   }
 
   const handleProductClick = (product) => {

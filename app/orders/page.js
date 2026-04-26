@@ -731,14 +731,15 @@ export default function OrdersPage() {
       const order = orders.find((o) => o.id === orderId);
       if (order && order.items && Array.isArray(order.items)) {
         console.log("📦 Using cached order items:", order.items.length);
-        setOrderItems(order.items);
+        // Guard: discard if a different order was selected while we were working
+        if (selectedOrderRef.current?.id === orderId) setOrderItems(order.items);
         return;
       }
 
       // If offline, can't fetch - show empty or what we have
       if (!navigator.onLine) {
         console.log("📴 Offline: Cannot fetch order items from database");
-        setOrderItems([]);
+        if (selectedOrderRef.current?.id === orderId) setOrderItems([]);
         return;
       }
 
@@ -751,18 +752,15 @@ export default function OrdersPage() {
 
       if (error) throw error;
 
-      // DEBUG: Log raw data from database
       console.log('📦 Fetched order items from DB:', JSON.stringify(data, null, 2));
 
-      setOrderItems(data || []);
+      // Guard: discard stale fetch if the user switched orders while awaiting
+      if (selectedOrderRef.current?.id === orderId) setOrderItems(data || []);
     } catch (error) {
       console.error("Error fetching order items:", error);
-      // Fallback to cached items if available
       const order = orders.find((o) => o.id === orderId);
-      if (order && order.items) {
-        setOrderItems(order.items);
-      } else {
-        setOrderItems([]);
+      if (selectedOrderRef.current?.id === orderId) {
+        setOrderItems(order?.items || []);
       }
     }
   };
@@ -1537,15 +1535,30 @@ export default function OrdersPage() {
     setSelectedCancelReason("");
     setCustomCancelReason("");
   };
-  const handleReopenOrder = (order) => {
+  const handleReopenOrder = async (order) => {
     // Get current user info
     const currentUser = authManager.getCurrentUser();
     const currentCashier = authManager.getCashier();
     const currentRole = authManager.getRole();
 
+    // Always use fresh items — never read from orderItems state which may hold
+    // the previous order's items during the async fetchOrderDetails gap.
+    let reopenItems = order.order_items || order.items || [];
+    if (!reopenItems.length && order.id && navigator.onLine) {
+      const { data } = await supabase
+        .from("order_items")
+        .select("*")
+        .eq("order_id", order.id);
+      reopenItems = data || [];
+    }
+    if (!reopenItems.length) {
+      console.error("❌ [handleReopenOrder] No order items available to reopen");
+      return;
+    }
+
     // Prepare order data for reopening
     const orderData = {
-      cart: orderItems.map((item, index) => ({
+      cart: reopenItems.map((item, index) => ({
         id: `${item.product_id}-${item.variant_id || "base"}-${Date.now()}-${index}`,
         productId: item.product_id,
         variantId: item.variant_id,
@@ -1573,7 +1586,7 @@ export default function OrdersPage() {
       originalPaymentMethod: order.payment_method,
       // Store original order state for comparison
       originalState: {
-        items: orderItems.map((item) => ({
+        items: reopenItems.map((item) => ({
           productName: item.product_name,
           variantName: item.variant_name,
           quantity: item.quantity,
@@ -1583,7 +1596,7 @@ export default function OrdersPage() {
         subtotal: order.subtotal,
         discountAmount: order.discount_amount,
         total: order.total_amount,
-        itemCount: orderItems.length,
+        itemCount: reopenItems.length,
       },
     };
 
@@ -1712,10 +1725,23 @@ export default function OrdersPage() {
     try {
       setIsPrinting(true);
 
+      // Capture the order we're printing for — selectedOrder state may change
+      // if the user clicks another order while the async print is in progress.
+      const printOrder = selectedOrder;
+
       if (!user?.id) {
         setIsPrinting(false);
         return;
       }
+
+      // Always fetch fresh items — never use orderItems state which may be stale
+      // from a previous order if the user switched orders quickly.
+      let printItems = [];
+      if (printOrder.id && navigator.onLine) {
+        const { data } = await supabase.from("order_items").select("*").eq("order_id", printOrder.id).order("created_at");
+        printItems = data || [];
+      }
+      if (!printItems.length) printItems = printOrder.order_items || printOrder.items || [];
 
       printerManager.setUserId(user.id);
       const printer = await printerManager.getPrinterForPrinting();
@@ -1726,25 +1752,25 @@ export default function OrdersPage() {
       }
 
       const orderData = {
-        orderNumber: selectedOrder.order_number,
-        dailySerial: selectedOrder.daily_serial || null,
-        orderType: selectedOrder.order_type,
-        customer: selectedOrder.customers,
-        deliveryAddress: selectedOrder.delivery_address || selectedOrder.customers?.addressline || selectedOrder.customers?.address,
-        orderInstructions: selectedOrder.order_instructions,
-        specialNotes: selectedOrder.order_instructions,
-        total: selectedOrder.total_amount,
-        subtotal: selectedOrder.subtotal,
-        deliveryCharges: selectedOrder.delivery_charges || 0,
-        discountAmount: selectedOrder.discount_amount || 0,
+        orderNumber: printOrder.order_number,
+        dailySerial: printOrder.daily_serial || null,
+        orderType: printOrder.order_type,
+        customer: printOrder.customers,
+        deliveryAddress: printOrder.delivery_address || printOrder.customers?.addressline || printOrder.customers?.address,
+        orderInstructions: printOrder.order_instructions,
+        specialNotes: printOrder.order_instructions,
+        total: printOrder.total_amount,
+        subtotal: printOrder.subtotal,
+        deliveryCharges: printOrder.delivery_charges || 0,
+        discountAmount: printOrder.discount_amount || 0,
         loyaltyDiscountAmount: loyaltyRedemption?.discount_applied || 0,
         loyaltyPointsRedeemed: loyaltyRedemption?.points_used || 0,
         discountType: "amount",
-        serviceChargeAmount: parseFloat(selectedOrder.service_charge_amount || 0),
-        serviceChargeType: parseFloat(selectedOrder.service_charge_percentage || 0) > 0 ? 'percentage' : 'fixed',
-        serviceChargeValue: parseFloat(selectedOrder.service_charge_percentage || 0),
-        tableName: selectedOrder.tables?.table_name || (selectedOrder.tables?.table_number ? `Table ${selectedOrder.tables.table_number}` : '') || '',
-        cart: orderItems.map((item) => {
+        serviceChargeAmount: parseFloat(printOrder.service_charge_amount || 0),
+        serviceChargeType: parseFloat(printOrder.service_charge_percentage || 0) > 0 ? 'percentage' : 'fixed',
+        serviceChargeValue: parseFloat(printOrder.service_charge_percentage || 0),
+        tableName: printOrder.tables?.table_name || (printOrder.tables?.table_number ? `Table ${printOrder.tables.table_number}` : '') || '',
+        cart: printItems.map((item) => {
           // DEBUG: Log ALL items to see what we're getting from database
           console.log('🖨️ Receipt - Raw item from DB:', JSON.stringify(item, null, 2));
           console.log('🖨️ Receipt - item.is_deal:', item.is_deal);
@@ -1791,15 +1817,15 @@ export default function OrdersPage() {
             itemInstructions: item.item_instructions || null,
           };
         }),
-        paymentMethod: selectedOrder.payment_method || "Cash",
-        order_taker_name: selectedOrder.order_takers?.name ||
-          (selectedOrder.order_taker_id
-            ? (cacheManager.getOrderTakers().find(t => t.id === selectedOrder.order_taker_id)?.name || null)
+        paymentMethod: printOrder.payment_method || "Cash",
+        order_taker_name: printOrder.order_takers?.name ||
+          (printOrder.order_taker_id
+            ? (cacheManager.getOrderTakers().find(t => t.id === printOrder.order_taker_id)?.name || null)
             : null)
       };
 
       // Add payment transactions for split payment
-      if (selectedOrder.payment_method === 'Split' && paymentTransactions.length > 0) {
+      if (printOrder.payment_method === 'Split' && paymentTransactions.length > 0) {
         orderData.paymentTransactions = paymentTransactions;
         console.log('✅ Including payment transactions in print data:', paymentTransactions);
       }
@@ -1843,8 +1869,8 @@ export default function OrdersPage() {
         show_logo_on_receipt: userProfileRaw?.show_logo_on_receipt === false || userProfileRaw?.show_logo_on_receipt === "false" ? false : true,
         show_business_name_on_receipt: userProfileRaw?.show_business_name_on_receipt === false || userProfileRaw?.show_business_name_on_receipt === "false" ? false : true,
         // Add cashier/admin name for receipt printing
-        cashier_name: selectedOrder.cashier_id ? selectedOrder.cashiers?.name : null,
-        customer_name: !selectedOrder.cashier_id ? selectedOrder.users?.customer_name : null,
+        cashier_name: printOrder.cashier_id ? printOrder.cashiers?.name : null,
+        customer_name: !printOrder.cashier_id ? printOrder.users?.customer_name : null,
       };
 
       console.log("📦 Orders Page - Final userProfile being sent to printer:");
@@ -1882,10 +1908,21 @@ export default function OrdersPage() {
     try {
       setIsPrinting(true);
 
+      // Capture order at call time — state may change during async operations.
+      const printOrder = selectedOrder;
+
       if (!user?.id) {
         setIsPrinting(false);
         return;
       }
+
+      // Always fetch fresh items — never use orderItems state which may be stale.
+      let printItems = [];
+      if (printOrder.id && navigator.onLine) {
+        const { data } = await supabase.from("order_items").select("*").eq("order_id", printOrder.id);
+        printItems = data || [];
+      }
+      if (!printItems.length) printItems = printOrder.order_items || printOrder.items || [];
 
       // Get printer config
       printerManager.setUserId(user.id);
@@ -1901,7 +1938,7 @@ export default function OrdersPage() {
       const productCategoryMap = {}
       cacheManager.cache?.products?.forEach(p => { productCategoryMap[p.id] = p.category_id })
 
-      let mappedItems = orderItems.map((item) => {
+      let mappedItems = printItems.map((item) => {
         // DEBUG: Log ALL items to see what we're getting from database
         console.log('🍳 Kitchen - Raw item from DB:', JSON.stringify(item, null, 2));
         console.log('🍳 Kitchen - item.is_deal:', item.is_deal);
@@ -1959,27 +1996,27 @@ export default function OrdersPage() {
       })
 
       // 🆕 Check for order changes using order_item_changes table
-      if (selectedOrder.id) {
-        mappedItems = await getOrderItemsWithChanges(selectedOrder.id, mappedItems)
+      if (printOrder.id) {
+        mappedItems = await getOrderItemsWithChanges(printOrder.id, mappedItems)
       }
 
       const orderData = {
-        orderNumber: selectedOrder.order_number,
-        dailySerial: selectedOrder.daily_serial || null,
-        orderType: selectedOrder.order_type,
-        customerName: selectedOrder.customers?.full_name || "",
-        customerPhone: selectedOrder.customers?.phone || "",
-        totalAmount: selectedOrder.total_amount,
-        subtotal: selectedOrder.subtotal,
-        deliveryCharges: selectedOrder.delivery_charges || 0,
-        discountAmount: selectedOrder.discount_amount || 0,
-        specialNotes: selectedOrder.order_instructions || "",
-        deliveryAddress: selectedOrder.delivery_address || selectedOrder.customers?.addressline || selectedOrder.customers?.address || "",
-        tableName: selectedOrder.tables?.table_name || (selectedOrder.tables?.table_number ? `Table ${selectedOrder.tables.table_number}` : '') || '',
+        orderNumber: printOrder.order_number,
+        dailySerial: printOrder.daily_serial || null,
+        orderType: printOrder.order_type,
+        customerName: printOrder.customers?.full_name || "",
+        customerPhone: printOrder.customers?.phone || "",
+        totalAmount: printOrder.total_amount,
+        subtotal: printOrder.subtotal,
+        deliveryCharges: printOrder.delivery_charges || 0,
+        discountAmount: printOrder.discount_amount || 0,
+        specialNotes: printOrder.order_instructions || "",
+        deliveryAddress: printOrder.delivery_address || printOrder.customers?.addressline || printOrder.customers?.address || "",
+        tableName: printOrder.tables?.table_name || (printOrder.tables?.table_number ? `Table ${printOrder.tables.table_number}` : '') || '',
         items: mappedItems,
-        order_taker_name: selectedOrder.order_takers?.name ||
-          (selectedOrder.order_taker_id
-            ? (cacheManager.getOrderTakers().find(t => t.id === selectedOrder.order_taker_id)?.name || null)
+        order_taker_name: printOrder.order_takers?.name ||
+          (printOrder.order_taker_id
+            ? (cacheManager.getOrderTakers().find(t => t.id === printOrder.order_taker_id)?.name || null)
             : null)
       };
 
@@ -1998,8 +2035,8 @@ export default function OrdersPage() {
         phone: userProfileRaw?.phone || userRaw?.phone || "",
         store_logo: userProfileRaw?.store_logo || userRaw?.store_logo || null,
         // Add cashier/admin name for kitchen token printing
-        cashier_name: selectedOrder.cashier_id ? selectedOrder.cashiers?.name : null,
-        customer_name: !selectedOrder.cashier_id ? selectedOrder.users?.customer_name : null,
+        cashier_name: printOrder.cashier_id ? printOrder.cashiers?.name : null,
+        customer_name: !printOrder.cashier_id ? printOrder.users?.customer_name : null,
       };
 
       // Use printerManager to print kitchen token (routes to USB or IP automatically)

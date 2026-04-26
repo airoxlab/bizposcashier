@@ -8,6 +8,30 @@ const whatsAppClient = require('./whatsappClient');
 const { formatPhoneForWhatsApp } = require('./phoneFormatter');
 const { generateReceiptImage, generateBalanceImage } = require('./receiptImageGenerator');
 
+// Errors that mean the socket is dead — trigger immediate reconnect
+function isConnectionDead(err) {
+  const msg = err?.message || '';
+  return (
+    msg.includes('Connection Closed') ||
+    msg.includes('Connection Lost') ||
+    msg.includes('Connection Terminated') ||
+    msg.includes('not connected') ||
+    msg.includes('write EPIPE') ||
+    msg.includes('ECONNRESET') ||
+    msg.includes('not-authorized') ||
+    msg.includes('WhatsApp is not connected')
+  );
+}
+
+function triggerReconnectOnSendFailure(err) {
+  if (!isConnectionDead(err)) return;
+  log.warn('[WA Handler] Connection-dead error on send — triggering immediate reconnect');
+  whatsAppClient._stopKeepalive();
+  whatsAppClient.setStatus('disconnected');
+  whatsAppClient.emit('whatsapp:disconnected', { reason: 'send_frame_detached' });
+  whatsAppClient.scheduleReconnect();
+}
+
 function registerWhatsAppHandlers(ipcMain, getMainWindow) {
   // ─── Connection ───────────────────────────────────────────
 
@@ -54,6 +78,7 @@ function registerWhatsAppHandlers(ipcMain, getMainWindow) {
       return { success: true, phoneSent: formatted };
     } catch (err) {
       log.error('[WA Handler] send-order-message error:', err.message);
+      triggerReconnectOnSendFailure(err);
       return { success: false, error: err.message };
     }
   });
@@ -76,6 +101,7 @@ function registerWhatsAppHandlers(ipcMain, getMainWindow) {
       return { success: true, phoneSent: formatted };
     } catch (err) {
       log.error('[WA Handler] send-campaign-message error:', err.message);
+      triggerReconnectOnSendFailure(err);
       return { success: false, error: err.message };
     }
   });
@@ -127,6 +153,7 @@ function registerWhatsAppHandlers(ipcMain, getMainWindow) {
       return { success: true, phoneSent: formatted };
     } catch (err) {
       log.error('[WA Handler] send-receipt-image error:', err.message);
+      triggerReconnectOnSendFailure(err);
       return { success: false, error: err.message };
     }
   });
@@ -158,6 +185,7 @@ function registerWhatsAppHandlers(ipcMain, getMainWindow) {
       return { success: true, phoneSent: formatted };
     } catch (err) {
       log.error('[WA Handler] send-balance-image error:', err.message);
+      triggerReconnectOnSendFailure(err);
       return { success: false, error: err.message };
     }
   });

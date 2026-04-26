@@ -300,6 +300,21 @@ useEffect(() => {
         // Start listening globally
         networkPrintListener.startListening()
         notify.success('Print server mode enabled - listening on all pages')
+        // Publish this machine's IP immediately so the mobile app can find it
+        if (typeof window !== 'undefined' && window.electronAPI?.getLocalIP) {
+          window.electronAPI.getLocalIP().then(async (detectedIp) => {
+            if (!detectedIp || detectedIp === '127.0.0.1') return
+            try {
+              await supabase
+                .from('users')
+                .update({ print_server_ip: detectedIp })
+                .eq('id', user.id)
+              console.log(`🖨️ [Printer] Print server IP published: ${detectedIp}`)
+            } catch (e) {
+              console.warn('⚠️ [Printer] Failed to publish print server IP:', e.message)
+            }
+          })
+        }
       } else {
         // Stop listening
         networkPrintListener.stopListening()

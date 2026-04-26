@@ -133,31 +133,30 @@ export default function Dashboard() {
       } else {
         console.log('⏹️ [Dashboard] Server mode OFF, listener not started')
       }
-    }
 
-    // Load and apply theme
-    setTheme(themeManager.currentTheme)
-    themeManager.applyTheme()
-
-    // Initialize cache only on first load
-    initializeCache()
-
-    // Update time every second and refresh pending count every 30 seconds
-    const timer = setInterval(() => {
-      setCurrentTime(new Date())
-      // Update network status
-      setCacheStatus(prev => ({
-        ...prev,
-        networkStatus: cacheManager.getNetworkStatus()
-      }))
-    }, 1000)
-
-    const countRefreshTimer = setInterval(async () => {
-      if (userData?.id) {
-        const count = await webOrderNotificationManager.getPendingCount()
-        setPendingWebOrders(count)
+      // Only the print server machine publishes its IP — office/client laptops must not overwrite it.
+      if (isServerMode && typeof window !== 'undefined' && window.electronAPI?.getLocalIP) {
+        window.electronAPI.getLocalIP().then(async (detectedIp) => {
+          if (!detectedIp || detectedIp === '127.0.0.1') return
+          try {
+            const { data: current } = await supabase
+              .from('users')
+              .select('print_server_ip')
+              .eq('id', userData.id)
+              .single()
+            if (current?.print_server_ip !== detectedIp) {
+              await supabase
+                .from('users')
+                .update({ print_server_ip: detectedIp })
+                .eq('id', userData.id)
+              console.log(`🖨️ [Dashboard] Print server IP updated to ${detectedIp}`)
+            }
+          } catch (e) {
+            console.warn('⚠️ [Dashboard] Failed to auto-publish print server IP:', e.message)
+          }
+        })
       }
-    }, 30000) // Refresh every 30 seconds
+    }
 
     // Start background sync
     cacheManager.startBackgroundSync()
