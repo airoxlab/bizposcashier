@@ -42,13 +42,24 @@ import ProtectedPage from '../../../components/ProtectedPage'
 
 // ─── Template variable chips ─────────────────────────────────────────────────
 const TEMPLATE_VARS = [
-  { label: '{customer_name}', desc: 'Customer full name' },
-  { label: '{order_number}', desc: 'Order #' },
-  { label: '{total_amount}', desc: 'Total bill amount' },
-  { label: '{order_type}', desc: 'walkin / takeaway / delivery' },
-  { label: '{order_date}', desc: 'Date of order' },
-  { label: '{business_name}', desc: 'Your business name' },
-  { label: '{review_link}', desc: 'Customer review URL' },
+  { label: '{customer_name}',      desc: 'Customer full name' },
+  { label: '{order_number}',       desc: 'Order #' },
+  { label: '{total_amount}',       desc: 'Total bill amount' },
+  { label: '{subtotal}',           desc: 'Subtotal before discount/delivery' },
+  { label: '{discount_amount}',    desc: 'Discount applied' },
+  { label: '{delivery_charges}',   desc: 'Delivery fee' },
+  { label: '{order_type}',         desc: 'walkin / takeaway / delivery' },
+  { label: '{order_date}',         desc: 'Date of order' },
+  { label: '{business_name}',      desc: 'Your business name' },
+  { label: '{review_link}',        desc: 'Customer review URL (Completed only)' },
+  { label: '{item_list}',          desc: 'Bulleted list of items ordered' },
+  { label: '{table_number}',       desc: 'Table name/number (Dine-In)' },
+  { label: '{payment_method}',     desc: 'How customer paid' },
+  { label: '{cashier_name}',       desc: 'Name of cashier who processed order' },
+  { label: '{delivery_address}',   desc: 'Customer delivery address' },
+  { label: '{takeaway_time}',      desc: 'Estimated takeaway pickup time' },
+  { label: '{delivery_time}',      desc: 'Estimated delivery time' },
+  { label: '{order_instructions}', desc: 'Special instructions from customer' },
 ]
 
 const ORDER_TYPES = [
@@ -64,23 +75,39 @@ const DEFAULT_SETTINGS = {
   auto_send_walkin: true,
   auto_send_takeaway: true,
   auto_send_delivery: true,
-  // Dispatch triggers (Ready/On-the-Way)
-  auto_send_on_ready: true,
+  // Preparing triggers
+  auto_send_on_preparing: false,
+  auto_send_walkin_preparing: true,
+  auto_send_takeaway_preparing: true,
+  auto_send_delivery_preparing: true,
+  // Dispatched triggers (master key kept as auto_send_on_ready for backward compat)
+  auto_send_on_ready: false,
+  auto_send_walkin_dispatched: true,
+  auto_send_takeaway_dispatched: true,
+  auto_send_delivery_dispatched: true,
+  // Ready triggers
+  auto_send_on_ready_status: false,
   auto_send_walkin_ready: false,
   auto_send_takeaway_ready: true,
   auto_send_delivery_ready: true,
-  // Ready status trigger (mutually exclusive with dispatch for delivery)
-  auto_send_on_ready_status: false,
   // Review link
   include_review_link: true,
   // Campaign
   campaign_send_delay_min: 3,
   campaign_send_delay_max: 8,
-  // Completed templates
+  // Templates — Completed
   walkin_template: `Thank you {customer_name} for dining with us! 🍽️\n\nYour order #{order_number} of Rs.{total_amount} has been completed.\n\nWe hope you enjoyed your meal! Please take a moment to rate your experience:\n{review_link}\n\n— {business_name}`,
   takeaway_template: `Thank you {customer_name}! 🎉\n\nYour takeaway order #{order_number} of Rs.{total_amount} has been completed.\n\nWe appreciate your business! Share your feedback:\n{review_link}\n\n— {business_name}`,
   delivery_template: `Thank you {customer_name}! 🚀\n\nYour delivery order #{order_number} of Rs.{total_amount} has been delivered.\n\nEnjoy your meal! We'd love your review:\n{review_link}\n\n— {business_name}`,
-  // Ready templates
+  // Templates — Preparing
+  walkin_preparing_template: `Hi {customer_name}! 👨‍🍳 Your order #{order_number} is now being prepared. We'll notify you when it's ready!\n\n— {business_name}`,
+  takeaway_preparing_template: `Hi {customer_name}! 👨‍🍳 Your takeaway order #{order_number} is being prepared. We'll notify you when it's ready for pickup!\n\n— {business_name}`,
+  delivery_preparing_template: `Hi {customer_name}! 👨‍🍳 Your delivery order #{order_number} is being prepared. Your rider will be assigned soon!\n\n— {business_name}`,
+  // Templates — Dispatched
+  walkin_dispatched_template: `Hi {customer_name}! 🍽️ Your order #{order_number} is on its way to your table. Enjoy your meal!\n\n— {business_name}`,
+  takeaway_dispatched_template: `Hi {customer_name}! 📦 Your takeaway order #{order_number} is packed and ready. Please come collect it!\n\n— {business_name}`,
+  delivery_dispatched_template: `Hi {customer_name}! 🛵 Your delivery order #{order_number} is on the way! Our rider is heading to you now.\n\n— {business_name}`,
+  // Templates — Ready
   walkin_ready_template: `Your order is ready to be served, {customer_name}! 🍽️\n\nOrder #{order_number}\n— {business_name}`,
   takeaway_ready_template: `Great news, {customer_name}! 🎉\n\nYour takeaway order #{order_number} is ready for pickup!\n\nPlease come collect your order at your earliest convenience.\n— {business_name}`,
   delivery_ready_template: `Hi {customer_name}! 🚀\n\nYour delivery order #{order_number} is on the way!\n\nOur rider is heading to your location. Please be available to receive it.\n— {business_name}`,
@@ -265,20 +292,31 @@ export function WhatsAppPanel() {
   }
 
   function activeTemplateKey() {
-    return activeTemplateStatus === 'ready'
-      ? `${activeTemplateType}_ready_template`
-      : `${activeTemplateType}_template`
+    if (activeTemplateStatus === 'completed') return `${activeTemplateType}_template`
+    return `${activeTemplateType}_${activeTemplateStatus}_template`
   }
 
   function getPreview() {
+    const typeLabel = activeTemplateType === 'walkin' ? 'Dine-In' : activeTemplateType === 'takeaway' ? 'Takeaway' : 'Delivery'
     return (settings[activeTemplateKey()] || '')
-      .replace(/\{customer_name\}/g, 'Ahmed Khan')
-      .replace(/\{order_number\}/g, 'ORD-0042')
-      .replace(/\{total_amount\}/g, '1,250')
-      .replace(/\{order_type\}/g, activeTemplateType)
-      .replace(/\{order_date\}/g, '07 Apr 2026')
-      .replace(/\{business_name\}/g, 'BizPOS Restaurant')
-      .replace(/\{review_link\}/g, activeTemplateStatus === 'completed' ? 'https://reviews.bizpos.app/r/abc123' : '')
+      .replace(/\{customer_name\}/g,      'Ahmed Khan')
+      .replace(/\{order_number\}/g,       'ORD-0042')
+      .replace(/\{total_amount\}/g,       '1,250')
+      .replace(/\{subtotal\}/g,           '1,100')
+      .replace(/\{discount_amount\}/g,    '100')
+      .replace(/\{delivery_charges\}/g,   '150')
+      .replace(/\{order_type\}/g,         typeLabel)
+      .replace(/\{order_date\}/g,         '07 Apr 2026')
+      .replace(/\{business_name\}/g,      'BizPOS Restaurant')
+      .replace(/\{review_link\}/g,        activeTemplateStatus === 'completed' ? 'https://reviews.bizpos.app/r/abc123' : '')
+      .replace(/\{item_list\}/g,          '• Chicken Burger × 2  Rs. 600\n• Fries — Large × 1  Rs. 250\n• Soft Drink × 2  Rs. 200')
+      .replace(/\{table_number\}/g,       activeTemplateType === 'walkin' ? 'T-04' : '')
+      .replace(/\{payment_method\}/g,     'Cash')
+      .replace(/\{cashier_name\}/g,       'Usman Ali')
+      .replace(/\{delivery_address\}/g,   activeTemplateType === 'delivery' ? 'House 5, Block B, Gulberg III' : '')
+      .replace(/\{takeaway_time\}/g,      activeTemplateType === 'takeaway' ? '1:30 PM' : '')
+      .replace(/\{delivery_time\}/g,      activeTemplateType === 'delivery' ? '2:00 PM' : '')
+      .replace(/\{order_instructions\}/g, 'No onions please')
   }
 
   const tabs = [
@@ -545,54 +583,50 @@ export function WhatsAppPanel() {
                 </div>
               </div>
 
-              {/* Completed / Ready sub-tabs */}
-              <div className={`flex gap-2 p-1 rounded-xl border ${isDark ? 'bg-gray-900/40 border-gray-700/40' : 'bg-gray-100 border-gray-200'}`}>
-                <button
-                  onClick={() => { setActiveTemplateStatus('completed'); setPreviewVisible(false) }}
-                  className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-semibold transition-all ${
-                    activeTemplateStatus === 'completed'
-                      ? isDark ? 'bg-green-500/20 border border-green-500/30 text-green-400' : 'bg-green-50 border border-green-200 text-green-600'
-                      : isDark ? 'text-gray-400 hover:text-gray-300' : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  <CheckCircle size={14} />
-                  Order Completed
-                </button>
-                <button
-                  onClick={() => { setActiveTemplateStatus('ready'); setPreviewVisible(false) }}
-                  className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-lg text-sm font-semibold transition-all ${
-                    activeTemplateStatus === 'ready'
-                      ? isDark ? 'bg-blue-500/20 border border-blue-500/30 text-blue-400' : 'bg-blue-50 border border-blue-200 text-blue-600'
-                      : isDark ? 'text-gray-400 hover:text-gray-300' : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  <Zap size={14} />
-                  Ready / On the Way
-                </button>
+              {/* Status sub-tabs — 4 options */}
+              <div className={`grid grid-cols-4 gap-1 p-1 rounded-xl border ${isDark ? 'bg-gray-900/40 border-gray-700/40' : 'bg-gray-100 border-gray-200'}`}>
+                {[
+                  { key: 'completed',  label: 'Completed',  icon: CheckCircle, activeCls: isDark ? 'bg-green-500/20 border border-green-500/30 text-green-400' : 'bg-green-50 border border-green-200 text-green-600' },
+                  { key: 'preparing',  label: 'Preparing',  icon: Clock,       activeCls: isDark ? 'bg-orange-500/20 border border-orange-500/30 text-orange-400' : 'bg-orange-50 border border-orange-200 text-orange-600' },
+                  { key: 'dispatched', label: 'Dispatched', icon: Truck,       activeCls: isDark ? 'bg-blue-500/20 border border-blue-500/30 text-blue-400' : 'bg-blue-50 border border-blue-200 text-blue-600' },
+                  { key: 'ready',      label: 'Ready',      icon: Zap,         activeCls: isDark ? 'bg-amber-500/20 border border-amber-500/30 text-amber-400' : 'bg-amber-50 border border-amber-200 text-amber-600' },
+                ].map(s => {
+                  const SIcon = s.icon
+                  return (
+                    <button
+                      key={s.key}
+                      onClick={() => { setActiveTemplateStatus(s.key); setPreviewVisible(false) }}
+                      className={`flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-all ${
+                        activeTemplateStatus === s.key
+                          ? s.activeCls
+                          : isDark ? 'text-gray-400 hover:text-gray-300' : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      <SIcon size={13} />
+                      {s.label}
+                    </button>
+                  )
+                })}
               </div>
 
               {/* Context hint */}
-              <div className={`rounded-xl px-4 py-2.5 text-xs ${
-                activeTemplateStatus === 'completed'
-                  ? isDark ? 'bg-green-500/8 border border-green-500/15 text-green-400' : 'bg-green-50 border border-green-200 text-green-600'
-                  : isDark ? 'bg-blue-500/8 border border-blue-500/15 text-blue-400' : 'bg-blue-50 border border-blue-200 text-blue-600'
-              }`}>
-                {activeTemplateStatus === 'completed'
-                  ? `Sent when order is marked Completed. Use {review_link} to include the review URL.`
-                  : activeTemplateType === 'walkin'
-                    ? `Sent when Dine-In order is marked Ready (food served). Review link is not included.`
-                    : activeTemplateType === 'takeaway'
-                      ? `Sent when Takeaway order is marked Ready — notifies customer to come collect.`
-                      : `Sent when Delivery order is marked Ready — notifies customer rider is on the way.`
+              {(() => {
+                const hints = {
+                  completed:  { cls: isDark ? 'bg-green-500/8 border border-green-500/15 text-green-400' : 'bg-green-50 border border-green-200 text-green-600',   text: 'Sent when order is marked Completed. Use {review_link} to include the review URL.' },
+                  preparing:  { cls: isDark ? 'bg-orange-500/8 border border-orange-500/15 text-orange-400' : 'bg-orange-50 border border-orange-200 text-orange-600', text: 'Sent when order status changes to Preparing — notifies customer their order has started.' },
+                  dispatched: { cls: isDark ? 'bg-blue-500/8 border border-blue-500/15 text-blue-400' : 'bg-blue-50 border border-blue-200 text-blue-600',     text: activeTemplateType === 'walkin' ? 'Sent when order is Dispatched — food is on its way to the table.' : activeTemplateType === 'takeaway' ? 'Sent when order is Dispatched — order is packed, customer can collect.' : 'Sent when order is Dispatched — rider is heading to the customer.' },
+                  ready:      { cls: isDark ? 'bg-amber-500/8 border border-amber-500/15 text-amber-400' : 'bg-amber-50 border border-amber-200 text-amber-600',   text: activeTemplateType === 'walkin' ? 'Sent when order is Ready — table is being served.' : activeTemplateType === 'takeaway' ? 'Sent when order is Ready — notifies customer to come collect.' : 'Sent when order is Ready — rider is on the way.' },
                 }
-              </div>
+                const h = hints[activeTemplateStatus] || hints.completed
+                return <div className={`rounded-xl px-4 py-2.5 text-xs ${h.cls}`}>{h.text}</div>
+              })()}
 
               {/* Template editor */}
               <div className={`rounded-2xl border p-4 ${cardBg}`}>
                 <div className="flex items-center justify-between mb-3">
-                  <p className={`${tp} font-semibold text-sm`}>
+                  <p className={`${tp} font-semibold text-sm capitalize`}>
                     {ORDER_TYPES.find(t => t.key === activeTemplateType)?.label}
-                    {' '}{activeTemplateStatus === 'completed' ? 'Completed' : 'Ready'} Template
+                    {' — '}{activeTemplateStatus} Template
                   </p>
                   <button
                     onClick={() => setPreviewVisible(p => !p)}
@@ -642,144 +676,125 @@ export function WhatsAppPanel() {
               exit={{ opacity: 0, y: -12 }}
               className="space-y-4"
             >
-              {/* Master toggle */}
-              <div className={`rounded-2xl border p-5 flex items-center justify-between ${
-                settings.auto_send_on_complete
-                  ? isDark ? 'border-green-500/30 bg-green-500/5' : 'border-green-200 bg-green-50'
-                  : cardBg
-              }`}>
-                <div className="flex items-center gap-3">
-                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                    settings.auto_send_on_complete ? isDark ? 'bg-green-500/20' : 'bg-green-100' : isDark ? 'bg-gray-700' : 'bg-gray-200'
-                  }`}>
-                    <Zap size={18} className={settings.auto_send_on_complete ? isDark ? 'text-green-400' : 'text-green-500' : ts} />
-                  </div>
-                  <div>
-                    <p className={`${tp} font-bold text-sm`}>Auto Thank-You Message</p>
-                    <p className={`${ts} text-xs`}>Send automatically when order status → Completed</p>
-                  </div>
-                </div>
-                <Toggle
-                  checked={settings.auto_send_on_complete}
-                  onChange={() => setSettings(p => ({ ...p, auto_send_on_complete: !p.auto_send_on_complete }))}
-                  isDark={isDark}
-                />
-              </div>
-
-              {/* Per order type */}
-              <div className={`rounded-2xl border p-5 ${cardBg}`}>
-                <h3 className={`${ts} text-xs font-semibold uppercase tracking-wider mb-4`}>
-                  Enable per order type
-                </h3>
-                <div className="space-y-3">
-                  {ORDER_TYPES.map(t => (
-                    <div key={t.key} className="flex items-center justify-between py-2">
+              {[
+                {
+                  masterKey: 'auto_send_on_complete',
+                  perTypeKey: k => `auto_send_${k}`,
+                  label: 'Order Completed',
+                  desc: 'Send when order status →',
+                  statusLabel: 'Completed',
+                  icon: CheckCircle,
+                  onColor: isDark ? 'border-green-500/30 bg-green-500/5' : 'border-green-200 bg-green-50',
+                  iconOnCls: isDark ? 'bg-green-500/20 text-green-400' : 'bg-green-100 text-green-500',
+                  statusCls: isDark ? 'text-green-400' : 'text-green-600',
+                  footerCls: isDark ? 'text-green-400/70' : 'text-green-600/70',
+                  perTypes: ORDER_TYPES.map(t => ({ ...t, note: '' })),
+                },
+                {
+                  masterKey: 'auto_send_on_preparing',
+                  perTypeKey: k => `auto_send_${k}_preparing`,
+                  label: 'Order Preparing',
+                  desc: 'Send when order status →',
+                  statusLabel: 'Preparing',
+                  icon: Clock,
+                  onColor: isDark ? 'border-orange-500/30 bg-orange-500/5' : 'border-orange-200 bg-orange-50',
+                  iconOnCls: isDark ? 'bg-orange-500/20 text-orange-400' : 'bg-orange-100 text-orange-500',
+                  statusCls: isDark ? 'text-orange-400' : 'text-orange-600',
+                  footerCls: isDark ? 'text-orange-400/70' : 'text-orange-600/70',
+                  perTypes: ORDER_TYPES.map(t => ({ ...t, note: '' })),
+                },
+                {
+                  masterKey: 'auto_send_on_ready',
+                  perTypeKey: k => `auto_send_${k}_dispatched`,
+                  label: 'Order Dispatched',
+                  desc: 'Send when order status →',
+                  statusLabel: 'Dispatched',
+                  icon: Truck,
+                  onColor: isDark ? 'border-blue-500/30 bg-blue-500/5' : 'border-blue-200 bg-blue-50',
+                  iconOnCls: isDark ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-500',
+                  statusCls: isDark ? 'text-blue-400' : 'text-blue-600',
+                  footerCls: isDark ? 'text-blue-400/70' : 'text-blue-600/70',
+                  perTypes: ORDER_TYPES.map(t => ({ ...t, note: '' })),
+                },
+                {
+                  masterKey: 'auto_send_on_ready_status',
+                  perTypeKey: k => `auto_send_${k}_ready`,
+                  label: 'Order Ready',
+                  desc: 'Send when order status →',
+                  statusLabel: 'Ready',
+                  icon: Zap,
+                  onColor: isDark ? 'border-amber-500/30 bg-amber-500/5' : 'border-amber-200 bg-amber-50',
+                  iconOnCls: isDark ? 'bg-amber-500/20 text-amber-400' : 'bg-amber-100 text-amber-500',
+                  statusCls: isDark ? 'text-amber-400' : 'text-amber-600',
+                  footerCls: isDark ? 'text-amber-400/70' : 'text-amber-600/70',
+                  perTypes: [
+                    { key: 'walkin',   label: 'Dine-In',  icon: Package,    color: 'from-blue-500 to-cyan-500',     note: 'Table is served' },
+                    { key: 'takeaway', label: 'Takeaway', icon: ShoppingBag, color: 'from-purple-500 to-indigo-500', note: 'Ready for pickup' },
+                    { key: 'delivery', label: 'Delivery', icon: Truck,       color: 'from-orange-500 to-red-500',    note: 'Rider on the way' },
+                  ],
+                },
+              ].map(section => {
+                const isOn = settings[section.masterKey]
+                const SIcon = section.icon
+                return (
+                  <div key={section.masterKey} className={`rounded-2xl border overflow-hidden ${isOn ? section.onColor : cardBg}`}>
+                    {/* Header */}
+                    <div className="flex items-center justify-between p-5">
                       <div className="flex items-center gap-3">
-                        <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${t.color} flex items-center justify-center`}>
-                          <t.icon size={14} className="text-white" />
-                        </div>
-                        <p className={`${tp} font-medium text-sm`}>{t.label}</p>
-                      </div>
-                      <Toggle
-                        checked={settings[`auto_send_${t.key}`]}
-                        onChange={() => setSettings(p => ({ ...p, [`auto_send_${t.key}`]: !p[`auto_send_${t.key}`] }))}
-                        disabled={!settings.auto_send_on_complete}
-                        isDark={isDark}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* ── Dispatched & Ready Toggles (side by side, mutually exclusive) ── */}
-              <div className="grid grid-cols-2 gap-3">
-                {/* Dispatched / On-the-Way */}
-                <div className={`rounded-2xl border p-5 flex flex-col justify-between ${
-                  settings.auto_send_on_ready
-                    ? isDark ? 'border-blue-500/30 bg-blue-500/5' : 'border-blue-200 bg-blue-50'
-                    : cardBg
-                }`}>
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                      settings.auto_send_on_ready ? isDark ? 'bg-blue-500/20' : 'bg-blue-100' : isDark ? 'bg-gray-700' : 'bg-gray-200'
-                    }`}>
-                      <Zap size={18} className={settings.auto_send_on_ready ? isDark ? 'text-blue-400' : 'text-blue-500' : ts} />
-                    </div>
-                    <div>
-                      <p className={`${tp} font-bold text-sm`}>Dispatched Notification</p>
-                      <p className={`${ts} text-xs`}>Send when order status → Dispatched</p>
-                    </div>
-                  </div>
-                  <div className="flex justify-end">
-                    <Toggle
-                      checked={settings.auto_send_on_ready}
-                      onChange={() => setSettings(p => ({ ...p, auto_send_on_ready: !p.auto_send_on_ready, ...(p.auto_send_on_ready ? {} : { auto_send_on_ready_status: false }) }))}
-                      isDark={isDark}
-                    />
-                  </div>
-                </div>
-
-                {/* Ready Notification */}
-                <div className={`rounded-2xl border p-5 flex flex-col justify-between ${
-                  settings.auto_send_on_ready_status
-                    ? isDark ? 'border-amber-500/30 bg-amber-500/5' : 'border-amber-200 bg-amber-50'
-                    : cardBg
-                }`}>
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                      settings.auto_send_on_ready_status ? isDark ? 'bg-amber-500/20' : 'bg-amber-100' : isDark ? 'bg-gray-700' : 'bg-gray-200'
-                    }`}>
-                      <Zap size={18} className={settings.auto_send_on_ready_status ? isDark ? 'text-amber-400' : 'text-amber-500' : ts} />
-                    </div>
-                    <div>
-                      <p className={`${tp} font-bold text-sm`}>Ready Notification</p>
-                      <p className={`${ts} text-xs`}>Send when order status → Ready</p>
-                    </div>
-                  </div>
-                  <div className="flex justify-end">
-                    <Toggle
-                      checked={settings.auto_send_on_ready_status}
-                      onChange={() => setSettings(p => ({ ...p, auto_send_on_ready_status: !p.auto_send_on_ready_status, ...(!p.auto_send_on_ready_status ? { auto_send_on_ready: false } : {}) }))}
-                      isDark={isDark}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div className={`rounded-2xl border p-5 ${cardBg}`}>
-                <h3 className={`${ts} text-xs font-semibold uppercase tracking-wider mb-1`}>
-                  Enable per order type
-                </h3>
-                <p className={`${tt} text-xs mb-4`}>Edit templates under Templates → Ready / On the Way</p>
-                <div className="space-y-3">
-                  {[
-                    { key: 'walkin',   label: 'Dine-In',   icon: Package,    color: 'from-blue-500 to-cyan-500',     note: 'Table is served' },
-                    { key: 'takeaway', label: 'Takeaway',  icon: ShoppingBag, color: 'from-purple-500 to-indigo-500', note: 'Ready for pickup' },
-                    { key: 'delivery', label: 'Delivery',  icon: Truck,       color: 'from-orange-500 to-red-500',    note: 'Rider on the way' },
-                  ].map(t => (
-                    <div key={t.key} className="flex items-center justify-between py-2">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${t.color} flex items-center justify-center`}>
-                          <t.icon size={14} className="text-white" />
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${isOn ? section.iconOnCls : isDark ? 'bg-gray-700 text-gray-400' : 'bg-gray-200 text-gray-400'}`}>
+                          <SIcon size={18} />
                         </div>
                         <div>
-                          <p className={`${tp} font-medium text-sm`}>{t.label}</p>
-                          <p className={`${tt} text-xs`}>{t.note}</p>
+                          <p className={`${tp} font-bold text-sm`}>{section.label}</p>
+                          <p className={`${ts} text-xs`}>
+                            {section.desc} <span className={`font-semibold ${section.statusCls}`}>{section.statusLabel}</span>
+                          </p>
                         </div>
                       </div>
                       <Toggle
-                        checked={settings[`auto_send_${t.key}_ready`]}
-                        onChange={() => setSettings(p => ({ ...p, [`auto_send_${t.key}_ready`]: !p[`auto_send_${t.key}_ready`] }))}
-                        disabled={!settings.auto_send_on_ready && !settings.auto_send_on_ready_status}
+                        checked={isOn}
+                        onChange={() => setSettings(p => ({ ...p, [section.masterKey]: !p[section.masterKey] }))}
                         isDark={isDark}
                       />
                     </div>
-                  ))}
-                </div>
-              </div>
+                    {/* Per order type */}
+                    <div className={`border-t px-5 pb-4 pt-3 ${isDark ? 'border-gray-700/40' : 'border-gray-200'}`}>
+                      <p className={`${ts} text-xs font-semibold uppercase tracking-wider mb-3`}>Enable per order type</p>
+                      <div className="space-y-2">
+                        {section.perTypes.map(t => (
+                          <div key={t.key} className="flex items-center justify-between py-1.5">
+                            <div className="flex items-center gap-3">
+                              <div className={`w-7 h-7 rounded-lg bg-gradient-to-br ${t.color} flex items-center justify-center`}>
+                                <t.icon size={13} className="text-white" />
+                              </div>
+                              <div>
+                                <p className={`${tp} text-sm`}>{t.label}</p>
+                                {t.note ? <p className={`${tt} text-xs`}>{t.note}</p> : null}
+                              </div>
+                            </div>
+                            <Toggle
+                              checked={!!settings[section.perTypeKey(t.key)]}
+                              onChange={() => setSettings(p => ({ ...p, [section.perTypeKey(t.key)]: !p[section.perTypeKey(t.key)] }))}
+                              disabled={!isOn}
+                              isDark={isDark}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    {/* Footer */}
+                    <div className={`border-t px-5 py-2.5 flex items-center gap-2 ${isDark ? 'border-gray-700/40' : 'border-gray-200'}`}>
+                      <Info size={12} className={`flex-shrink-0 ${section.footerCls}`} />
+                      <p className={`text-xs ${section.footerCls}`}>
+                        Template: <span className="font-semibold">{section.label}</span> — edit under Templates tab
+                      </p>
+                    </div>
+                  </div>
+                )
+              })}
 
               {/* Review link */}
-              <div className={`rounded-2xl border p-5 space-y-4 ${cardBg}`}>
+              <div className={`rounded-2xl border p-5 ${cardBg}`}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${isDark ? 'bg-yellow-500/10' : 'bg-yellow-50'}`}>
@@ -796,8 +811,7 @@ export function WhatsAppPanel() {
                     isDark={isDark}
                   />
                 </div>
-
-                </div>
+              </div>
 
               {/* Skip logic info */}
               <div className={`rounded-2xl border p-4 ${isDark ? 'border-gray-700/30 bg-gray-800/40' : 'border-gray-200 bg-gray-50'}`}>
@@ -887,11 +901,11 @@ export function WhatsAppPanel() {
                 <div className="space-y-3 text-sm">
                   <div className={`flex items-center justify-between py-2 border-b ${isDark ? 'border-gray-700/40' : 'border-gray-200'}`}>
                     <span className={ts}>Session storage</span>
-                    <span className={`${tb} font-mono text-xs`}>%AppData%/BizPOS/whatsapp-session</span>
+                    <span className={`${tb} font-mono text-xs`}>%AppData%/BizPOS/whatsapp-baileys-auth</span>
                   </div>
                   <div className={`flex items-center justify-between py-2 border-b ${isDark ? 'border-gray-700/40' : 'border-gray-200'}`}>
                     <span className={ts}>Auto-reconnect delay</span>
-                    <span className={`${tp} font-semibold`}>15 seconds</span>
+                    <span className={`${tp} font-semibold`}>5 seconds</span>
                   </div>
                   <div className="flex items-center justify-between py-2">
                     <span className={ts}>Session persistence</span>

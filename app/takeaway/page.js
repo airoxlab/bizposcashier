@@ -22,7 +22,8 @@ import CartSidebar from '../../components/test/CartSidebar'
 import WalkinOrdersSidebar from '../../components/test/WalkinOrdersSidebar'
 import WalkinOrderDetails from '../../components/test/WalkinOrderDetails'
 import { FileText, Check, Printer } from 'lucide-react'
-import toast, { Toaster } from 'react-hot-toast'
+import toast from 'react-hot-toast'
+import PosToaster from '@/components/ui/PosToaster'
 import { supabase } from '../../lib/supabase'
 import { motion, AnimatePresence } from 'framer-motion'
 import ProtectedPage from '../../components/ProtectedPage'
@@ -47,6 +48,9 @@ export default function TakeawayPage() {
   const [pickupTime, setPickupTime] = useState('')
   const [networkStatus, setNetworkStatus] = useState({ isOnline: true, unsyncedOrders: 0 })
   const [isDataReady, setIsDataReady] = useState(() => cacheManager.isReady())
+  // Admin-controlled flag (users.require_customer_takeaway) cached by cacheManager.
+  // Default true preserves legacy behavior of this page (customer was hard-required here).
+  const [requireCustomer, setRequireCustomer] = useState(true)
   const [isLoading, setIsLoading] = useState(() => !cacheManager.isReady())
   const [theme, setTheme] = useState('light')
   const [isReopenedOrder, setIsReopenedOrder] = useState(false)
@@ -71,6 +75,19 @@ export default function TakeawayPage() {
   const [showSuccessModal, setShowSuccessModal] = useState(false)
   const [completedOrderData, setCompletedOrderData] = useState(null)
   const [isPrinting, setIsPrinting] = useState(false)
+
+  // Load require_customer_takeaway flag on mount (cached by cacheManager).
+  // If cache is missing (fresh install / no sync yet), preserve legacy
+  // behavior: customer is required.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('pos_require_customer')
+      if (raw !== null) {
+        const parsed = JSON.parse(raw)
+        setRequireCustomer(!!parsed?.takeaway)
+      }
+    } catch {}
+  }, [])
 
   // Save cart to localStorage
   useEffect(() => {
@@ -519,8 +536,18 @@ export default function TakeawayPage() {
     try {
       console.log(`🔄 [Takeaway] Updating order ${order.order_number} status from ${order.order_status} to: ${newStatus}`)
 
+      // Track which cashier completed/changed the order
+      const additionalData = {}
+      const cashierData = authManager.getCashier()
+      if (cashierData?.id) {
+        additionalData.modified_by_cashier_id = cashierData.id
+        if (!order.cashier_id) {
+          additionalData.cashier_id = cashierData.id
+        }
+      }
+
       // Use cacheManager for offline-capable status update
-      const result = await cacheManager.updateOrderStatus(order.id, newStatus)
+      const result = await cacheManager.updateOrderStatus(order.id, newStatus, additionalData)
 
       if (!result.success) {
         throw new Error('Failed to update order status')
@@ -699,6 +726,11 @@ export default function TakeawayPage() {
       // ================================================================
 
       // WhatsApp auto-send
+      if (newStatus === 'Preparing') {
+        triggerWhatsAppAutoSend(order, user?.id, 'Preparing')
+          .then(r => { if (r?.success) toast.success('WhatsApp: preparing notification sent', { duration: 3000 }) })
+          .catch(err => console.error('[Takeaway] WA preparing-send error:', err.message))
+      }
       if (newStatus === 'Ready') {
         triggerWhatsAppAutoSend(order, user?.id, 'Ready')
           .then(r => { if (r?.success) toast.success('WhatsApp: order ready for pickup notification sent', { duration: 3000 }) })
@@ -871,13 +903,23 @@ export default function TakeawayPage() {
       }
 
       // Regular payment (paymentData is an object)
+      // Validate Account payment requires customer with name + phone
+      if (paymentData.paymentMethod === 'Account') {
+        const cust = order.customers || order.customer
+        if (!cust?.full_name?.trim()) { alert('Customer must have a name for Account payment!'); return }
+        if (!cust?.phone?.trim()) { alert('Customer must have a phone number for Account payment!'); return }
+      }
+
       // CRITICAL FIX: Check if online or offline
+      const isComplimentary = paymentData.paymentMethod === 'Complimentary'
+      const isUnpaid = paymentData.paymentMethod === 'Unpaid'
+      const shouldComplete = paymentData.completeOrder !== false
+
       if (navigator.onLine) {
         console.log('🌐 [Takeaway Payment] ONLINE - Updating order in database')
 
-        // Update order with payment details
-        const isComplimentary = paymentData.paymentMethod === 'Complimentary'
-        const isUnpaid = paymentData.paymentMethod === 'Unpaid'
+        // Update order with payment details + order_status in ONE atomic write
+        const cashierData = authManager.getCashier()
         const { error: updateError } = await supabase
           .from('orders')
           .update({
@@ -887,6 +929,9 @@ export default function TakeawayPage() {
             discount_amount: paymentData.discountAmount || 0,
             discount_percentage: paymentData.discountType === 'percentage' ? paymentData.discountValue : 0,
             total_amount: isComplimentary || isUnpaid ? order.total_amount : paymentData.newTotal,
+            ...(shouldComplete ? { order_status: 'Completed' } : {}),
+            ...(shouldComplete && cashierData?.id && !order.cashier_id ? { cashier_id: cashierData.id } : {}),
+            ...(shouldComplete && cashierData?.id ? { modified_by_cashier_id: cashierData.id } : {}),
             ...(isComplimentary && paymentData.complimentaryReason ? { order_instructions: [order.order_instructions, `[COMPLIMENTARY: ${paymentData.complimentaryReason}]`].filter(Boolean).join(' | ') } : {}),
             updated_at: new Date().toISOString()
           })
@@ -898,7 +943,7 @@ export default function TakeawayPage() {
       } else {
         console.log('📴 [Takeaway Payment] OFFLINE - Caching order update')
 
-        // Update order in cache
+        // Update order in cache — include order_status in the same write
         const orderIndex = cacheManager.cache.orders.findIndex(o => o.id === order.id)
         if (orderIndex !== -1) {
           cacheManager.cache.orders[orderIndex] = {
@@ -909,8 +954,9 @@ export default function TakeawayPage() {
             discount_amount: paymentData.discountAmount || 0,
             discount_percentage: paymentData.discountType === 'percentage' ? paymentData.discountValue : 0,
             total_amount: isComplimentary || isUnpaid ? order.total_amount : paymentData.newTotal,
+            ...(shouldComplete ? { order_status: 'Completed' } : {}),
             updated_at: new Date().toISOString(),
-            _isSynced: false  // Mark for sync when online
+            _isSynced: false
           }
           await cacheManager.saveCacheToStorage()
           console.log('✅ [Takeaway Payment] Order updated in cache (offline)')
@@ -1244,10 +1290,10 @@ export default function TakeawayPage() {
       // Play beep sound
       playBeepSound()
 
-      // Mark order as completed only if user chose "Paid + Complete"
-      if (paymentData.completeOrder !== false) {
-        handleOrderStatusUpdate(order, 'Completed').catch(err => {
-          console.error('Error updating order status:', err)
+      // Inventory deduction + post-completion tasks (status already set above)
+      if (shouldComplete) {
+        await handleOrderStatusUpdate(order, 'Completed').catch(err => {
+          console.error('Error during post-completion tasks:', err)
         })
       }
 
@@ -1975,8 +2021,8 @@ export default function TakeawayPage() {
       return
     }
 
-    if (!customer) {
-      notify.warning('Please select a customer before proceeding')
+    if (requireCustomer && !customer) {
+      notify.warning('Customer is required for takeaway orders — please select a customer')
       return
     }
 
@@ -2101,33 +2147,7 @@ export default function TakeawayPage() {
   return (
     <ProtectedPage permissionKey="SALES_TAKEAWAY" pageName="Takeaway Orders">
       <div className={`h-screen flex ${classes.background} overflow-hidden transition-all duration-500`}>
-      <Toaster
-        position="top-right"
-        reverseOrder={false}
-        gutter={8}
-        toastOptions={{
-          duration: 3000,
-          style: {
-            background: isDark ? '#1f2937' : '#fff',
-            color: isDark ? '#f3f4f6' : '#111827',
-            border: isDark ? '1px solid #374151' : '1px solid #e5e7eb',
-          },
-          success: {
-            duration: 3000,
-            iconTheme: {
-              primary: '#10b981',
-              secondary: '#fff',
-            },
-          },
-          error: {
-            duration: 4000,
-            iconTheme: {
-              primary: '#ef4444',
-              secondary: '#fff',
-            },
-          },
-        }}
-      />
+      <PosToaster isDark={isDark} />
 
       {/* Left Sidebar - Categories or Orders List */}
       {showOrdersView ? (

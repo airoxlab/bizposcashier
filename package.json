@@ -1,6 +1,6 @@
 {
   "name": "BizPOS",
-  "version": "2.1.3",
+  "version": "2.2.0",
   "description": "Modern POS Software - BizPOS",
   "main": "electron/main.js",
   "homepage": "./",
@@ -23,9 +23,11 @@
     "clean": "rimraf out dist .next node_modules/.cache"
   },
   "dependencies": {
+    "@hapi/boom": "^10.0.1",
     "@supabase/auth-helpers-nextjs": "^0.10.0",
     "@supabase/ssr": "^0.7.0",
     "@supabase/supabase-js": "^2.57.4",
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "adm-zip": "^0.5.16",
     "autoprefixer": "^10.4.21",
     "canvas": "^3.2.3",
@@ -49,8 +51,7 @@
     "react-dom": "19.1.0",
     "react-hot-toast": "^2.6.0",
     "recharts": "^3.1.2",
-    "serialport": "^13.0.0",
-    "whatsapp-web.js": "^1.26.0"
+    "serialport": "^13.0.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.11",

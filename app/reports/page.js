@@ -53,6 +53,7 @@ import { themeManager } from '../../lib/themeManager'
 import { getTodaysBusinessDate, getBusinessDate } from '../../lib/utils/businessDayUtils'
 import dailySerialManager from '../../lib/utils/dailySerialManager'
 import LedgerTab from '../../components/reports/LedgerTab'
+import { ledgerManager } from '../../lib/ledgerManager'
 import NotificationSystem, { notify } from '../../components/ui/NotificationSystem'
 import ProtectedPage from '../../components/ProtectedPage'
 import PinPad from '../../components/ui/PinPad'
@@ -67,6 +68,7 @@ export default function ReportsPage() {
   const [pin, setPin] = useState('')
   const [pinError, setPinError] = useState('')
   const [pinLoading, setPinLoading] = useState(false)
+  const [prefetchedLedgerCustomers, setPrefetchedLedgerCustomers] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
   const [showFilters, setShowFilters] = useState(false)
   const [theme, setTheme] = useState('light')
@@ -106,6 +108,8 @@ export default function ReportsPage() {
     topCustomers: [],
     cashierPerformance: []
   })
+
+  const [ledgerCollections, setLedgerCollections] = useState({ total: 0, count: 0 })
 
   // New Expense and Profit Data
   const [expenseData, setExpenseData] = useState({
@@ -255,6 +259,15 @@ export default function ReportsPage() {
     }
   }
 
+  // Prefetch ledger customers while user is entering PIN so LedgerTab loads instantly
+  useEffect(() => {
+    if (user?.id && !isAuthenticated) {
+      ledgerManager.getAllCustomersForLedger(user.id)
+        .then(result => { if (result.success) setPrefetchedLedgerCustomers(result.data || []) })
+        .catch(() => {})
+    }
+  }, [user?.id])
+
   useEffect(() => {
     if (user && isAuthenticated) {
       fetchAllReportsData()
@@ -314,6 +327,7 @@ const fetchInitialData = async (userId) => {
         fetchExpenseData(),
         fetchProductPerformanceData(),
         fetchPeakHoursData(),
+        fetchLedgerCollections(),
       ])
 
       // COGS uses the filtered orders from salesResult — respects all filters automatically
@@ -899,6 +913,30 @@ const fetchCOGS = async (completedOrders = []) => {
   setSalesData(processedData)
   return processedData
 }
+
+  const fetchLedgerCollections = async () => {
+    if (!user?.id) return
+    try {
+      let query = supabase
+        .from('customer_ledger')
+        .select('id, amount, transaction_date')
+        .eq('user_id', user.id)
+        .eq('transaction_type', 'credit')
+        .is('order_id', null) // exclude order-cancellation reversals which have an order_id
+
+      if (dateFrom) query = query.gte('transaction_date', dateFrom)
+      if (dateTo) query = query.lte('transaction_date', dateTo)
+
+      const { data, error } = await query
+      if (error) throw error
+
+      const entries = data || []
+      const total = entries.reduce((sum, e) => sum + parseFloat(e.amount || 0), 0)
+      setLedgerCollections({ total, count: entries.length })
+    } catch (err) {
+      console.error('[Reports] Failed to fetch ledger collections:', err)
+    }
+  }
 
   const processExpenseData = (expenses, stockPurchases = []) => {
     // Calculate total from regular expenses
@@ -1651,6 +1689,12 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
               <span className={themeClasses.textSecondary}>Total Expenses:</span>
               <span className="text-red-500 font-semibold">{formatCurrency(expenseData.totalExpenses)}</span>
             </div>
+            {ledgerCollections.total > 0 && (
+              <div className="flex justify-between text-xs pt-1 border-t border-dashed border-gray-400">
+                <span className={themeClasses.textSecondary}>Acct Collections:</span>
+                <span className="text-purple-500 font-semibold">{formatCurrency(ledgerCollections.total)}</span>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -2055,6 +2099,30 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                             </div>
                           )
                         })}
+                      </div>
+                    </div>
+
+                    {/* Account Collections (Customer balance payments) */}
+                    <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6`}>
+                      <h3 className={`text-lg font-bold ${themeClasses.textPrimary} mb-4 flex items-center`}>
+                        <Wallet className="w-5 h-5 mr-2 text-purple-600" />
+                        Account Collections
+                      </h3>
+                      <p className={`text-xs ${themeClasses.textSecondary} mb-4`}>
+                        Cash received from customers paying off their account balance (not counted in sales revenue)
+                      </p>
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className={`${themeClasses.textSecondary} text-sm`}>Total Collected</span>
+                          <span className="font-bold text-purple-600 text-lg">{formatCurrency(ledgerCollections.total)}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className={`${themeClasses.textSecondary} text-sm`}>No. of Payments</span>
+                          <span className={`font-semibold ${themeClasses.textPrimary}`}>{ledgerCollections.count}</span>
+                        </div>
+                        {ledgerCollections.count === 0 && (
+                          <p className={`text-xs ${themeClasses.textSecondary} text-center py-2`}>No account payments received in this period</p>
+                        )}
                       </div>
                     </div>
 
@@ -3350,6 +3418,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                   userId={user?.id}
                   startDate={dateFrom}
                   endDate={dateTo}
+                  prefetchedCustomers={prefetchedLedgerCustomers}
                 />
               )}
 

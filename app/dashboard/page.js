@@ -145,34 +145,36 @@ export default function Dashboard() {
       } else {
         console.log('⏹️ [Dashboard] Server mode OFF, listener not started')
       }
-    }
 
-    // Load and apply theme
-    setTheme(themeManager.currentTheme)
-    themeManager.applyTheme()
-
-    // Initialize cache only on first load
-    initializeCache()
-
-    // Update time every second and refresh pending count every 30 seconds
-    const timer = setInterval(() => {
-      setCurrentTime(new Date())
-      // Update network status
-      setCacheStatus(prev => ({
-        ...prev,
-        networkStatus: cacheManager.getNetworkStatus()
-      }))
-    }, 1000)
-
-    const countRefreshTimer = setInterval(async () => {
-      if (userData?.id) {
-        const count = await webOrderNotificationManager.getPendingCount()
-        setPendingWebOrders(count)
+      // Only the print server machine publishes its IP — office/client laptops must not overwrite it.
+      if (isServerMode && typeof window !== 'undefined' && window.electronAPI?.getLocalIP) {
+        window.electronAPI.getLocalIP().then(async (detectedIp) => {
+          if (!detectedIp || detectedIp === '127.0.0.1') return
+          try {
+            const { data: current } = await supabase
+              .from('users')
+              .select('print_server_ip')
+              .eq('id', userData.id)
+              .single()
+            if (current?.print_server_ip !== detectedIp) {
+              await supabase
+                .from('users')
+                .update({ print_server_ip: detectedIp })
+                .eq('id', userData.id)
+              console.log(`🖨️ [Dashboard] Print server IP updated to ${detectedIp}`)
+            }
+          } catch (e) {
+            console.warn('⚠️ [Dashboard] Failed to auto-publish print server IP:', e.message)
+          }
+        })
       }
-    }, 30000) // Refresh every 30 seconds
+    }
 
     // Start background sync
     cacheManager.startBackgroundSync()
+
+    // Clock — updates currentTime every second
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000)
 
     // Fetch active orders and poll every 30s
     fetchActiveOrders()
@@ -180,7 +182,6 @@ export default function Dashboard() {
 
     return () => {
       clearInterval(timer)
-      clearInterval(countRefreshTimer)
       clearInterval(ordersRefreshTimer)
       webOrderNotificationManager.stopListening()
       // Don't stop networkPrintListener here - it should persist across pages
@@ -266,7 +267,10 @@ export default function Dashboard() {
     }
   }
 
-  const handleLogout = async () => {
+  const handleLogout = () => setShowLogoutConfirm(true)
+
+  const confirmLogout = async () => {
+    setShowLogoutConfirm(false)
     await authManager.logout()
     router.push('/')
   }
@@ -463,6 +467,7 @@ export default function Dashboard() {
   const themeClasses = themeManager.getClasses()
   const isDark = themeManager.isDark()
   const [showAnalytics, setShowAnalytics] = useState(false)
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
 
   // Get role badge color
   const getRoleBadge = () => {
@@ -585,7 +590,7 @@ export default function Dashboard() {
             </div>
 
             {/* Right: Controls */}
-            <div className="flex items-center justify-end space-x-3">
+            <div className="flex items-center justify-end space-x-2 pr-4">
               {/* Network Status */}
               <div className="flex items-center space-x-2">
                 {cacheStatus.networkStatus.isOnline ? (
@@ -1042,6 +1047,38 @@ export default function Dashboard() {
         onClose={() => setShowAnalytics(false)}
         isDark={isDark}
       />
+
+      {/* Logout Confirmation Modal */}
+      {showLogoutConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowLogoutConfirm(false)} />
+          <div className={`relative rounded-2xl shadow-2xl p-6 w-80 ${isDark ? 'bg-gray-800 text-white' : 'bg-white text-gray-900'}`}>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                <LogOut className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-base">Confirm Logout</h3>
+                <p className={`text-sm ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Are you sure you want to log out?</p>
+              </div>
+            </div>
+            <div className="flex gap-3 mt-5">
+              <button
+                onClick={() => setShowLogoutConfirm(false)}
+                className={`flex-1 py-2 rounded-xl font-medium text-sm transition-all ${isDark ? 'bg-gray-700 hover:bg-gray-600 text-gray-200' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmLogout}
+                className="flex-1 py-2 rounded-xl font-medium text-sm bg-red-500 hover:bg-red-600 text-white transition-all"
+              >
+                Log Out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </ProtectedPage>
   )
 }

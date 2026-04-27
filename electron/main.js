@@ -242,14 +242,25 @@ function createWindow() {
   });
 
   // ── WhatsApp Auto-Connect on Startup ─────────────────────────────────────
-  // If a saved session exists, initialize automatically so the user doesn't
-  // have to manually click Connect every time they reopen the app.
+  // Runs ONCE on first load. If a saved session exists and the user hasn't
+  // manually disconnected, auto-connect so messages can be sent without
+  // visiting the WhatsApp settings page.
+  // Because initialize() is reentrant-safe (returns the same promise if
+  // already running), clicking Connect from settings while auto-connect is
+  // in progress will simply join the existing attempt instead of fighting it.
+  let whatsappAutoConnectDone = false;
   mainWindow.webContents.on('did-finish-load', () => {
+    if (whatsappAutoConnectDone) return; // only once per window lifetime
+    whatsappAutoConnectDone = true;
+
     const sessionPath = path.join(app.getPath('userData'), 'whatsapp-session', 'session');
     if (fs.existsSync(sessionPath)) {
+      if (whatsAppClient.wasManuallyDisconnected()) {
+        log.info('[WhatsApp] Saved session found but user manually disconnected — skipping auto-connect');
+        return;
+      }
       log.info('[WhatsApp] Saved session found — auto-connecting...');
       whatsAppClient.setMainWindow(mainWindow);
-      // Small delay so the renderer is hydrated and ready to receive events
       setTimeout(() => {
         whatsAppClient.initialize().catch(err => {
           log.error('[WhatsApp] Auto-connect failed:', err.message);
@@ -425,6 +436,17 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+// Before the app exits, cleanly shut down the WhatsApp browser process.
+// This prevents orphaned Chrome processes leaving lock files on next launch.
+app.on('before-quit', (event) => {
+  if (whatsAppClient.client || whatsAppClient._browserPid) {
+    event.preventDefault(); // Hold quit until cleanup finishes
+    whatsAppClient.forceShutdown()
+      .catch(err => log.warn('[Main] WhatsApp shutdown error:', err.message))
+      .finally(() => app.exit(0));
+  }
 });
 
 app.on('will-quit', () => {

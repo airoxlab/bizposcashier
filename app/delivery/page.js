@@ -22,7 +22,8 @@ import CartSidebar from '../../components/test/CartSidebar'
 import WalkinOrdersSidebar from '../../components/test/WalkinOrdersSidebar'
 import WalkinOrderDetails from '../../components/test/WalkinOrderDetails'
 import { FileText, Check, Printer } from 'lucide-react'
-import toast, { Toaster } from 'react-hot-toast'
+import toast from 'react-hot-toast'
+import PosToaster from '@/components/ui/PosToaster'
 import { supabase } from '../../lib/supabase'
 import { motion, AnimatePresence } from 'framer-motion'
 import ProtectedPage from '../../components/ProtectedPage'
@@ -46,10 +47,27 @@ export default function DeliveryPage() {
   const [orderData, setOrderData] = useState({})
   const [orderInstructions, setOrderInstructions] = useState('')
   const [deliveryTime, setDeliveryTime] = useState('')
-  const [deliveryCharges, setDeliveryCharges] = useState(0)
+  const getDefaultDeliveryCharge = () => {
+    // Read directly from localStorage first (same pattern as pos_default_service_charge)
+    // so the value is available instantly regardless of cacheManager init state.
+    try {
+      const raw = localStorage.getItem('pos_default_delivery_charge')
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (parsed?.type === 'fixed' && parsed?.value > 0) return parsed.value
+      }
+    } catch {}
+    // Fallback to cacheManager in-memory value
+    const dc = cacheManager.getDefaultDeliveryCharge()
+    return (dc.type === 'fixed' && dc.value > 0) ? dc.value : 0
+  }
+  const [deliveryCharges, setDeliveryCharges] = useState(getDefaultDeliveryCharge)
   const [networkStatus, setNetworkStatus] = useState({ isOnline: true, unsyncedOrders: 0 })
   const [isDataReady, setIsDataReady] = useState(() => cacheManager.isReady())
   const [isLoading, setIsLoading] = useState(() => !cacheManager.isReady())
+  // Admin-controlled flag (users.require_customer_delivery) cached by cacheManager.
+  // Default true — delivery needs an address/contact, so legacy behavior is preserved.
+  const [requireCustomer, setRequireCustomer] = useState(true)
   const [theme, setTheme] = useState('light')
   const [isReopenedOrder, setIsReopenedOrder] = useState(false)
   const [originalOrderId, setOriginalOrderId] = useState(null)
@@ -73,6 +91,18 @@ export default function DeliveryPage() {
   const [showSuccessModal, setShowSuccessModal] = useState(false)
   const [completedOrderData, setCompletedOrderData] = useState(null)
   const [isPrinting, setIsPrinting] = useState(false)
+
+  // Load require_customer_delivery flag on mount (cached by cacheManager).
+  // If cache is missing, preserve legacy default (customer required).
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('pos_require_customer')
+      if (raw !== null) {
+        const parsed = JSON.parse(raw)
+        setRequireCustomer(!!parsed?.delivery)
+      }
+    } catch {}
+  }, [])
 
   // Save cart to localStorage
   useEffect(() => {
@@ -143,7 +173,12 @@ export default function DeliveryPage() {
       }
       if (savedInstructions) setOrderInstructions(savedInstructions)
       if (savedDeliveryTime) setDeliveryTime(savedDeliveryTime)
-      if (savedDeliveryCharges) setDeliveryCharges(parseFloat(savedDeliveryCharges) || 0)
+      const savedChargeNum2 = parseFloat(savedDeliveryCharges)
+      if (savedDeliveryCharges !== null && (savedChargeNum2 > 0 || !!savedModifyingOrderId)) {
+        setDeliveryCharges(savedChargeNum2)
+      } else if (!savedModifyingOrderId) {
+        setDeliveryCharges(getDefaultDeliveryCharge())
+      }
       if (savedModifyingOrderId && savedModifyingOrderId !== 'undefined') {
         setIsReopenedOrder(true)
         setOriginalOrderId(savedModifyingOrderId)
@@ -151,7 +186,13 @@ export default function DeliveryPage() {
       }
       const savedOrderData = localStorage.getItem('delivery_order_data')
       if (savedOrderData) {
-        try { setOrderData(JSON.parse(savedOrderData)) } catch {}
+        try {
+          const parsed = JSON.parse(savedOrderData)
+          if (!savedModifyingOrderId && !parsed.deliveryCharges) {
+            parsed.deliveryCharges = getDefaultDeliveryCharge()
+          }
+          setOrderData(parsed)
+        } catch {}
       }
     }
 
@@ -232,7 +273,12 @@ export default function DeliveryPage() {
       }
       if (savedInstructions) setOrderInstructions(savedInstructions)
       if (savedDeliveryTime) setDeliveryTime(savedDeliveryTime)
-      if (savedDeliveryCharges) setDeliveryCharges(parseFloat(savedDeliveryCharges))
+      const savedChargeNum = parseFloat(savedDeliveryCharges)
+      if (savedDeliveryCharges !== null && (savedChargeNum > 0 || !!savedModifyingOrderId)) {
+        setDeliveryCharges(savedChargeNum)
+      } else if (!savedModifyingOrderId) {
+        setDeliveryCharges(getDefaultDeliveryCharge())
+      }
       if (savedModifyingOrderId && savedModifyingOrderId !== 'undefined') {
         console.log('🔄 [Delivery] Setting as reopened order:', savedModifyingOrderId)
         setIsReopenedOrder(true)
@@ -241,7 +287,13 @@ export default function DeliveryPage() {
       }
       const savedOrderData = localStorage.getItem('delivery_order_data')
       if (savedOrderData) {
-        try { setOrderData(JSON.parse(savedOrderData)) } catch {}
+        try {
+          const parsed = JSON.parse(savedOrderData)
+          if (!savedModifyingOrderId && !parsed.deliveryCharges) {
+            parsed.deliveryCharges = getDefaultDeliveryCharge()
+          }
+          setOrderData(parsed)
+        } catch {}
       }
     }
 
@@ -383,6 +435,20 @@ export default function DeliveryPage() {
       products: cachedProducts.length,
       deals: cachedDeals.length
     })
+
+    // Cache is now ready — apply default delivery charge if this is a new order still at 0.
+    // cacheManager.getDefaultDeliveryCharge() now has the real value from Supabase.
+    const savedModifyingOrderId = localStorage.getItem('delivery_modifying_order')
+    const savedCharges = localStorage.getItem('delivery_charges')
+    const isNewOrder = !savedModifyingOrderId
+    const chargeAlreadySet = savedCharges !== null && parseFloat(savedCharges) > 0
+    if (isNewOrder && !chargeAlreadySet) {
+      const defaultCharge = getDefaultDeliveryCharge()
+      if (defaultCharge > 0) {
+        setDeliveryCharges(defaultCharge)
+        setOrderData(prev => (prev.deliveryCharges > 0 ? prev : { ...prev, deliveryCharges: defaultCharge }))
+      }
+    }
   }
 
   const handleProductClick = (product) => {
@@ -579,8 +645,18 @@ export default function DeliveryPage() {
     try {
       console.log(`🔄 [Delivery] Updating order ${order.order_number} status from ${order.order_status} to: ${newStatus}`)
 
+      // Track which cashier completed/changed the order
+      const additionalData = {}
+      const cashierData = authManager.getCashier()
+      if (cashierData?.id) {
+        additionalData.modified_by_cashier_id = cashierData.id
+        if (!order.cashier_id) {
+          additionalData.cashier_id = cashierData.id
+        }
+      }
+
       // Use cacheManager for offline-capable status update
-      const result = await cacheManager.updateOrderStatus(order.id, newStatus)
+      const result = await cacheManager.updateOrderStatus(order.id, newStatus, additionalData)
 
       if (!result.success) {
         throw new Error('Failed to update order status')
@@ -759,14 +835,19 @@ export default function DeliveryPage() {
     }
       // ================================================================
 
-      // WhatsApp auto-send — for delivery, send on Dispatched or Ready (mutually exclusive)
+      // WhatsApp auto-send
+      if (newStatus === 'Preparing') {
+        triggerWhatsAppAutoSend(order, user?.id, 'Preparing')
+          .then(r => { if (r?.success) toast.success('WhatsApp: preparing notification sent to customer', { duration: 3000 }) })
+          .catch(err => console.error('[Delivery] WA preparing-send error:', err.message))
+      }
       if (newStatus === 'Ready') {
-        triggerWhatsAppAutoSend(order, user?.id, 'ReadyStatus')
+        triggerWhatsAppAutoSend(order, user?.id, 'Ready')
           .then(r => { if (r?.success) toast.success('WhatsApp: order ready notification sent to customer', { duration: 3000 }) })
-          .catch(err => console.error('[Delivery] WA ready-status-send error:', err.message))
+          .catch(err => console.error('[Delivery] WA ready-send error:', err.message))
       }
       if (newStatus === 'Dispatched') {
-        triggerWhatsAppAutoSend(order, user?.id, 'Ready')
+        triggerWhatsAppAutoSend(order, user?.id, 'Dispatched')
           .then(r => { if (r?.success) toast.success('WhatsApp: dispatch notification sent to customer', { duration: 3000 }) })
           .catch(err => console.error('[Delivery] WA dispatch-send error:', err.message))
       }
@@ -939,13 +1020,23 @@ export default function DeliveryPage() {
       }
 
       // Regular payment (paymentData is an object)
+      // Validate Account payment requires customer with name + phone
+      if (paymentData.paymentMethod === 'Account') {
+        const cust = order.customers || order.customer
+        if (!cust?.full_name?.trim()) { alert('Customer must have a name for Account payment!'); return }
+        if (!cust?.phone?.trim()) { alert('Customer must have a phone number for Account payment!'); return }
+      }
+
       // CRITICAL FIX: Check if online or offline
+      const isComplimentary = paymentData.paymentMethod === 'Complimentary'
+      const isUnpaid = paymentData.paymentMethod === 'Unpaid'
+      const shouldComplete = paymentData.completeOrder !== false
+
       if (navigator.onLine) {
         console.log('🌐 [Delivery Payment] ONLINE - Updating order in database')
 
-        // Update order with payment details
-        const isComplimentary = paymentData.paymentMethod === 'Complimentary'
-        const isUnpaid = paymentData.paymentMethod === 'Unpaid'
+        // Update order with payment details + order_status in ONE atomic write
+        const cashierData = authManager.getCashier()
         const { error: updateError } = await supabase
           .from('orders')
           .update({
@@ -955,6 +1046,9 @@ export default function DeliveryPage() {
             discount_amount: paymentData.discountAmount || 0,
             discount_percentage: paymentData.discountType === 'percentage' ? paymentData.discountValue : 0,
             total_amount: isComplimentary || isUnpaid ? order.total_amount : paymentData.newTotal,
+            ...(shouldComplete ? { order_status: 'Completed' } : {}),
+            ...(shouldComplete && cashierData?.id && !order.cashier_id ? { cashier_id: cashierData.id } : {}),
+            ...(shouldComplete && cashierData?.id ? { modified_by_cashier_id: cashierData.id } : {}),
             ...(isComplimentary && paymentData.complimentaryReason ? { order_instructions: [order.order_instructions, `[COMPLIMENTARY: ${paymentData.complimentaryReason}]`].filter(Boolean).join(' | ') } : {}),
             updated_at: new Date().toISOString()
           })
@@ -966,7 +1060,7 @@ export default function DeliveryPage() {
       } else {
         console.log('📴 [Delivery Payment] OFFLINE - Caching order update')
 
-        // Update order in cache
+        // Update order in cache — include order_status in the same write
         const orderIndex = cacheManager.cache.orders.findIndex(o => o.id === order.id)
         if (orderIndex !== -1) {
           cacheManager.cache.orders[orderIndex] = {
@@ -977,8 +1071,9 @@ export default function DeliveryPage() {
             discount_amount: paymentData.discountAmount || 0,
             discount_percentage: paymentData.discountType === 'percentage' ? paymentData.discountValue : 0,
             total_amount: isComplimentary || isUnpaid ? order.total_amount : paymentData.newTotal,
+            ...(shouldComplete ? { order_status: 'Completed' } : {}),
             updated_at: new Date().toISOString(),
-            _isSynced: false  // Mark for sync when online
+            _isSynced: false
           }
           await cacheManager.saveCacheToStorage()
           console.log('✅ [Delivery Payment] Order updated in cache (offline)')
@@ -1311,10 +1406,10 @@ export default function DeliveryPage() {
       // Play beep sound
       playBeepSound()
 
-      // Mark order as completed only if user chose "Paid + Complete"
-      if (paymentData.completeOrder !== false) {
-        handleOrderStatusUpdate(order, 'Completed').catch(err => {
-          console.error('Error updating order status:', err)
+      // Inventory deduction + post-completion tasks (status already set above)
+      if (shouldComplete) {
+        await handleOrderStatusUpdate(order, 'Completed').catch(err => {
+          console.error('Error during post-completion tasks:', err)
         })
       }
 
@@ -2050,8 +2145,8 @@ export default function DeliveryPage() {
       return
     }
 
-    if (!customer) {
-      notify.warning('Please select a customer before proceeding')
+    if (requireCustomer && !customer) {
+      notify.warning('Customer is required for delivery orders — please select a customer')
       return
     }
 
@@ -2198,33 +2293,7 @@ export default function DeliveryPage() {
   return (
     <ProtectedPage permissionKey="SALES_DELIVERY" pageName="Delivery Orders">
       <div className={`h-screen flex ${classes.background} overflow-hidden transition-all duration-500`}>
-      <Toaster
-        position="top-right"
-        reverseOrder={false}
-        gutter={8}
-        toastOptions={{
-          duration: 3000,
-          style: {
-            background: isDark ? '#1f2937' : '#fff',
-            color: isDark ? '#f3f4f6' : '#111827',
-            border: isDark ? '1px solid #374151' : '1px solid #e5e7eb',
-          },
-          success: {
-            duration: 3000,
-            iconTheme: {
-              primary: '#10b981',
-              secondary: '#fff',
-            },
-          },
-          error: {
-            duration: 4000,
-            iconTheme: {
-              primary: '#ef4444',
-              secondary: '#fff',
-            },
-          },
-        }}
-      />
+      <PosToaster isDark={isDark} />
 
       {/* Left Sidebar - Categories or Orders List */}
       {showOrdersView ? (

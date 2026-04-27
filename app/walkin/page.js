@@ -24,7 +24,8 @@ import WalkinOrdersSidebar from '../../components/test/WalkinOrdersSidebar'
 import WalkinOrderDetails from '../../components/test/WalkinOrderDetails'
 import SplitPaymentModal from '../../components/pos/SplitPaymentModal'
 import { FileText, Check, Eye, Printer } from 'lucide-react'
-import toast, { Toaster } from 'react-hot-toast'
+import toast from 'react-hot-toast'
+import PosToaster from '@/components/ui/PosToaster'
 import { supabase } from '../../lib/supabase'
 import { motion, AnimatePresence } from 'framer-motion'
 import ProtectedPage from '../../components/ProtectedPage'
@@ -68,6 +69,7 @@ export default function WalkInPage() {
   const [orderTakers, setOrderTakers] = useState([])
   const [selectedOrderTaker, setSelectedOrderTaker] = useState(null)
   const [requireOrderTaker, setRequireOrderTaker] = useState(false)
+  const [requireCustomer, setRequireCustomer] = useState(false) // from pos_require_customer.walkin
 
   // Orders view
   const [showOrdersView, setShowOrdersView] = useState(false)
@@ -390,6 +392,11 @@ export default function WalkInPage() {
     try {
       const req = localStorage.getItem('pos_require_order_taker')
       if (req !== null) setRequireOrderTaker(JSON.parse(req))
+      const reqCust = localStorage.getItem('pos_require_customer')
+      if (reqCust !== null) {
+        const parsed = JSON.parse(reqCust)
+        setRequireCustomer(!!parsed?.walkin)
+      }
     } catch {}
 
 
@@ -795,8 +802,19 @@ export default function WalkInPage() {
     try {
       console.log(`🔄 [Walkin] Updating order ${order.order_number} status from ${order.order_status} to: ${newStatus}`)
 
+      // Track which cashier completed/changed the order
+      const additionalData = {}
+      const cashierData = authManager.getCashier()
+      if (cashierData?.id) {
+        additionalData.modified_by_cashier_id = cashierData.id
+        // If order has no cashier (e.g. created by order taker), assign the completing cashier
+        if (!order.cashier_id) {
+          additionalData.cashier_id = cashierData.id
+        }
+      }
+
       // Use cacheManager for offline-capable status update
-      const result = await cacheManager.updateOrderStatus(order.id, newStatus)
+      const result = await cacheManager.updateOrderStatus(order.id, newStatus, additionalData)
 
       if (!result.success) {
         throw new Error('Failed to update order status')
@@ -998,6 +1016,11 @@ export default function WalkInPage() {
       }
 
       // WhatsApp auto-send
+      if (newStatus === 'Preparing') {
+        triggerWhatsAppAutoSend(order, user?.id, 'Preparing')
+          .then(r => { if (r?.success) toast.success('WhatsApp: preparing notification sent', { duration: 3000 }) })
+          .catch(err => console.error('[Walkin] WA preparing-send error:', err.message))
+      }
       if (newStatus === 'Ready') {
         triggerWhatsAppAutoSend(order, user?.id, 'Ready')
           .then(r => { if (r?.success) toast.success('WhatsApp: order ready notification sent', { duration: 3000 }) })
@@ -1309,12 +1332,30 @@ export default function WalkInPage() {
         return
       }
 
+      // Validate Account payment requires customer with name + phone
+      if (paymentData.paymentMethod === 'Account') {
+        const cust = order.customers || order.customer
+        if (!cust?.full_name?.trim()) {
+          alert('Customer must have a name for Account payment!')
+          return
+        }
+        if (!cust?.phone?.trim()) {
+          alert('Customer must have a phone number for Account payment!')
+          return
+        }
+      }
+
       // Regular (non-split) payment handling
       // Update order with payment details (works both online and offline)
+      const isComplimentary = paymentData.paymentMethod === 'Complimentary'
+      const isUnpaid = paymentData.paymentMethod === 'Unpaid'
+      // Determine if this payment should also mark the order as Completed
+      const shouldComplete = paymentData.completeOrder !== false
+
       if (navigator.onLine) {
-        // Online: Update database directly
-        const isComplimentary = paymentData.paymentMethod === 'Complimentary'
-        const isUnpaid = paymentData.paymentMethod === 'Unpaid'
+        // Online: Update database directly — include order_status in the SAME write
+        // to avoid race conditions where payment is saved but status stays Pending
+        const cashierData = authManager.getCashier()
         const { error: updateError } = await supabase
           .from('orders')
           .update({
@@ -1326,6 +1367,9 @@ export default function WalkInPage() {
             service_charge_amount: paymentData.serviceChargeAmount || 0,
             service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0,
             total_amount: isComplimentary || isUnpaid ? order.total_amount : paymentData.newTotal,
+            ...(shouldComplete ? { order_status: 'Completed' } : {}),
+            ...(shouldComplete && cashierData?.id && !order.cashier_id ? { cashier_id: cashierData.id } : {}),
+            ...(shouldComplete && cashierData?.id ? { modified_by_cashier_id: cashierData.id } : {}),
             ...(isComplimentary && paymentData.complimentaryReason ? { order_instructions: [order.order_instructions, `[COMPLIMENTARY: ${paymentData.complimentaryReason}]`].filter(Boolean).join(' | ') } : {}),
             updated_at: new Date().toISOString()
           })
@@ -1345,7 +1389,7 @@ export default function WalkInPage() {
           `Payment completed: ${paymentData.paymentMethod} - Rs ${paymentData.newTotal}`
         )
       } else {
-        // Offline: Update cache only
+        // Offline: Update cache only — include order_status in the same write
         console.log('📴 [Payment] Offline mode - updating order in cache')
         const orderIndex = cacheManager.cache.orders.findIndex(o => o.id === order.id)
         if (orderIndex !== -1) {
@@ -1359,6 +1403,7 @@ export default function WalkInPage() {
             service_charge_amount: paymentData.serviceChargeAmount || 0,
             service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0,
             total_amount: isComplimentary || isUnpaid ? order.total_amount : paymentData.newTotal,
+            ...(shouldComplete ? { order_status: 'Completed' } : {}),
             updated_at: new Date().toISOString(),
             _isSynced: false
           }
@@ -1735,10 +1780,11 @@ export default function WalkInPage() {
       // Play beep sound
       playBeepSound()
 
-      // Mark order as completed only if user chose "Paid + Complete"
-      if (paymentData.completeOrder !== false) {
-        handleOrderStatusUpdate(order, 'Completed').catch(err => {
-          console.error('Error updating order status:', err)
+      // Inventory deduction + refresh (status already set in the payment update above)
+      if (shouldComplete) {
+        // Run inventory deduction (the status is already Completed in DB/cache)
+        await handleOrderStatusUpdate(order, 'Completed').catch(err => {
+          console.error('Error during post-completion tasks:', err)
         })
       }
 
@@ -2514,12 +2560,20 @@ export default function WalkInPage() {
     console.log('🔵 [Walkin] originalOrderId:', originalOrderId)
 
     if (cart.length === 0) {
+      console.warn('🚫 [Walkin] Blocked: cart is empty')
       notify.warning('Please add items to cart before proceeding')
       return
     }
 
     if (requireOrderTaker && !selectedOrderTaker) {
+      console.warn('🚫 [Walkin] Blocked: requireOrderTaker is true but no order taker selected')
       notify.warning('Please select an order taker before proceeding')
+      return
+    }
+
+    if (requireCustomer && !customer) {
+      console.warn('🚫 [Walkin] Blocked: requireCustomer is true but no customer selected. Check admin settings → Customer Requirement → Walk-in')
+      notify.warning('Customer is required for walk-in orders — please select a customer')
       return
     }
 
@@ -2656,34 +2710,8 @@ export default function WalkInPage() {
   return (
     <ProtectedPage permissionKey="SALES_WALKIN" pageName="Walk-in Orders">
       <div className={`h-screen flex ${classes.background} overflow-hidden transition-all duration-500`}>
-      {/* Toast Notifications */}
-      <Toaster
-        position="top-right"
-        reverseOrder={false}
-        gutter={8}
-        toastOptions={{
-          duration: 3000,
-          style: {
-            background: isDark ? '#1f2937' : '#fff',
-            color: isDark ? '#f3f4f6' : '#111827',
-            border: isDark ? '1px solid #374151' : '1px solid #e5e7eb',
-          },
-          success: {
-            duration: 3000,
-            iconTheme: {
-              primary: '#10b981',
-              secondary: '#fff',
-            },
-          },
-          error: {
-            duration: 4000,
-            iconTheme: {
-              primary: '#ef4444',
-              secondary: '#fff',
-            },
-          },
-        }}
-      />
+      {/* Toast Notifications — top-center, respects admin toggle */}
+      <PosToaster isDark={isDark} />
 
       {/* Left Sidebar - Categories or Orders List */}
       {showOrdersView ? (

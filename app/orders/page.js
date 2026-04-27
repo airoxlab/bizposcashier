@@ -46,6 +46,7 @@ import {
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabase";
 import { triggerWhatsAppAutoSend } from "../../lib/whatsappAutoSend";
+import { triggerAccountAutoSend } from "../../lib/accountAutoSend";
 import { themeManager } from "../../lib/themeManager";
 import { authManager } from "../../lib/authManager";
 import { printerManager } from "../../lib/printerManager";
@@ -500,7 +501,9 @@ export default function OrdersPage() {
             .from("orders")
             .select(`
               id,
+              user_id,
               order_number,
+              daily_serial,
               order_type,
               order_status,
               payment_status,
@@ -728,14 +731,15 @@ export default function OrdersPage() {
       const order = orders.find((o) => o.id === orderId);
       if (order && order.items && Array.isArray(order.items)) {
         console.log("📦 Using cached order items:", order.items.length);
-        setOrderItems(order.items);
+        // Guard: discard if a different order was selected while we were working
+        if (selectedOrderRef.current?.id === orderId) setOrderItems(order.items);
         return;
       }
 
       // If offline, can't fetch - show empty or what we have
       if (!navigator.onLine) {
         console.log("📴 Offline: Cannot fetch order items from database");
-        setOrderItems([]);
+        if (selectedOrderRef.current?.id === orderId) setOrderItems([]);
         return;
       }
 
@@ -748,18 +752,15 @@ export default function OrdersPage() {
 
       if (error) throw error;
 
-      // DEBUG: Log raw data from database
       console.log('📦 Fetched order items from DB:', JSON.stringify(data, null, 2));
 
-      setOrderItems(data || []);
+      // Guard: discard stale fetch if the user switched orders while awaiting
+      if (selectedOrderRef.current?.id === orderId) setOrderItems(data || []);
     } catch (error) {
       console.error("Error fetching order items:", error);
-      // Fallback to cached items if available
       const order = orders.find((o) => o.id === orderId);
-      if (order && order.items) {
-        setOrderItems(order.items);
-      } else {
-        setOrderItems([]);
+      if (selectedOrderRef.current?.id === orderId) {
+        setOrderItems(order?.items || []);
       }
     }
   };
@@ -1046,10 +1047,18 @@ export default function OrdersPage() {
         notify.success('Split payment completed successfully!');
       } else {
         // Regular payment (single method)
+        // Validate Account payment requires customer with name + phone
+        if (paymentData.paymentMethod === 'Account') {
+          const cust = selectedOrder.customers || selectedOrder.customer;
+          if (!cust?.full_name?.trim()) { notify.error('Customer must have a name for Account payment!'); return; }
+          if (!cust?.phone?.trim()) { notify.error('Customer must have a phone number for Account payment!'); return; }
+        }
+
         const isComplimentary = paymentData.paymentMethod === 'Complimentary';
         const isUnpaid = paymentData.paymentMethod === 'Unpaid';
+        const cashier = authManager.getCashier();
         try {
-          // Update order with payment details
+          // Update payment details + order_status in ONE atomic write
           const { error: updateError } = await supabase
             .from('orders')
             .update({
@@ -1061,6 +1070,9 @@ export default function OrdersPage() {
               total_amount: isComplimentary || isUnpaid ? selectedOrder.total_amount : paymentData.newTotal,
               service_charge_amount: paymentData.serviceChargeAmount || 0,
               service_charge_percentage: paymentData.serviceChargeType === 'percentage' ? paymentData.serviceChargeValue : 0,
+              order_status: 'Completed',
+              ...(cashier?.id && !selectedOrder.cashier_id ? { cashier_id: cashier.id } : {}),
+              ...(cashier?.id ? { modified_by_cashier_id: cashier.id } : {}),
               ...(isComplimentary && paymentData.complimentaryReason ? { order_instructions: [selectedOrder.order_instructions, `[COMPLIMENTARY: ${paymentData.complimentaryReason}]`].filter(Boolean).join(' | ') } : {}),
               updated_at: new Date().toISOString()
             })
@@ -1106,15 +1118,17 @@ export default function OrdersPage() {
               .eq('transaction_type', 'debit')
               .maybeSingle();
 
+            let previousBalance = 0;
+            let newBalance = 0;
             if (!existingEntry) {
-              const currentBalance = await customerLedgerManager.getCustomerBalance(selectedOrder.customer_id);
-              const newBalance = currentBalance + paymentData.newTotal;
+              previousBalance = await customerLedgerManager.getCustomerBalance(selectedOrder.customer_id);
+              newBalance = previousBalance + paymentData.newTotal;
               await supabase.from('customer_ledger').insert({
                 user_id: user.id,
                 customer_id: selectedOrder.customer_id,
                 transaction_type: 'debit',
                 amount: paymentData.newTotal,
-                balance_before: currentBalance,
+                balance_before: previousBalance,
                 balance_after: newBalance,
                 order_id: selectedOrder.id,
                 description: `Order #${selectedOrder.order_number} - ${selectedOrder.order_type?.toUpperCase() || 'ORDER'}`,
@@ -1122,6 +1136,23 @@ export default function OrdersPage() {
                 created_by: user.id
               });
               await supabase.from('customers').update({ account_balance: newBalance }).eq('id', selectedOrder.customer_id);
+            } else {
+              previousBalance = await customerLedgerManager.getCustomerBalance(selectedOrder.customer_id);
+              newBalance = previousBalance;
+            }
+
+            // Fire Account WhatsApp bill (includes balance, receipt image, etc.)
+            const cust = selectedOrder.customers || selectedOrder.customer;
+            if (cust?.phone) {
+              triggerAccountAutoSend({
+                orderId: selectedOrder.id,
+                orderNumber: selectedOrder.order_number,
+                customer: { id: selectedOrder.customer_id, full_name: cust.full_name, phone: cust.phone },
+                totalAmount: paymentData.newTotal,
+                orderType: selectedOrder.order_type,
+                previousBalance,
+                newBalance,
+              });
             }
           } catch (ledgerError) {
             console.error('⚠️ Failed to create customer ledger entry:', ledgerError);
@@ -1147,12 +1178,11 @@ export default function OrdersPage() {
       // Hide payment view
       setShowPaymentView(false);
 
-      // Mark order as completed
+      // Inventory deduction (status already set in the payment update above)
       try {
         await updateOrderStatus(selectedOrder.id, 'Completed');
       } catch (statusError) {
-        console.error('⚠️ Failed to mark order as completed:', statusError);
-        notify.warning('Payment recorded but order status may not be updated');
+        console.error('⚠️ Post-completion tasks error:', statusError);
       }
 
       // Refresh orders list
@@ -1222,11 +1252,14 @@ export default function OrdersPage() {
         additionalData.cancellation_reason = cancelReason;
       }
 
-      // Update modified_by if cashier
+      // Update modified_by if cashier; also fill cashier_id if empty (e.g. order taker orders)
       if (userRole === "cashier") {
         const cashier = authManager.getCashier();
         if (cashier) {
           additionalData.modified_by_cashier_id = cashier.id;
+          if (selectedOrder && !selectedOrder.cashier_id) {
+            additionalData.cashier_id = cashier.id;
+          }
         }
       }
 
@@ -1367,21 +1400,70 @@ export default function OrdersPage() {
       }
       // ================================================================
 
+      // ================================================================
+      // REVERSE CUSTOMER LEDGER WHEN ACCOUNT ORDER IS CANCELLED
+      // ================================================================
+      if (newStatus === 'Cancelled' && navigator.onLine &&
+          selectedOrder?.payment_method === 'Account' && selectedOrder?.customer_id) {
+        try {
+          console.log('💳 [Orders] Reversing customer ledger for cancelled Account order')
+          const { default: customerLedgerManager } = await import('../../lib/customerLedgerManager')
+          customerLedgerManager.setUserId(user.id)
+
+          const orderTotal = parseFloat(selectedOrder.total_amount || selectedOrder.amount_paid || 0)
+          if (orderTotal > 0) {
+            // Credit back the customer's account (reverse the debit)
+            const { data: currentCustomer } = await supabase
+              .from('customers')
+              .select('account_balance')
+              .eq('id', selectedOrder.customer_id)
+              .single()
+
+            const currentBalance = parseFloat(currentCustomer?.account_balance || 0)
+            const newBalance = currentBalance - orderTotal
+
+            // Create reversal ledger entry
+            await supabase.from('customer_ledger').insert({
+              user_id: user.id,
+              customer_id: selectedOrder.customer_id,
+              transaction_type: 'credit',
+              amount: orderTotal,
+              balance_before: currentBalance,
+              balance_after: newBalance,
+              order_id: orderId,
+              description: `Order cancelled - ${selectedOrder.order_number || 'N/A'}${cancelReason ? ` (${cancelReason})` : ''}`,
+              notes: 'Order cancellation - account credit reversal',
+              created_by: user.id
+            })
+
+            // Update customer balance
+            await supabase.from('customers')
+              .update({ account_balance: newBalance })
+              .eq('id', selectedOrder.customer_id)
+
+            console.log(`✅ [Orders] Customer ledger reversed: -Rs ${orderTotal} (New balance: ${newBalance})`)
+            notify.success(`Customer account credited Rs ${orderTotal} (order cancelled)`)
+          }
+        } catch (ledgerError) {
+          console.error('❌ [Orders] Failed to reverse customer ledger:', ledgerError)
+          notify.error('Order cancelled but failed to reverse customer account. Please adjust manually.')
+        }
+      }
+      // ================================================================
+
       // WhatsApp auto-send
-      // For delivery: send on Dispatched (not Ready), for others: send on Ready
-      // ReadyStatus: send on Ready for delivery orders (mutually exclusive with Dispatch)
-      if (newStatus === 'Ready' && selectedOrder.order_type !== 'delivery') {
+      if (newStatus === 'Preparing') {
+        triggerWhatsAppAutoSend(selectedOrder, user?.id, 'Preparing')
+          .then(r => { if (r?.success) notify.success('WhatsApp: preparing notification sent') })
+          .catch(err => console.error('[Orders] WA preparing-send error:', err.message))
+      }
+      if (newStatus === 'Ready') {
         triggerWhatsAppAutoSend(selectedOrder, user?.id, 'Ready')
           .then(r => { if (r?.success) notify.success('WhatsApp: order ready notification sent') })
           .catch(err => console.error('[Orders] WA ready-send error:', err.message))
       }
-      if (newStatus === 'Ready' && selectedOrder.order_type === 'delivery') {
-        triggerWhatsAppAutoSend(selectedOrder, user?.id, 'ReadyStatus')
-          .then(r => { if (r?.success) notify.success('WhatsApp: order ready notification sent') })
-          .catch(err => console.error('[Orders] WA ready-status-send error:', err.message))
-      }
-      if (newStatus === 'Dispatched' && selectedOrder.order_type === 'delivery') {
-        triggerWhatsAppAutoSend(selectedOrder, user?.id, 'Ready')
+      if (newStatus === 'Dispatched') {
+        triggerWhatsAppAutoSend(selectedOrder, user?.id, 'Dispatched')
           .then(r => { if (r?.success) notify.success('WhatsApp: dispatch notification sent') })
           .catch(err => console.error('[Orders] WA dispatch-send error:', err.message))
       }
@@ -1453,15 +1535,30 @@ export default function OrdersPage() {
     setSelectedCancelReason("");
     setCustomCancelReason("");
   };
-  const handleReopenOrder = (order) => {
+  const handleReopenOrder = async (order) => {
     // Get current user info
     const currentUser = authManager.getCurrentUser();
     const currentCashier = authManager.getCashier();
     const currentRole = authManager.getRole();
 
+    // Always use fresh items — never read from orderItems state which may hold
+    // the previous order's items during the async fetchOrderDetails gap.
+    let reopenItems = order.order_items || order.items || [];
+    if (!reopenItems.length && order.id && navigator.onLine) {
+      const { data } = await supabase
+        .from("order_items")
+        .select("*")
+        .eq("order_id", order.id);
+      reopenItems = data || [];
+    }
+    if (!reopenItems.length) {
+      console.error("❌ [handleReopenOrder] No order items available to reopen");
+      return;
+    }
+
     // Prepare order data for reopening
     const orderData = {
-      cart: orderItems.map((item, index) => ({
+      cart: reopenItems.map((item, index) => ({
         id: `${item.product_id}-${item.variant_id || "base"}-${Date.now()}-${index}`,
         productId: item.product_id,
         variantId: item.variant_id,
@@ -1489,7 +1586,7 @@ export default function OrdersPage() {
       originalPaymentMethod: order.payment_method,
       // Store original order state for comparison
       originalState: {
-        items: orderItems.map((item) => ({
+        items: reopenItems.map((item) => ({
           productName: item.product_name,
           variantName: item.variant_name,
           quantity: item.quantity,
@@ -1499,7 +1596,7 @@ export default function OrdersPage() {
         subtotal: order.subtotal,
         discountAmount: order.discount_amount,
         total: order.total_amount,
-        itemCount: orderItems.length,
+        itemCount: reopenItems.length,
       },
     };
 
@@ -1628,10 +1725,23 @@ export default function OrdersPage() {
     try {
       setIsPrinting(true);
 
+      // Capture the order we're printing for — selectedOrder state may change
+      // if the user clicks another order while the async print is in progress.
+      const printOrder = selectedOrder;
+
       if (!user?.id) {
         setIsPrinting(false);
         return;
       }
+
+      // Always fetch fresh items — never use orderItems state which may be stale
+      // from a previous order if the user switched orders quickly.
+      let printItems = [];
+      if (printOrder.id && navigator.onLine) {
+        const { data } = await supabase.from("order_items").select("*").eq("order_id", printOrder.id).order("created_at");
+        printItems = data || [];
+      }
+      if (!printItems.length) printItems = printOrder.order_items || printOrder.items || [];
 
       printerManager.setUserId(user.id);
       const printer = await printerManager.getPrinterForPrinting();
@@ -1642,25 +1752,25 @@ export default function OrdersPage() {
       }
 
       const orderData = {
-        orderNumber: selectedOrder.order_number,
-        dailySerial: selectedOrder.daily_serial || null,
-        orderType: selectedOrder.order_type,
-        customer: selectedOrder.customers,
-        deliveryAddress: selectedOrder.delivery_address || selectedOrder.customers?.addressline || selectedOrder.customers?.address,
-        orderInstructions: selectedOrder.order_instructions,
-        specialNotes: selectedOrder.order_instructions,
-        total: selectedOrder.total_amount,
-        subtotal: selectedOrder.subtotal,
-        deliveryCharges: selectedOrder.delivery_charges || 0,
-        discountAmount: selectedOrder.discount_amount || 0,
+        orderNumber: printOrder.order_number,
+        dailySerial: printOrder.daily_serial || null,
+        orderType: printOrder.order_type,
+        customer: printOrder.customers,
+        deliveryAddress: printOrder.delivery_address || printOrder.customers?.addressline || printOrder.customers?.address,
+        orderInstructions: printOrder.order_instructions,
+        specialNotes: printOrder.order_instructions,
+        total: printOrder.total_amount,
+        subtotal: printOrder.subtotal,
+        deliveryCharges: printOrder.delivery_charges || 0,
+        discountAmount: printOrder.discount_amount || 0,
         loyaltyDiscountAmount: loyaltyRedemption?.discount_applied || 0,
         loyaltyPointsRedeemed: loyaltyRedemption?.points_used || 0,
         discountType: "amount",
-        serviceChargeAmount: parseFloat(selectedOrder.service_charge_amount || 0),
-        serviceChargeType: parseFloat(selectedOrder.service_charge_percentage || 0) > 0 ? 'percentage' : 'fixed',
-        serviceChargeValue: parseFloat(selectedOrder.service_charge_percentage || 0),
-        tableName: selectedOrder.tables?.table_name || (selectedOrder.tables?.table_number ? `Table ${selectedOrder.tables.table_number}` : '') || '',
-        cart: orderItems.map((item) => {
+        serviceChargeAmount: parseFloat(printOrder.service_charge_amount || 0),
+        serviceChargeType: parseFloat(printOrder.service_charge_percentage || 0) > 0 ? 'percentage' : 'fixed',
+        serviceChargeValue: parseFloat(printOrder.service_charge_percentage || 0),
+        tableName: printOrder.tables?.table_name || (printOrder.tables?.table_number ? `Table ${printOrder.tables.table_number}` : '') || '',
+        cart: printItems.map((item) => {
           // DEBUG: Log ALL items to see what we're getting from database
           console.log('🖨️ Receipt - Raw item from DB:', JSON.stringify(item, null, 2));
           console.log('🖨️ Receipt - item.is_deal:', item.is_deal);
@@ -1707,15 +1817,15 @@ export default function OrdersPage() {
             itemInstructions: item.item_instructions || null,
           };
         }),
-        paymentMethod: selectedOrder.payment_method || "Cash",
-        order_taker_name: selectedOrder.order_takers?.name ||
-          (selectedOrder.order_taker_id
-            ? (cacheManager.getOrderTakers().find(t => t.id === selectedOrder.order_taker_id)?.name || null)
+        paymentMethod: printOrder.payment_method || "Cash",
+        order_taker_name: printOrder.order_takers?.name ||
+          (printOrder.order_taker_id
+            ? (cacheManager.getOrderTakers().find(t => t.id === printOrder.order_taker_id)?.name || null)
             : null)
       };
 
       // Add payment transactions for split payment
-      if (selectedOrder.payment_method === 'Split' && paymentTransactions.length > 0) {
+      if (printOrder.payment_method === 'Split' && paymentTransactions.length > 0) {
         orderData.paymentTransactions = paymentTransactions;
         console.log('✅ Including payment transactions in print data:', paymentTransactions);
       }
@@ -1759,8 +1869,8 @@ export default function OrdersPage() {
         show_logo_on_receipt: userProfileRaw?.show_logo_on_receipt === false || userProfileRaw?.show_logo_on_receipt === "false" ? false : true,
         show_business_name_on_receipt: userProfileRaw?.show_business_name_on_receipt === false || userProfileRaw?.show_business_name_on_receipt === "false" ? false : true,
         // Add cashier/admin name for receipt printing
-        cashier_name: selectedOrder.cashier_id ? selectedOrder.cashiers?.name : null,
-        customer_name: !selectedOrder.cashier_id ? selectedOrder.users?.customer_name : null,
+        cashier_name: printOrder.cashier_id ? printOrder.cashiers?.name : null,
+        customer_name: !printOrder.cashier_id ? printOrder.users?.customer_name : null,
       };
 
       console.log("📦 Orders Page - Final userProfile being sent to printer:");
@@ -1798,10 +1908,21 @@ export default function OrdersPage() {
     try {
       setIsPrinting(true);
 
+      // Capture order at call time — state may change during async operations.
+      const printOrder = selectedOrder;
+
       if (!user?.id) {
         setIsPrinting(false);
         return;
       }
+
+      // Always fetch fresh items — never use orderItems state which may be stale.
+      let printItems = [];
+      if (printOrder.id && navigator.onLine) {
+        const { data } = await supabase.from("order_items").select("*").eq("order_id", printOrder.id);
+        printItems = data || [];
+      }
+      if (!printItems.length) printItems = printOrder.order_items || printOrder.items || [];
 
       // Get printer config
       printerManager.setUserId(user.id);
@@ -1817,7 +1938,7 @@ export default function OrdersPage() {
       const productCategoryMap = {}
       cacheManager.cache?.products?.forEach(p => { productCategoryMap[p.id] = p.category_id })
 
-      let mappedItems = orderItems.map((item) => {
+      let mappedItems = printItems.map((item) => {
         // DEBUG: Log ALL items to see what we're getting from database
         console.log('🍳 Kitchen - Raw item from DB:', JSON.stringify(item, null, 2));
         console.log('🍳 Kitchen - item.is_deal:', item.is_deal);
@@ -1875,27 +1996,27 @@ export default function OrdersPage() {
       })
 
       // 🆕 Check for order changes using order_item_changes table
-      if (selectedOrder.id) {
-        mappedItems = await getOrderItemsWithChanges(selectedOrder.id, mappedItems)
+      if (printOrder.id) {
+        mappedItems = await getOrderItemsWithChanges(printOrder.id, mappedItems)
       }
 
       const orderData = {
-        orderNumber: selectedOrder.order_number,
-        dailySerial: selectedOrder.daily_serial || null,
-        orderType: selectedOrder.order_type,
-        customerName: selectedOrder.customers?.full_name || "",
-        customerPhone: selectedOrder.customers?.phone || "",
-        totalAmount: selectedOrder.total_amount,
-        subtotal: selectedOrder.subtotal,
-        deliveryCharges: selectedOrder.delivery_charges || 0,
-        discountAmount: selectedOrder.discount_amount || 0,
-        specialNotes: selectedOrder.order_instructions || "",
-        deliveryAddress: selectedOrder.delivery_address || selectedOrder.customers?.addressline || selectedOrder.customers?.address || "",
-        tableName: selectedOrder.tables?.table_name || (selectedOrder.tables?.table_number ? `Table ${selectedOrder.tables.table_number}` : '') || '',
+        orderNumber: printOrder.order_number,
+        dailySerial: printOrder.daily_serial || null,
+        orderType: printOrder.order_type,
+        customerName: printOrder.customers?.full_name || "",
+        customerPhone: printOrder.customers?.phone || "",
+        totalAmount: printOrder.total_amount,
+        subtotal: printOrder.subtotal,
+        deliveryCharges: printOrder.delivery_charges || 0,
+        discountAmount: printOrder.discount_amount || 0,
+        specialNotes: printOrder.order_instructions || "",
+        deliveryAddress: printOrder.delivery_address || printOrder.customers?.addressline || printOrder.customers?.address || "",
+        tableName: printOrder.tables?.table_name || (printOrder.tables?.table_number ? `Table ${printOrder.tables.table_number}` : '') || '',
         items: mappedItems,
-        order_taker_name: selectedOrder.order_takers?.name ||
-          (selectedOrder.order_taker_id
-            ? (cacheManager.getOrderTakers().find(t => t.id === selectedOrder.order_taker_id)?.name || null)
+        order_taker_name: printOrder.order_takers?.name ||
+          (printOrder.order_taker_id
+            ? (cacheManager.getOrderTakers().find(t => t.id === printOrder.order_taker_id)?.name || null)
             : null)
       };
 
@@ -1914,8 +2035,8 @@ export default function OrdersPage() {
         phone: userProfileRaw?.phone || userRaw?.phone || "",
         store_logo: userProfileRaw?.store_logo || userRaw?.store_logo || null,
         // Add cashier/admin name for kitchen token printing
-        cashier_name: selectedOrder.cashier_id ? selectedOrder.cashiers?.name : null,
-        customer_name: !selectedOrder.cashier_id ? selectedOrder.users?.customer_name : null,
+        cashier_name: printOrder.cashier_id ? printOrder.cashiers?.name : null,
+        customer_name: !printOrder.cashier_id ? printOrder.users?.customer_name : null,
       };
 
       // Use printerManager to print kitchen token (routes to USB or IP automatically)
@@ -3832,6 +3953,50 @@ export default function OrdersPage() {
                   history.order_item_changes.length > 0;
                 const priceDiff = history.price_difference;
 
+                // Order-level field changes (payment method, discount,
+                // service charge, etc.) from modify_order_atomic RPC
+                const parsedChanges = (() => {
+                  if (!history.changes) return null;
+                  if (typeof history.changes === 'string') {
+                    try { return JSON.parse(history.changes); } catch { return null; }
+                  }
+                  return history.changes;
+                })();
+                const fieldChanges = parsedChanges?.fieldChanges || null;
+                const fieldChangeEntries = fieldChanges
+                  ? Object.entries(fieldChanges)
+                  : [];
+                // Human-readable labels for field keys
+                const FIELD_LABELS = {
+                  payment_method: 'Payment method',
+                  payment_status: 'Payment status',
+                  order_status: 'Order status',
+                  order_type: 'Order type',
+                  order_instructions: 'Instructions',
+                  discount_amount: 'Discount (Rs)',
+                  discount_percentage: 'Discount (%)',
+                  service_charge_amount: 'Service charge (Rs)',
+                  service_charge_percentage: 'Service charge (%)',
+                  delivery_charges: 'Delivery charges',
+                  delivery_address: 'Delivery address',
+                  delivery_time: 'Delivery time',
+                  takeaway_time: 'Takeaway time',
+                  table_id: 'Table',
+                  delivery_boy_id: 'Rider',
+                  customer_id: 'Customer',
+                  order_taker_id: 'Order taker',
+                  tax_amount: 'Tax (Rs)',
+                  tax_percentage: 'Tax (%)',
+                  loyalty_points_redeemed: 'Loyalty points redeemed',
+                  loyalty_discount_amount: 'Loyalty discount',
+                  cancellation_reason: 'Cancellation reason',
+                };
+                const fmtFieldVal = (v) => {
+                  if (v === null || v === undefined || v === '') return '—';
+                  if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+                  return String(v);
+                };
+
                 // Get action icon and color
                 const getActionIcon = () => {
                   if (isReopened)
@@ -3960,8 +4125,15 @@ export default function OrdersPage() {
                     >
                       {history.action_type === "reopened" &&
                         "🔄 Order reopened"}
-                      {history.action_type === "modified" &&
-                        "✏️ Items & pricing modified"}
+                      {history.action_type === "modified" && (
+                        hasItemChanges && fieldChangeEntries.length > 0
+                          ? "✏️ Items & order details modified"
+                          : hasItemChanges
+                          ? "✏️ Items modified"
+                          : fieldChangeEntries.length > 0
+                          ? "✏️ Order details modified"
+                          : "✏️ Order modified"
+                      )}
                       {history.action_type ===
                         "status_changed_to_pending" &&
                         "⏳ Changed to Pending"}
@@ -3978,6 +4150,45 @@ export default function OrdersPage() {
                         "status_changed_to_cancelled" &&
                         "❌ Cancelled"}
                     </p>
+
+                    {/* Field Changes — payment method / discount / service charge / etc.
+                        Populated by modify_order_atomic RPC in changes.fieldChanges */}
+                    {fieldChangeEntries.length > 0 && (
+                      <div className={`mt-2 pt-2 border-t ${
+                        isDark ? "border-purple-700/30" : "border-purple-200"
+                      }`}>
+                        <div
+                          className={`text-[10px] font-semibold ${
+                            isDark ? "text-purple-300" : "text-purple-700"
+                          } uppercase mb-1.5 flex items-center`}
+                        >
+                          <Edit3 className="w-2.5 h-2.5 mr-1" />
+                          Field Changes
+                        </div>
+                        <div className="space-y-1">
+                          {fieldChangeEntries.map(([key, diff]) => {
+                            const label = FIELD_LABELS[key] || key;
+                            return (
+                              <div
+                                key={key}
+                                className={`flex items-center justify-between p-1.5 rounded text-[10px] ${
+                                  isDark
+                                    ? "bg-amber-900/20 text-amber-300"
+                                    : "bg-amber-50 text-amber-800"
+                                }`}
+                              >
+                                <span className="font-medium truncate flex-shrink-0 mr-2">{label}</span>
+                                <span className="flex items-center gap-1.5 min-w-0 flex-1 justify-end">
+                                  <span className="truncate opacity-70 line-through">{fmtFieldVal(diff?.before)}</span>
+                                  <span className="opacity-50">→</span>
+                                  <span className="truncate font-semibold">{fmtFieldVal(diff?.after)}</span>
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Item Changes - Ultra Compact */}
                     {hasItemChanges && (

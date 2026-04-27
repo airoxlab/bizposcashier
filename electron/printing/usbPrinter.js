@@ -22,6 +22,11 @@ const CMD = {
   DOUBLE_HEIGHT: Buffer.from([GS, 0x21, 0x01]),
   DOUBLE_WIDTH: Buffer.from([GS, 0x21, 0x10]),
   NORMAL: Buffer.from([GS, 0x21, 0x00]),
+  // GS ! n — bits 4-6 = width magnification (0-7), bits 0-2 = height magnification (0-7)
+  // Values are magnification - 1, so 0x44 = 5x width + 5x height
+  SIZE_3X: Buffer.from([GS, 0x21, 0x22]),   // 3x width + 3x height
+  SIZE_4X: Buffer.from([GS, 0x21, 0x33]),   // 4x width + 4x height
+  SIZE_5X: Buffer.from([GS, 0x21, 0x44]),   // 5x width + 5x height
   CUT: Buffer.from([GS, 0x56, 0x41, 0x00]),
   FEED: Buffer.from([LF])
 };
@@ -185,13 +190,24 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
   // Check if business name should be shown (default true)
   const showBusinessNameOnReceipt = userProfile?.show_business_name_on_receipt !== false;
 
-  // Store name - Bold + Double size + Centered (only if enabled)
+  // Store name - auto-scale so it always fits on one line
+  // DOUBLE_ON  = double width+height → 21 chars per line
+  // DOUBLE_HEIGHT = double height only → 42 chars per line
+  // BOLD only  = normal width+height → 42 chars per line
   if (showBusinessNameOnReceipt) {
     commands.push(CMD.ALIGN_CENTER);
     commands.push(CMD.BOLD_ON);
-    commands.push(CMD.DOUBLE_ON);
-    commands.push(text(storeName + '\n'));
-    commands.push(CMD.DOUBLE_OFF);
+    if (storeName.length <= 21) {
+      commands.push(CMD.DOUBLE_ON);
+      commands.push(text(storeName + '\n'));
+      commands.push(CMD.DOUBLE_OFF);
+    } else if (storeName.length <= 42) {
+      commands.push(CMD.DOUBLE_HEIGHT);
+      commands.push(text(storeName + '\n'));
+      commands.push(CMD.NORMAL);
+    } else {
+      commands.push(text(storeName + '\n'));
+    }
     commands.push(CMD.BOLD_OFF);
     commands.push(CMD.FEED);
   }
@@ -217,28 +233,42 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
   commands.push(drawLine('-'));
 
   // ========================================
-  // ORDER DETAILS
+  // TOKEN # & ORDER TYPE — BIG & BOLD
+  // (Prominent so staff can read at a glance)
   // ========================================
-  commands.push(CMD.ALIGN_CENTER);
-
   const orderNumber = orderData.orderNumber || 'N/A';
   const formattedSerialReceipt = orderData.dailySerial
     ? `#${String(orderData.dailySerial).padStart(3, '0')}`
     : null;
+
+  {
+    const tokenStr = formattedSerialReceipt || '';
+    const typeStr = orderData.orderType ? orderData.orderType.toUpperCase() : '';
+    const combined = [tokenStr, typeStr].filter(Boolean).join(' - ');
+    if (combined) {
+      commands.push(CMD.ALIGN_CENTER);
+      commands.push(CMD.BOLD_ON);
+      commands.push(CMD.DOUBLE_ON);
+      commands.push(text(combined + '\n'));
+      commands.push(CMD.DOUBLE_OFF);
+      commands.push(CMD.BOLD_OFF);
+    }
+  }
+
+  commands.push(drawLine('-'));
+
+  // ========================================
+  // ORDER DETAILS
+  // ========================================
+  commands.push(CMD.ALIGN_CENTER);
+
   const orderDate = new Date();
   const dateStr = orderDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   const timeStr = orderDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
 
   commands.push(leftRight('Invoice:', `#${orderNumber}`));
-  if (formattedSerialReceipt) {
-    commands.push(leftRight('Token #:', formattedSerialReceipt));
-  }
   commands.push(leftRight('Date:', dateStr));
   commands.push(leftRight('Time:', timeStr));
-
-  if (orderData.orderType) {
-    commands.push(leftRight('Type:', orderData.orderType.toUpperCase()));
-  }
 
   if (orderData.tableName) {
     commands.push(leftRight('Table:', String(orderData.tableName)));
@@ -497,14 +527,32 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
   commands.push(drawLine('-'));
 
   // ========================================
-  // ORDER INFO - Left-Right aligned
+  // TOKEN # & ORDER TYPE — BIG & BOLD
+  // (Must be readable at a glance in rush hours)
   // ========================================
-  commands.push(CMD.ALIGN_CENTER);
-  
   const orderNumber = orderData.orderNumber || 'N/A';
   const formattedSerial = orderData.dailySerial
     ? `#${String(orderData.dailySerial).padStart(3, '0')}`
     : null;
+  const orderType = orderData.orderType ? orderData.orderType.toUpperCase() : 'WALKIN';
+
+  {
+    const combined = [formattedSerial || '', orderType].filter(Boolean).join(' - ');
+    commands.push(CMD.ALIGN_CENTER);
+    commands.push(CMD.BOLD_ON);
+    commands.push(CMD.DOUBLE_ON);
+    commands.push(text(combined + '\n'));
+    commands.push(CMD.DOUBLE_OFF);
+    commands.push(CMD.BOLD_OFF);
+  }
+
+  commands.push(drawLine('-'));
+
+  // ========================================
+  // ORDER INFO - Left-Right aligned
+  // ========================================
+  commands.push(CMD.ALIGN_CENTER);
+
   const orderDate = new Date();
   const formattedDate = orderDate.toLocaleDateString('en-GB', {
     day: '2-digit',
@@ -516,20 +564,10 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
     minute: '2-digit',
     hour12: true
   });
-  const orderType = orderData.orderType ? orderData.orderType.toUpperCase() : 'WALKIN';
 
-  commands.push(CMD.BOLD_ON);
-  if (formattedSerial) {
-    commands.push(leftRight('Token #', formattedSerial));
-    commands.push(CMD.BOLD_OFF);
-    commands.push(leftRight('Ref:', orderNumber));
-  } else {
-    commands.push(leftRight('Token #', orderNumber));
-    commands.push(CMD.BOLD_OFF);
-  }
+  commands.push(leftRight('Ref:', orderNumber));
   commands.push(leftRight('Date:', formattedDate));
   commands.push(leftRight('Time:', formattedTime));
-  commands.push(leftRight('Type:', orderType));
 
   // Cashier name — skipped for mobile app prints
   if (!orderData?.skip_cashier) {

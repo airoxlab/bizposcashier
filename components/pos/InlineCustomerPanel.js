@@ -118,7 +118,21 @@ export default function InlineCustomerPanel({
         update('deliveryTime', addMins(null, 45))
       }
       if (orderType === 'delivery' && orderData.deliveryCharges === undefined) {
-        update('deliveryCharges', 0)
+        // Read localStorage directly first (same pattern as pos_default_service_charge) —
+        // instant even if cacheManager hasn't initialized yet (offline mode).
+        let defaultCharge = 0
+        try {
+          const raw = localStorage.getItem('pos_default_delivery_charge')
+          if (raw) {
+            const parsed = JSON.parse(raw)
+            if (parsed?.type === 'fixed' && parsed?.value > 0) defaultCharge = parsed.value
+          }
+        } catch {}
+        if (defaultCharge === 0) {
+          const dc = cacheManager.getDefaultDeliveryCharge()
+          defaultCharge = (dc.type === 'fixed' && dc.value > 0) ? dc.value : 0
+        }
+        update('deliveryCharges', defaultCharge)
       }
       if (orderType === 'delivery' && !orderData.addressLabel) {
         update('addressLabel', 'Home')
