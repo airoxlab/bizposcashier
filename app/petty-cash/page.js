@@ -25,6 +25,7 @@ import { authManager } from '../../lib/authManager'
 import pettyCashManager from '../../lib/pettyCashManager'
 import { supabase } from '../../lib/supabase'
 import ProtectedPage from '../../components/ProtectedPage'
+import PlanGate from '../../components/ui/PlanGate'
 import themeManager from '../../lib/themeManager'
 import { notify } from '../../components/ui/NotificationSystem'
 
@@ -1430,8 +1431,10 @@ function PettyCashPageContent() {
 
 export default function PettyCashPage() {
   return (
-    <ProtectedPage permissionKey="PETTY_CASH_USE" pageName="Petty Cash">
-      <PettyCashPageContent />
-    </ProtectedPage>
+    <PlanGate feature="petty_cash">
+      <ProtectedPage permissionKey="PETTY_CASH_USE" pageName="Petty Cash">
+        <PettyCashPageContent />
+      </ProtectedPage>
+    </PlanGate>
   )
 }
