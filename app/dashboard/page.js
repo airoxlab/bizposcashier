@@ -22,7 +22,7 @@ import {
   AlertCircle,
   CheckCircle,
   LogOut,
-  Bell,
+  Crown,
   MessageSquare,
   Shield,
   UserCircle,
@@ -35,7 +35,8 @@ import {
   Wallet,
   DollarSign,
   Clock,
-  ArrowRight
+  ArrowRight,
+  Zap
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
@@ -47,11 +48,12 @@ import { networkPrintListener } from '../../lib/networkPrintListener'
 import ProtectedPage from '../../components/ProtectedPage'
 import CashierAnalytics from '../../components/pos/CashierAnalytics'
 import { usePermissions, permissionManager } from '../../lib/permissionManager'
+import { planManager } from '../../lib/planManager'
 
 export default function Dashboard() {
-  const [user, setUser] = useState(() => authManager.isLoggedIn() ? authManager.getCurrentUser() : null)
-  const [userRole, setUserRole] = useState(() => authManager.getRole())
-  const [displayName, setDisplayName] = useState(() => authManager.getDisplayName() || '')
+  const [user, setUser] = useState(null)
+  const [userRole, setUserRole] = useState(null)
+  const [displayName, setDisplayName] = useState('')
   const [currentTime, setCurrentTime] = useState(new Date())
   const [cacheStatus, setCacheStatus] = useState({
     isInitialized: false,
@@ -60,15 +62,24 @@ export default function Dashboard() {
     networkStatus: { isOnline: true, unsyncedOrders: 0, lastSync: null, isSyncing: false }
   })
   const [theme, setTheme] = useState('light')
-  const [layoutTheme, setLayoutTheme] = useState(() =>
-    typeof window !== 'undefined' ? (localStorage.getItem('pos_layout_theme') || 'classic') : 'classic'
-  )
+  const [layoutTheme, setLayoutTheme] = useState('classic')
   const [pendingWebOrders, setPendingWebOrders] = useState(0)
   const [activeOrders, setActiveOrders] = useState([])
   const [ordersLoading, setOrdersLoading] = useState(true)
   const [waStatus, setWaStatus] = useState('disconnected')
+  const [planReady, setPlanReady] = useState(planManager.isLoaded)
   const router = useRouter()
   const permissions = usePermissions()
+
+  useEffect(() => {
+    if (planManager.isLoaded) {
+      setPlanReady(true)
+      return
+    }
+    const onLoaded = () => setPlanReady(true)
+    window.addEventListener('planmanager:loaded', onLoaded)
+    return () => window.removeEventListener('planmanager:loaded', onLoaded)
+  }, [])
 
   useEffect(() => {
     // Check authentication first
@@ -84,6 +95,7 @@ export default function Dashboard() {
     setUser(userData)
     setUserRole(role)
     setDisplayName(name)
+    setLayoutTheme(localStorage.getItem('pos_layout_theme') || 'classic')
 
     console.log('👤 Dashboard loaded for:', name, '(', role, ')')
 
@@ -222,14 +234,21 @@ export default function Dashboard() {
     setCacheStatus(prev => ({ ...prev, isLoading: true }))
     try {
       // Refresh cache data (products, categories, etc.)
-      console.log('🔄 Refreshing cache and permissions...')
+      console.log('🔄 Refreshing cache, permissions, and plan...')
       await cacheManager.refreshData()
 
       // Also refresh permissions silently
       const permResult = await permissionManager.forceReloadFromServer()
 
       if (permResult.success) {
-        console.log(`✅ Cache and permissions refreshed! ${permResult.count} permissions loaded`)
+        console.log(`✅ Permissions refreshed! ${permResult.count} permissions loaded`)
+      }
+
+      // Refresh plan (picks up plan changes + feature overrides from super-admin)
+      const userData = authManager.getCurrentUser()
+      if (userData?.id) {
+        await planManager.refresh(userData.id)
+        console.log('✅ Plan refreshed:', planManager.getPlanName())
       }
 
       setCacheStatus(prev => ({
@@ -364,7 +383,8 @@ export default function Dashboard() {
       icon: Globe,
       gradient: 'from-purple-500 to-pink-600',
       route: '/web-orders',
-      permissionKey: 'WEB_ORDERS'
+      permissionKey: 'WEB_ORDERS',
+      featureKey: 'customer_website'
     },
     {
       id: 'kds',
@@ -372,7 +392,8 @@ export default function Dashboard() {
       icon: ChefHat,
       gradient: 'from-orange-500 to-red-600',
       route: '/kds',
-      permissionKey: 'KDS'
+      permissionKey: 'KDS',
+      featureKey: 'kds'
     },
     {
       id: 'riders',
@@ -380,7 +401,8 @@ export default function Dashboard() {
       icon: Truck,
       gradient: 'from-blue-500 to-cyan-600',
       route: '/riders',
-      permissionKey: 'RIDERS'
+      permissionKey: 'RIDERS',
+      featureKey: 'rider_management'
     },
     {
       id: 'reports',
@@ -396,7 +418,8 @@ export default function Dashboard() {
       icon: Wallet,
       gradient: 'from-indigo-500 to-purple-600',
       route: '/petty-cash',
-      permissionKey: 'PETTY_CASH_USE'
+      permissionKey: 'PETTY_CASH_USE',
+      featureKey: 'petty_cash'
     },
     {
       id: 'marketing',
@@ -404,9 +427,14 @@ export default function Dashboard() {
       icon: MessageSquare,
       gradient: 'from-cyan-500 to-teal-600',
       route: '/marketing',
-      permissionKey: 'MARKETING'
+      permissionKey: 'MARKETING',
+      featureKey: 'marketing_module'
     }
   ]
+
+  const visibleBottomMenuItems = bottomMenuItems.filter(item =>
+    !item.featureKey || planManager.can(item.featureKey)
+  )
 
   const handleNavigation = (route, permissionKey) => {
     // Debug logging
@@ -518,6 +546,27 @@ export default function Dashboard() {
                     </svg>
                   </button>
                 </div>
+
+                  {/* Plan Badge */}
+                  {(() => {
+                    const colors = planManager.getPlanColors()
+                    const planName = planManager.getPlanName()
+                    const expired = planManager.isExpired()
+                    return (
+                      <button
+                        onClick={() => router.push('/settings?tab=plan')}
+                        title={`Your plan: ${planName}`}
+                        className={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-xs font-semibold transition-all ${
+                          expired
+                            ? isDark ? 'bg-red-500/15 border-red-500/30 text-red-400' : 'bg-red-50 border-red-200 text-red-700'
+                            : isDark ? `bg-purple-500/15 border-purple-500/30 text-purple-400` : `${colors.bg} ${colors.border} border ${colors.text}`
+                        }`}
+                      >
+                        <Zap className="w-3 h-3 flex-shrink-0" />
+                        {expired ? 'Expired' : planName}
+                      </button>
+                    )
+                  })()}
               </div>
             </div>
 
@@ -616,34 +665,6 @@ export default function Dashboard() {
                 </AnimatePresence>
               </motion.button>
 
-              {/* Sync Status / Notifications */}
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={async () => {
-                  if (cacheStatus.networkStatus.unsyncedOrders > 0) {
-                    console.log('🔄 Manual sync triggered from dashboard')
-                    const result = await cacheManager.syncOfflineData()
-                    console.log('📊 Sync result:', result)
-                    setCacheStatus(prev => ({
-                      ...prev,
-                      networkStatus: cacheManager.getNetworkStatus()
-                    }))
-                  }
-                }}
-                className={`p-3 rounded-xl ${themeClasses.button} transition-all relative ${cacheStatus.networkStatus.unsyncedOrders > 0 ? 'cursor-pointer' : ''}`}
-                title={cacheStatus.networkStatus.unsyncedOrders > 0
-                  ? `Click to sync ${cacheStatus.networkStatus.unsyncedOrders} pending order(s)`
-                  : 'No pending orders'}
-              >
-                <Bell className={`w-5 h-5 ${themeClasses.textSecondary}`} />
-                {cacheStatus.networkStatus.unsyncedOrders > 0 && (
-                  <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[18px] h-[18px] px-1 bg-red-500 text-white text-xs font-bold rounded-full">
-                    {cacheStatus.networkStatus.unsyncedOrders}
-                  </span>
-                )}
-              </motion.button>
-
               {/* Offline Orders Button */}
               <motion.button
                 whileHover={{ scale: 1.05 }}
@@ -671,6 +692,17 @@ export default function Dashboard() {
                 title="Printer"
               >
                 <Printer className={`w-5 h-5 ${themeClasses.textSecondary}`} />
+              </motion.button>
+
+              {/* Plan Button */}
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={() => router.push('/settings?tab=plan')}
+                className={`p-3 rounded-xl ${themeClasses.button} transition-all`}
+                title="Plan & Billing"
+              >
+                <Crown className={`w-5 h-5 ${themeClasses.textSecondary}`} />
               </motion.button>
 
               {/* Settings Button */}
@@ -950,8 +982,8 @@ export default function Dashboard() {
           <h3 className={`text-2xl font-bold ${themeClasses.textPrimary} mb-6 text-center`}>
             Quick Actions
           </h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
-            {bottomMenuItems.map((item, index) => {
+          <div className="flex flex-wrap justify-center gap-4">
+            {visibleBottomMenuItems.map((item, index) => {
               const hasPermission = hasCardPermission(item.permissionKey)
               return (
               <motion.div
@@ -962,7 +994,7 @@ export default function Dashboard() {
                 whileHover={hasPermission ? { y: -5, scale: 1.05 } : {}}
                 whileTap={hasPermission ? { scale: 0.95 } : {}}
                 onClick={() => handleNavigation(item.route, item.permissionKey)}
-                className={`${hasPermission ? 'cursor-pointer' : 'cursor-not-allowed'} group`}
+                className={`w-[calc(50%-0.5rem)] sm:w-40 md:w-36 lg:w-40 ${hasPermission ? 'cursor-pointer' : 'cursor-not-allowed'} group`}
               >
                 <div className={`${themeClasses.card} rounded-2xl p-4 ${themeClasses.shadow} ${hasPermission ? 'hover:shadow-xl' : 'opacity-60'} transition-all duration-300 ${themeClasses.border} border relative`}>
                   {!hasPermission && (

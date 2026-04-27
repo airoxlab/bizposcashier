@@ -34,6 +34,7 @@ import { usePermissions } from "../../lib/permissionManager";
 import { webOrderNotificationManager } from "../../lib/webOrderNotification";
 import Modal from "../../components/ui/Modal";
 import ProtectedPage from "../../components/ProtectedPage";
+import PlanGate from "../../components/ui/PlanGate";
 import { notify } from "../../components/ui/NotificationSystem";
 
 const OrderSkeleton = ({ isDark }) => {
@@ -1217,6 +1218,7 @@ function WebOrdersPage() {
   });
 
   return (
+    <PlanGate feature="customer_website">
     <ProtectedPage permissionKey="WEB_ORDERS" pageName="Web Orders">
       <div className={`min-h-screen ${themeClasses.bg}`}>
         {/* Header */}
@@ -1458,6 +1460,7 @@ function WebOrdersPage() {
         />
       </div>
     </ProtectedPage>
+    </PlanGate>
   );
 }
 
