@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(ping -n 2 github.com)",
-      "Bash(git push origin main)"
-    ]
-  }
-}

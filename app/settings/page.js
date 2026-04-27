@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ArrowLeft,
@@ -714,7 +714,7 @@ function PlanPanel({ isDark, classes }) {
 
 // ─── Main Settings Page ───────────────────────────────────────────────────────
 
-export default function SettingsPage() {
+function SettingsPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const fileInputRef = useRef(null)
@@ -2832,5 +2832,13 @@ export default function SettingsPage() {
       </div>
       </div>
     </ProtectedPage>
+  );
+}
+
+export default function SettingsPage() {
+  return (
+    <Suspense fallback={null}>
+      <SettingsPageContent />
+    </Suspense>
   );
 }
