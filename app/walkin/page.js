@@ -71,6 +71,11 @@ export default function WalkInPage() {
   const [requireOrderTaker, setRequireOrderTaker] = useState(false)
   const [requireCustomer, setRequireCustomer] = useState(false) // from pos_require_customer.walkin
 
+  // POS order behavior settings
+  const [showOrderConfirmationPopup, setShowOrderConfirmationPopup] = useState(true)
+  const [autoPrintKitchen, setAutoPrintKitchen] = useState(false)
+  const [autoPrintReceipt, setAutoPrintReceipt] = useState(false)
+
   // Orders view
   const [showOrdersView, setShowOrdersView] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState(null)
@@ -313,7 +318,7 @@ export default function WalkInPage() {
 
   const checkAndLoadData = async () => {
     try {
-      // If cache already has data, load instantly — no spinner
+      // Fast path: sync bootstrap already populated the cache from localStorage
       if (cacheManager.isReady()) {
         loadCachedData()
         setIsDataReady(true)
@@ -321,57 +326,25 @@ export default function WalkInPage() {
         return
       }
 
+      // Slow path: first-ever load (no localStorage cache yet) — fetch from Supabase
       setIsLoading(true)
-      let attempts = 0
-      const maxAttempts = 60
-
-      checkIntervalRef.current = setInterval(() => {
-        attempts++
-
-        if (cacheManager.isReady()) {
-          clearInterval(checkIntervalRef.current)
-          loadCachedData()
-          setIsDataReady(true)
-          setIsLoading(false)
-        } else if (attempts >= maxAttempts) {
-          clearInterval(checkIntervalRef.current)
-
-          cacheManager.initializeCache().then(() => {
-            if (cacheManager.isReady()) {
-              loadCachedData()
-              setIsDataReady(true)
-            } else {
-              notify.error('Failed to load menu data. Please try again from the dashboard.', {
-                duration: 6000,
-                action: {
-                  label: 'Go to Dashboard',
-                  onClick: () => router.push('/dashboard')
-                }
-              })
-            }
-            setIsLoading(false)
-          }).catch((error) => {
-            console.error('Cache initialization error:', error)
-            notify.error('Failed to load menu data. Please check your connection.', {
-              duration: 6000,
-              action: {
-                label: 'Retry',
-                onClick: () => window.location.reload()
-              }
-            })
-            setIsLoading(false)
-          })
-        }
-      }, 100)
-
-    } catch (error) {
-      console.error('Error checking cache:', error)
+      await cacheManager.initializeCache()
+      if (cacheManager.isReady()) {
+        loadCachedData()
+        setIsDataReady(true)
+      } else {
+        notify.error('Failed to load menu data. Please try again from the dashboard.', {
+          duration: 6000,
+          action: { label: 'Go to Dashboard', onClick: () => router.push('/dashboard') }
+        })
+      }
       setIsLoading(false)
-      notify.error('Error loading menu data. Please try again.', {
-        action: {
-          label: 'Go to Dashboard',
-          onClick: () => router.push('/dashboard')
-        }
+    } catch (error) {
+      console.error('Cache initialization error:', error)
+      setIsLoading(false)
+      notify.error('Failed to load menu data. Please check your connection.', {
+        duration: 6000,
+        action: { label: 'Retry', onClick: () => window.location.reload() }
       })
     }
   }
@@ -397,6 +370,12 @@ export default function WalkInPage() {
         const parsed = JSON.parse(reqCust)
         setRequireCustomer(!!parsed?.walkin)
       }
+      const showConf = localStorage.getItem('pos_show_order_confirmation')
+      if (showConf !== null) setShowOrderConfirmationPopup(JSON.parse(showConf))
+      const autoKitchen = localStorage.getItem('pos_auto_print_kitchen')
+      if (autoKitchen !== null) setAutoPrintKitchen(JSON.parse(autoKitchen))
+      const autoReceipt = localStorage.getItem('pos_auto_print_receipt')
+      if (autoReceipt !== null) setAutoPrintReceipt(JSON.parse(autoReceipt))
     } catch {}
 
 
@@ -508,8 +487,9 @@ export default function WalkInPage() {
     return ''
   }
 
-  const handlePrintReceipt = async () => {
-    if (!completedOrderData) return
+  const handlePrintReceipt = async (overrideOrderData = null) => {
+    const printData = overrideOrderData || completedOrderData
+    if (!printData) return
 
     setIsPrinting(true)
     try {
@@ -546,7 +526,7 @@ export default function WalkInPage() {
       const localQr = localStorage.getItem('qr_code_local')
 
       // Get cashier/admin name from completed order
-      const order = completedOrderData.order
+      const order = printData.order
       const cashierName = order?.cashier_id
         ? (order.cashiers?.name || 'Cashier')
         : (order?.users?.customer_name || 'Admin')
@@ -570,27 +550,28 @@ export default function WalkInPage() {
       }
 
       // Resolve order taker name from completed order
-      const completedOrder = completedOrderData.order
-      const completedOrderTakerName = completedOrder?.order_takers?.name ||
-        (completedOrder?.order_taker_id
-          ? (cacheManager.getOrderTakers().find(t => t.id === completedOrder.order_taker_id)?.name || null)
+      const completedOrderTakerName = order?.order_takers?.name ||
+        (order?.order_taker_id
+          ? (cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null)
           : null)
 
-      // Ensure order ID is included at the top level for logo fetching
-      const printData = {
-        ...completedOrderData,
-        orderId: completedOrderData.order?.id || completedOrderData.orderId,
+      // Ensure order ID is included at the top level for logo fetching.
+      // Exclude the raw `order` object — it contains Supabase internals that can't pass IPC structured clone.
+      const { order: _rawOrder, ...printDataWithoutOrder } = printData
+      const finalPrintData = {
+        ...printDataWithoutOrder,
+        orderId: printData.order?.id || printData.orderId,
         order_taker_name: completedOrderTakerName || null
       }
 
       // Debug log what's being sent to printer
       console.log('🖨️ [Modal Print] Printing receipt with data:', {
-        orderNumber: printData.orderNumber,
-        cartLength: printData.cart?.length,
-        discountAmount: printData.discountAmount,
-        loyaltyDiscountAmount: printData.loyaltyDiscountAmount,
-        loyaltyPointsRedeemed: printData.loyaltyPointsRedeemed,
-        deals: printData.cart?.filter(item => item.isDeal).map(item => ({
+        orderNumber: finalPrintData.orderNumber,
+        cartLength: finalPrintData.cart?.length,
+        discountAmount: finalPrintData.discountAmount,
+        loyaltyDiscountAmount: finalPrintData.loyaltyDiscountAmount,
+        loyaltyPointsRedeemed: finalPrintData.loyaltyPointsRedeemed,
+        deals: finalPrintData.cart?.filter(item => item.isDeal).map(item => ({
           name: item.dealName,
           productsCount: item.dealProducts?.length,
           products: item.dealProducts
@@ -599,13 +580,14 @@ export default function WalkInPage() {
 
       // Print the receipt
       const result = await printerManager.printReceipt(
-        printData,
+        finalPrintData,
         userProfileData,
         printerConfig
       )
 
       if (result.success) {
         notify.success('Receipt printed successfully')
+        setShowSuccessModal(false)
       } else {
         notify.error(`Failed to print receipt: ${result.error || 'Unknown error'}`)
       }
@@ -615,6 +597,40 @@ export default function WalkInPage() {
     } finally {
       setIsPrinting(false)
     }
+  }
+
+  const triggerOrderSuccess = (orderData, skipAutoPrint = false, forceModal = false) => {
+    setCompletedOrderData(orderData)
+    playBeepSound()
+
+    if (!skipAutoPrint && autoPrintKitchen && orderData?.order) {
+      handlePrintToken(orderData.order).catch(err => console.error('Auto kitchen print failed:', err))
+    }
+
+    if (!forceModal && !showOrderConfirmationPopup) {
+      if (!skipAutoPrint && autoPrintReceipt) {
+        handlePrintReceipt(orderData).catch(err => console.error('Auto receipt print failed:', err))
+      }
+      setTimeout(() => {
+        setCart([])
+        setCustomer(null)
+        setOrderInstructions('')
+        setSelectedTable(null)
+        setCurrentView('products')
+        setIsReopenedOrder(false)
+        setOriginalOrderId(null)
+        clearSavedData()
+        setOrdersRefreshTrigger(prev => prev + 1)
+        router.push('/walkin')
+      }, 300)
+      return
+    }
+
+    if (!skipAutoPrint && autoPrintReceipt) {
+      handlePrintReceipt(orderData).catch(err => console.error('Auto receipt print failed:', err))
+    }
+
+    setShowSuccessModal(true)
   }
 
   const handleNewOrderFromSuccess = () => {
@@ -1317,10 +1333,8 @@ export default function WalkInPage() {
           order: order
         }
 
-        // Set order data and show modal
-        setCompletedOrderData(orderData)
-        setShowSuccessModal(true)
-        playBeepSound()
+        // Set order data and show modal/auto-redirect based on settings
+        triggerOrderSuccess(orderData, !!paymentData.skipAutoPrint, !!paymentData.forceModal)
 
         // Mark order as completed
         await handleOrderStatusUpdate(order, 'Completed').catch(err => {
@@ -1707,7 +1721,9 @@ export default function WalkInPage() {
         orderNumber: order.order_number,
         dailySerial: order.daily_serial || null,
         total: paymentData.newTotal,
-        subtotal: order.subtotal || paymentData.newTotal,
+        subtotal: parseFloat(order.subtotal) > 0
+          ? parseFloat(order.subtotal)
+          : Math.max(0, paymentData.newTotal + (paymentData.discountAmount || 0) - (paymentData.serviceChargeAmount || 0) - (order.delivery_charges || 0)),
         paymentMethod: paymentData.paymentMethod,
         orderType: order.order_type || 'walkin',
         tableName: resolveTableName(order),
@@ -1722,7 +1738,12 @@ export default function WalkInPage() {
         changeAmount: paymentData.changeAmount || 0,
         cashReceived: paymentData.cashAmount || null,
         cart: mappedCartItems,
-        customer: order.customers || null,
+        customer: order.customers ? {
+          id: order.customers.id || null,
+          full_name: order.customers.full_name || null,
+          phone: order.customers.phone || null,
+          email: order.customers.email || null,
+        } : null,
         orderInstructions: order.order_instructions || '',
         deliveryCharges: order.delivery_charges || 0,
         deliveryAddress: order.delivery_address || null,
@@ -1773,12 +1794,8 @@ export default function WalkInPage() {
         }
       }
 
-      // Set order data and show modal
-      setCompletedOrderData(orderData)
-      setShowSuccessModal(true)
-
-      // Play beep sound
-      playBeepSound()
+      // Set order data and show modal/auto-redirect based on settings
+      triggerOrderSuccess(orderData, !!paymentData.skipAutoPrint, !!paymentData.forceModal)
 
       // Inventory deduction + refresh (status already set in the payment update above)
       if (shouldComplete) {
@@ -1797,8 +1814,40 @@ export default function WalkInPage() {
     }
   }
 
+  // Quick-complete an order from the sidebar without opening it
+  const handleQuickCompleteOrder = async (order, paymentMethod, action, cashReceived) => {
+    try {
+      if (!paymentMethod || action === 'complete') {
+        await handleCompleteAlreadyPaidOrder(order, true, true)
+      } else {
+        const total = order.total_amount
+        const cash = parseFloat(cashReceived) || total
+        const scAmount = parseFloat(order.service_charge_amount || 0)
+        const scPct    = parseFloat(order.service_charge_percentage || 0)
+        await handlePaymentRequired(order, {
+          paymentMethod,
+          newTotal: total,
+          discountAmount: parseFloat(order.discount_amount || 0),
+          discountType: 'percentage',
+          discountValue: parseFloat(order.discount_percentage || 0),
+          serviceChargeAmount: scAmount,
+          serviceChargeType: 'percentage',
+          serviceChargeValue: scPct,
+          changeAmount: Math.max(0, cash - total),
+          cashAmount: cash,
+          completeOrder: action === 'pay_complete',
+          skipAutoPrint: true,
+          forceModal: action === 'pay_complete',
+        })
+      }
+    } catch (err) {
+      console.error('Quick complete failed:', err)
+      toast.error('Quick complete failed: ' + err.message)
+    }
+  }
+
   // Handle completing an already-paid order (show success modal for printing)
-  const handleCompleteAlreadyPaidOrder = async (order) => {
+  const handleCompleteAlreadyPaidOrder = async (order, skipAutoPrint = false, forceModal = false) => {
     try {
       // If no order provided (e.g., called from cancel), just refresh the list
       if (!order) {
@@ -2001,12 +2050,8 @@ export default function WalkInPage() {
         }
       }
 
-      // Set order data and show modal
-      setCompletedOrderData(orderData)
-      setShowSuccessModal(true)
-
-      // Play beep sound
-      playBeepSound()
+      // Set order data and show modal/auto-redirect based on settings
+      triggerOrderSuccess(orderData, skipAutoPrint, forceModal)
 
       // Mark order as completed (this happens in background, modal stays visible)
       handleOrderStatusUpdate(order, 'Completed').catch(err => {
@@ -2156,21 +2201,35 @@ export default function WalkInPage() {
       }
 
       // Prepare order data for printing
+      const _scAmt      = parseFloat(order.service_charge_amount || 0)
+      const _discAmt    = parseFloat(order.discount_amount || 0)
+      const _delivAmt   = parseFloat(order.delivery_charges || 0)
+      const _totalAmt   = parseFloat(order.total_amount || 0)
+      // If subtotal not stored, derive it: items sum = total + discount − SC − delivery
+      const _subtotal   = parseFloat(order.subtotal) > 0
+        ? parseFloat(order.subtotal)
+        : Math.max(0, _totalAmt + _discAmt - _scAmt - _delivAmt)
+
       const orderData = {
         orderNumber: order.order_number,
         dailySerial: order.daily_serial || null,
         orderType: order.order_type || 'walkin',
-        customer: order.customers || { full_name: 'Guest' },
+        customer: order.customers ? {
+          id: order.customers.id || null,
+          full_name: order.customers.full_name || null,
+          phone: order.customers.phone || null,
+          email: order.customers.email || null,
+        } : { full_name: 'Guest' },
         deliveryAddress: order.delivery_address,
         orderInstructions: order.order_instructions,
-        total: order.total_amount,
-        subtotal: order.subtotal || order.total_amount,
-        deliveryCharges: order.delivery_charges || 0,
-        discountAmount: order.discount_amount || 0,
+        total: _totalAmt,
+        subtotal: _subtotal,
+        deliveryCharges: _delivAmt,
+        discountAmount: _discAmt,
         loyaltyDiscountAmount: loyaltyDiscountAmount,
         loyaltyPointsRedeemed: loyaltyPointsRedeemed,
         discountType: 'amount',
-        serviceChargeAmount: parseFloat(order.service_charge_amount || 0),
+        serviceChargeAmount: _scAmt,
         serviceChargeType: parseFloat(order.service_charge_percentage || 0) > 0 ? 'percentage' : 'fixed',
         serviceChargeValue: parseFloat(order.service_charge_percentage || 0),
         tableName: resolveTableName(order),
@@ -2726,6 +2785,7 @@ export default function WalkInPage() {
           onBackClick={handleBackClick}
           orderType="walkin"
           refreshTrigger={ordersRefreshTrigger}
+          onQuickComplete={handleQuickCompleteOrder}
           onOrdersLoaded={(freshOrders) => {
             if (!selectedOrder) return
             const updated = freshOrders.find(o => o.id === selectedOrder.id)
@@ -2954,7 +3014,7 @@ export default function WalkInPage() {
                 <motion.button
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
-                  onClick={handlePrintReceipt}
+                  onClick={() => handlePrintReceipt()}
                   disabled={isPrinting}
                   className={`w-full px-6 py-3 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white font-semibold rounded-xl transition-all duration-200 flex items-center justify-center ${
                     isPrinting ? 'opacity-50 cursor-not-allowed' : ''

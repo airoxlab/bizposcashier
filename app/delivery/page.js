@@ -92,6 +92,11 @@ export default function DeliveryPage() {
   const [completedOrderData, setCompletedOrderData] = useState(null)
   const [isPrinting, setIsPrinting] = useState(false)
 
+  // POS order behavior settings
+  const [showOrderConfirmationPopup, setShowOrderConfirmationPopup] = useState(true)
+  const [autoPrintKitchen, setAutoPrintKitchen] = useState(false)
+  const [autoPrintReceipt, setAutoPrintReceipt] = useState(false)
+
   // Load require_customer_delivery flag on mount (cached by cacheManager).
   // If cache is missing, preserve legacy default (customer required).
   useEffect(() => {
@@ -101,6 +106,12 @@ export default function DeliveryPage() {
         const parsed = JSON.parse(raw)
         setRequireCustomer(!!parsed?.delivery)
       }
+      const showConf = localStorage.getItem('pos_show_order_confirmation')
+      if (showConf !== null) setShowOrderConfirmationPopup(JSON.parse(showConf))
+      const autoKitchen = localStorage.getItem('pos_auto_print_kitchen')
+      if (autoKitchen !== null) setAutoPrintKitchen(JSON.parse(autoKitchen))
+      const autoReceipt = localStorage.getItem('pos_auto_print_receipt')
+      if (autoReceipt !== null) setAutoPrintReceipt(JSON.parse(autoReceipt))
     } catch {}
   }, [])
 
@@ -193,6 +204,8 @@ export default function DeliveryPage() {
           }
           setOrderData(parsed)
         } catch {}
+      } else {
+        setOrderData({ deliveryCharges: getDefaultDeliveryCharge() })
       }
     }
 
@@ -294,6 +307,8 @@ export default function DeliveryPage() {
           }
           setOrderData(parsed)
         } catch {}
+      } else {
+        setOrderData({ deliveryCharges: getDefaultDeliveryCharge() })
       }
     }
 
@@ -342,7 +357,6 @@ export default function DeliveryPage() {
 
   const checkAndLoadData = async () => {
     try {
-      // If cache already has data, load instantly — no spinner
       if (cacheManager.isReady()) {
         loadCachedData()
         setIsDataReady(true)
@@ -351,48 +365,21 @@ export default function DeliveryPage() {
       }
 
       setIsLoading(true)
-      let attempts = 0
-      const maxAttempts = 60
+      await cacheManager.initializeCache()
 
-      checkIntervalRef.current = setInterval(() => {
-        attempts++
-
-        if (cacheManager.isReady()) {
-          clearInterval(checkIntervalRef.current)
-          loadCachedData()
-          setIsDataReady(true)
-          setIsLoading(false)
-        } else if (attempts >= maxAttempts) {
-          clearInterval(checkIntervalRef.current)
-
-          cacheManager.initializeCache().then(() => {
-            if (cacheManager.isReady()) {
-              loadCachedData()
-              setIsDataReady(true)
-            } else {
-              notify.error('Failed to load menu data. Please try again from the dashboard.', {
-                duration: 6000,
-                action: {
-                  label: 'Go to Dashboard',
-                  onClick: () => router.push('/dashboard')
-                }
-              })
-            }
-            setIsLoading(false)
-          }).catch((error) => {
-            console.error('Cache initialization error:', error)
-            notify.error('Failed to load menu data. Please check your connection.', {
-              duration: 6000,
-              action: {
-                label: 'Retry',
-                onClick: () => window.location.reload()
-              }
-            })
-            setIsLoading(false)
-          })
-        }
-      }, 100)
-
+      if (cacheManager.isReady()) {
+        loadCachedData()
+        setIsDataReady(true)
+      } else {
+        notify.error('Failed to load menu data. Please try again from the dashboard.', {
+          duration: 6000,
+          action: {
+            label: 'Go to Dashboard',
+            onClick: () => router.push('/dashboard')
+          }
+        })
+      }
+      setIsLoading(false)
     } catch (error) {
       console.error('Error checking cache:', error)
       setIsLoading(false)
@@ -1396,15 +1383,12 @@ export default function DeliveryPage() {
         orderInstructions: order.order_instructions || '',
         deliveryCharges: order.delivery_charges || 0,
         deliveryAddress: order.delivery_address || null,
+        delivery_boy_name: order.delivery_boys?.name || null,
         order: order
       }
 
-      // Set order data and show modal
-      setCompletedOrderData(orderData)
-      setShowSuccessModal(true)
-
-      // Play beep sound
-      playBeepSound()
+      // Set order data and show modal/auto-redirect based on settings
+      triggerOrderSuccess(orderData, !!paymentData.skipAutoPrint, !!paymentData.forceModal)
 
       // Inventory deduction + post-completion tasks (status already set above)
       if (shouldComplete) {
@@ -1423,7 +1407,7 @@ export default function DeliveryPage() {
   }
 
   // Handle completing an already-paid order (show success modal for printing)
-  const handleCompleteAlreadyPaidOrder = async (order) => {
+  const handleCompleteAlreadyPaidOrder = async (order, skipAutoPrint = false, forceModal = false) => {
     try {
       // If no order provided (e.g., called from cancel), just refresh the list
       if (!order) {
@@ -1596,15 +1580,12 @@ export default function DeliveryPage() {
         orderInstructions: order.order_instructions || '',
         deliveryCharges: order.delivery_charges || 0,
         deliveryAddress: order.delivery_address || null,
+        delivery_boy_name: order.delivery_boys?.name || null,
         order: order
       }
 
-      // Set order data and show modal
-      setCompletedOrderData(orderData)
-      setShowSuccessModal(true)
-
-      // Play beep sound
-      playBeepSound()
+      // Set order data and show modal/auto-redirect based on settings
+      triggerOrderSuccess(orderData, skipAutoPrint, forceModal)
 
       // Mark order as completed (this happens in background, modal stays visible)
       handleOrderStatusUpdate(order, 'Completed').catch(err => {
@@ -1621,8 +1602,9 @@ export default function DeliveryPage() {
   }
 
   // Handle print receipt from success modal
-  const handlePrintReceipt = async () => {
-    if (!completedOrderData) return
+  const handlePrintReceipt = async (overrideOrderData = null) => {
+    const printData = overrideOrderData || completedOrderData
+    if (!printData) return
 
     setIsPrinting(true)
     try {
@@ -1659,7 +1641,7 @@ export default function DeliveryPage() {
       const localQr = localStorage.getItem('qr_code_local')
 
       // Get cashier/admin name from completed order
-      const order = completedOrderData.order
+      const order = printData.order
       const cashierName = order?.cashier_id
         ? (order.cashiers?.name || 'Cashier')
         : (order?.users?.customer_name || 'Admin')
@@ -1683,28 +1665,30 @@ export default function DeliveryPage() {
       }
 
       // Resolve order taker name from completed order
-      const completedOrder = completedOrderData.order
-      const completedOrderTakerName = completedOrder?.order_takers?.name ||
-        (completedOrder?.order_taker_id
-          ? (cacheManager.getOrderTakers().find(t => t.id === completedOrder.order_taker_id)?.name || null)
+      const completedOrderTakerName = order?.order_takers?.name ||
+        (order?.order_taker_id
+          ? (cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null)
           : null)
 
-      // Ensure order ID is included at the top level for logo fetching
-      const printData = {
-        ...completedOrderData,
-        orderId: completedOrderData.order?.id || completedOrderData.orderId,
+      // Ensure order ID is included at the top level for logo fetching.
+      // Exclude the raw `order` object — it contains Supabase internals that can't pass IPC structured clone.
+      const { order: _rawOrder, ...printDataWithoutOrder } = printData
+      const finalPrintData = {
+        ...printDataWithoutOrder,
+        orderId: printData.order?.id || printData.orderId,
         order_taker_name: completedOrderTakerName || null
       }
 
       // Print the receipt
       const result = await printerManager.printReceipt(
-        printData,
+        finalPrintData,
         userProfileData,
         printerConfig
       )
 
       if (result.success) {
         notify.success('Receipt printed successfully')
+        setShowSuccessModal(false)
       } else {
         notify.error(`Failed to print receipt: ${result.error || 'Unknown error'}`)
       }
@@ -1714,6 +1698,41 @@ export default function DeliveryPage() {
     } finally {
       setIsPrinting(false)
     }
+  }
+
+  const triggerOrderSuccess = (orderData, skipAutoPrint = false, forceModal = false) => {
+    setCompletedOrderData(orderData)
+    playBeepSound()
+
+    if (!skipAutoPrint && autoPrintKitchen && orderData?.order) {
+      handlePrintToken(orderData.order).catch(err => console.error('Auto kitchen print failed:', err))
+    }
+
+    if (!forceModal && !showOrderConfirmationPopup) {
+      if (!skipAutoPrint && autoPrintReceipt) {
+        handlePrintReceipt(orderData).catch(err => console.error('Auto receipt print failed:', err))
+      }
+      setTimeout(() => {
+        setCart([])
+        setCustomer(null)
+        setOrderInstructions('')
+        setDeliveryTime('')
+        setDeliveryCharges(0)
+        setCurrentView('products')
+        setIsReopenedOrder(false)
+        setOriginalOrderId(null)
+        clearSavedData()
+        setOrdersRefreshTrigger(prev => prev + 1)
+        router.push('/delivery')
+      }, 300)
+      return
+    }
+
+    if (!skipAutoPrint && autoPrintReceipt) {
+      handlePrintReceipt(orderData).catch(err => console.error('Auto receipt print failed:', err))
+    }
+
+    setShowSuccessModal(true)
   }
 
   const handleNewOrderFromSuccess = () => {
@@ -1824,17 +1843,30 @@ export default function DeliveryPage() {
         }
       }
 
+      const _scAmt    = parseFloat(order.service_charge_amount || 0)
+      const _discAmt  = parseFloat(order.discount_amount || 0)
+      const _delivAmt = parseFloat(order.delivery_charges || 0)
+      const _totalAmt = parseFloat(order.total_amount || 0)
+      const _subtotal = parseFloat(order.subtotal) > 0
+        ? parseFloat(order.subtotal)
+        : Math.max(0, _totalAmt + _discAmt - _scAmt - _delivAmt)
+
       const orderData = {
         orderNumber: order.order_number,
         dailySerial: order.daily_serial || null,
         orderType: order.order_type || 'delivery',
-        customer: order.customers || { full_name: order.customer_name, phone: order.customer_phone },
+        customer: order.customers ? {
+          id: order.customers.id || null,
+          full_name: order.customers.full_name || order.customer_name || null,
+          phone: order.customers.phone || order.customer_phone || null,
+          email: order.customers.email || null,
+        } : null,
         deliveryAddress: order.delivery_address || order.customers?.addressline || order.customers?.address,
         orderInstructions: order.order_instructions,
-        total: order.total_amount,
-        subtotal: order.subtotal,
-        deliveryCharges: order.delivery_charges || 0,
-        discountAmount: order.discount_amount || 0,
+        total: _totalAmt,
+        subtotal: _subtotal,
+        deliveryCharges: _delivAmt,
+        discountAmount: _discAmt,
         loyaltyDiscountAmount: loyaltyDiscountAmount,
         loyaltyPointsRedeemed: loyaltyPointsRedeemed,
         discountType: 'amount',
@@ -2073,15 +2105,17 @@ export default function DeliveryPage() {
   }
 
   const handleCustomerFormSubmit = (data) => {
-    console.log('🚴 Delivery Boy ID:', data.deliveryBoyId)
-
     setCustomer(data.customer)
     setOrderInstructions(data.orderInstructions)
     setDeliveryTime(data.deliveryTime)
     setDeliveryCharges(data.deliveryCharges)
 
-    if (data.customer) {
-      localStorage.setItem('delivery_boy_id', data.deliveryBoyId || '')
+    if (data.deliveryBoyId) {
+      localStorage.setItem('delivery_boy_id', data.deliveryBoyId)
+      setOrderData(prev => ({ ...prev, deliveryBoyId: data.deliveryBoyId }))
+    } else {
+      localStorage.removeItem('delivery_boy_id')
+      setOrderData(prev => { const next = { ...prev }; delete next.deliveryBoyId; return next })
     }
 
     setShowCustomerForm(false)
@@ -2166,6 +2200,9 @@ export default function DeliveryPage() {
     const effectiveDeliveryAddress = orderData.addressLine || customer?.addressline || customer?.address || ''
     const effectiveDeliveryBoyId = orderData.deliveryBoyId || localStorage.getItem('delivery_boy_id') || null
     const effectiveOrderInstructions = orderData.instructions !== undefined ? orderData.instructions : orderInstructions
+    const effectiveDeliveryBoyName = effectiveDeliveryBoyId
+      ? (cacheManager.getAllDeliveryBoys?.().find(b => b.id === effectiveDeliveryBoyId)?.name || null)
+      : null
 
     const orderPayload = {
       cart,
@@ -2175,6 +2212,7 @@ export default function DeliveryPage() {
       deliveryTime: effectiveDeliveryTime,
       deliveryCharges: effectiveDeliveryCharges,
       deliveryBoyId: effectiveDeliveryBoyId,
+      delivery_boy_name: effectiveDeliveryBoyName,
       subtotal: calculateSubtotal(),
       total: calculateSubtotal() + effectiveDeliveryCharges,
       orderType: 'delivery',
@@ -2306,6 +2344,17 @@ export default function DeliveryPage() {
           onBackClick={handleBackClick}
           orderType="delivery"
           refreshTrigger={ordersRefreshTrigger}
+          onQuickComplete={async (order, paymentMethod, action, cashReceived) => {
+            try {
+              if (!paymentMethod || action === 'complete') {
+                await handleCompleteAlreadyPaidOrder(order, true, true)
+              } else {
+                const total = order.total_amount
+                const cash = parseFloat(cashReceived) || total
+                await handlePaymentRequired(order, { paymentMethod, newTotal: total, discountAmount: 0, discountType: 'percentage', discountValue: 0, changeAmount: Math.max(0, cash - total), cashAmount: cash, completeOrder: action === 'pay_complete', skipAutoPrint: true, forceModal: action === 'pay_complete' })
+              }
+            } catch (err) { toast.error('Quick complete failed: ' + err.message) }
+          }}
         />
       ) : (
         <CategorySidebar
@@ -2541,7 +2590,7 @@ export default function DeliveryPage() {
                 <motion.button
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
-                  onClick={handlePrintReceipt}
+                  onClick={() => handlePrintReceipt()}
                   disabled={isPrinting}
                   className={`w-full px-6 py-3 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white font-semibold rounded-xl transition-all duration-200 flex items-center justify-center ${
                     isPrinting ? 'opacity-50 cursor-not-allowed' : ''

@@ -55,12 +55,29 @@ export default function InlineCustomerPanel({
     }
   }, [])
 
-  // Load delivery boys
+  // Load delivery boys — use cache first, fall back to direct fetch if cache not ready yet
   useEffect(() => {
-    if (orderType === 'delivery') {
-      const boys = cacheManager.getAllDeliveryBoys?.() || []
-      setDeliveryBoys(boys)
+    if (orderType !== 'delivery') return
+    const cached = cacheManager.getAllDeliveryBoys?.() || []
+    if (cached.length > 0) {
+      setDeliveryBoys(cached)
+      return
     }
+    // Cache not populated yet — fetch directly so the dropdown shows immediately
+    const userId = cacheManager.userId
+    if (!userId) return
+    supabase
+      .from('delivery_boys')
+      .select('id, name, phone, vehicle_type, status')
+      .eq('user_id', userId)
+      .eq('status', 'active')
+      .order('name')
+      .then(({ data }) => {
+        if (data?.length) {
+          setDeliveryBoys(data)
+          if (cacheManager.cache) cacheManager.cache.delivery_boys = data
+        }
+      })
   }, [orderType])
 
   // Auto-focus search input

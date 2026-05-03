@@ -38,7 +38,20 @@ function getPaths() {
   };
 }
 
-// Save base64 data to file
+// Generate a compact fingerprint for a URL so we never write multi-MB base64 to the meta file.
+// For regular URLs: store as-is (short).
+// For base64 data URIs: store only the mime type + length + first 32 chars of payload (fast to compute, unique enough).
+function urlFingerprint(url) {
+  if (!url) return null;
+  if (!url.startsWith('data:image/')) return url;
+  // e.g. "data:image/png;base64,iVBORw0KG..." → fingerprint includes type + length + prefix
+  const commaIdx = url.indexOf(',');
+  const header = commaIdx > 0 ? url.substring(0, commaIdx + 1) : url.substring(0, 30);
+  const payload = commaIdx > 0 ? url.substring(commaIdx + 1) : '';
+  return `${header}[len=${payload.length},head=${payload.substring(0, 32)}]`;
+}
+
+// Save base64 data to file — async to avoid blocking the main process
 function saveBase64ToFile(base64Data, destPath) {
   return new Promise((resolve, reject) => {
     try {
@@ -47,22 +60,24 @@ function saveBase64ToFile(base64Data, destPath) {
       }
 
       // Extract base64 data (remove data:image/png;base64, prefix)
-      const matches = base64Data.match(/^data:image\/\w+;base64,(.+)$/);
+      const matches = base64Data.match(/^data:image\/\w+;base64,(.+)$/s);
       if (!matches) {
         return reject(new Error('Invalid base64 format'));
       }
 
       const buffer = Buffer.from(matches[1], 'base64');
-      fs.writeFileSync(destPath, buffer);
-      console.log('✅ Base64 data saved to file:', destPath);
-      resolve(destPath);
+      fs.writeFile(destPath, buffer, (err) => {
+        if (err) return reject(err);
+        console.log('✅ Base64 data saved to file:', destPath);
+        resolve(destPath);
+      });
     } catch (error) {
       reject(error);
     }
   });
 }
 
-// Download file from URL
+// Download file from URL (with 20s timeout so we never hang indefinitely)
 function downloadFile(url, destPath) {
   return new Promise((resolve, reject) => {
     if (!url) {
@@ -87,44 +102,61 @@ function downloadFile(url, destPath) {
       return reject(streamErr);
     }
 
-    https.get(url, (response) => {
+    let settled = false;
+    const settle = (fn, val) => { if (!settled) { settled = true; fn(val); } };
+
+    const req = https.get(url, (response) => {
       if (response.statusCode === 301 || response.statusCode === 302) {
         file.close();
         if (fs.existsSync(destPath)) try { fs.unlinkSync(destPath); } catch {}
-        return downloadFile(response.headers.location, destPath).then(resolve).catch(reject);
+        return downloadFile(response.headers.location, destPath)
+          .then(v => settle(resolve, v))
+          .catch(e => settle(reject, e));
       }
 
       if (response.statusCode !== 200) {
         file.close();
         if (fs.existsSync(destPath)) try { fs.unlinkSync(destPath); } catch {}
-        return reject(new Error(`HTTP ${response.statusCode}`));
+        return settle(reject, new Error(`HTTP ${response.statusCode}`));
       }
 
       response.pipe(file);
       file.on('finish', () => {
         file.close();
-        resolve(destPath);
+        settle(resolve, destPath);
       });
       file.on('error', (err) => {
         file.close();
         if (fs.existsSync(destPath)) try { fs.unlinkSync(destPath); } catch {}
-        reject(err);
+        settle(reject, err);
       });
-    }).on('error', (err) => {
-      file.close();
+    });
+
+    req.on('error', (err) => {
+      try { file.close(); } catch {}
       if (fs.existsSync(destPath)) try { fs.unlinkSync(destPath); } catch {}
-      reject(err);
+      settle(reject, err);
+    });
+
+    // Hard timeout — prevents indefinite hangs on slow/unreachable servers
+    req.setTimeout(20000, () => {
+      req.destroy();
+      try { file.close(); } catch {}
+      if (fs.existsSync(destPath)) try { fs.unlinkSync(destPath); } catch {}
+      settle(reject, new Error('Asset download timeout after 20s'));
     });
   });
 }
 
-// Check if assets are fresh (downloaded today AND URLs haven't changed)
-function areAssetsFresh(logoUrl, qrUrl) {
+// Check if assets are fresh (downloaded today AND source hasn't changed).
+// Uses fingerprints so we never read back a multi-MB meta file.
+async function areAssetsFresh(logoUrl, qrUrl) {
   const { META_PATH } = getPaths();
   if (!fs.existsSync(META_PATH)) return false;
 
   try {
-    const meta = JSON.parse(fs.readFileSync(META_PATH, 'utf8'));
+    const data = await fs.promises.readFile(META_PATH, 'utf8');
+    const meta = JSON.parse(data);
     const lastDownload = new Date(meta.lastDownload);
     const today = new Date();
 
@@ -134,21 +166,24 @@ function areAssetsFresh(logoUrl, qrUrl) {
       lastDownload.getFullYear() === today.getFullYear()
     );
 
-    const urlsChanged = (meta.logoUrl !== logoUrl || meta.qrUrl !== qrUrl);
+    const urlsChanged = (
+      meta.logoFingerprint !== urlFingerprint(logoUrl) ||
+      meta.qrFingerprint   !== urlFingerprint(qrUrl)
+    );
     return isSameDay && !urlsChanged;
   } catch {
     return false;
   }
 }
 
-// Save download timestamp and URLs
-function saveDownloadMeta(logoUrl, qrUrl) {
+// Save download timestamp — stores only tiny fingerprints, never raw base64.
+async function saveDownloadMeta(logoUrl, qrUrl) {
   const { META_PATH } = getPaths();
   try {
-    fs.writeFileSync(META_PATH, JSON.stringify({
+    await fs.promises.writeFile(META_PATH, JSON.stringify({
       lastDownload: new Date().toISOString(),
-      logoUrl: logoUrl || null,
-      qrUrl: qrUrl || null
+      logoFingerprint: urlFingerprint(logoUrl),
+      qrFingerprint:   urlFingerprint(qrUrl),
     }, null, 2));
   } catch (err) {
     console.error('❌ Could not save download meta:', err.message);
@@ -156,9 +191,8 @@ function saveDownloadMeta(logoUrl, qrUrl) {
 }
 
 /**
- * Ensure assets are available before printing
- * Returns immediately with cached assets if available
- * Downloads in background if needed
+ * Ensure assets are available before printing.
+ * Returns immediately with cached assets when available; downloads/processes otherwise.
  */
 async function ensureAssets(logoUrl, qrUrl) {
   console.log('🔍 ensureAssets called with:');
@@ -168,8 +202,7 @@ async function ensureAssets(logoUrl, qrUrl) {
   ensureTempDir();
   const { LOGO_PATH, QR_PATH } = getPaths();
 
-  // Quick synchronous check - return immediately if cached
-  const isFresh = areAssetsFresh(logoUrl, qrUrl);
+  const isFresh = await areAssetsFresh(logoUrl, qrUrl);
   const logoExists = fs.existsSync(LOGO_PATH);
   const qrExists = fs.existsSync(QR_PATH);
 
@@ -222,7 +255,7 @@ async function ensureAssets(logoUrl, qrUrl) {
     );
   }
 
-  // Wait for both downloads
+  // Wait for both downloads/processing steps
   const downloadResults = await Promise.all(downloads);
 
   // Process results
@@ -230,14 +263,16 @@ async function ensureAssets(logoUrl, qrUrl) {
   downloadResults.forEach(result => {
     if (result.success) {
       results[result.type] = result.path;
-      console.log(`✅ ${result.type} downloaded`);
+      console.log(`✅ ${result.type} processed`);
     } else {
-      console.error(`❌ ${result.type} download failed:`, result.error);
+      console.error(`❌ ${result.type} failed:`, result.error);
     }
   });
 
-  // Save timestamp and URLs
-  saveDownloadMeta(logoUrl, qrUrl);
+  // Save compact meta (async, non-blocking)
+  saveDownloadMeta(logoUrl, qrUrl).catch(err =>
+    console.error('❌ saveDownloadMeta failed:', err.message)
+  );
 
   return results;
 }

@@ -2676,7 +2676,7 @@ export default function OrdersPage() {
                   <motion.button
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
-                    onClick={handlePrintReceipt}
+                    onClick={() => handlePrintReceipt()}
                     disabled={isPrinting}
                     className="flex items-center space-x-1.5 px-3 py-2 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white rounded-lg transition-all font-medium text-sm"
                   >

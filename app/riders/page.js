@@ -609,7 +609,7 @@ export default function RidersOrdersPage() {
                       <motion.button
                         whileHover={{ scale: 1.05 }}
                         whileTap={{ scale: 0.95 }}
-                        onClick={handlePrintReceipt}
+                        onClick={() => handlePrintReceipt()}
                         disabled={isPrinting}
                         className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg font-semibold flex items-center"
                       >

@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync } = require('child_process');
+const { exec } = require('child_process');
 const { ensureAssets } = require('../handlers/onDemandAssetDownload');
 
 // ESC/POS Commands
@@ -314,6 +314,10 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
         if (line.trim()) {
           commands.push(leftText(line));
         }
+      }
+      const riderName = orderData.delivery_boy_name || orderData.deliveryBoyName;
+      if (riderName) {
+        commands.push(leftRight('Rider:', riderName));
       }
     }
   }
@@ -788,49 +792,48 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
 // List all Windows printers via PowerShell
 function listWindowsPrinters() {
   return new Promise((resolve) => {
-    try {
-      if (process.platform !== 'win32') {
-        return resolve({ success: false, printers: [], error: 'Windows only' });
-      }
-      const result = execSync(
-        'powershell -Command "Get-Printer | Select-Object -ExpandProperty Name | ConvertTo-Json"',
-        { encoding: 'utf8', timeout: 10000 }
-      );
-      const parsed = JSON.parse(result.trim());
-      const names = Array.isArray(parsed) ? parsed : [parsed];
-      resolve({ success: true, printers: names.map(name => ({ name, type: 'windows' })) });
-    } catch (error) {
-      resolve({ success: false, printers: [], error: error.message });
+    if (process.platform !== 'win32') {
+      return resolve({ success: false, printers: [], error: 'Windows only' });
     }
+    exec(
+      'powershell -Command "Get-Printer | Select-Object -ExpandProperty Name | ConvertTo-Json"',
+      { encoding: 'utf8', timeout: 10000 },
+      (err, stdout) => {
+        if (err) return resolve({ success: false, printers: [], error: err.message });
+        try {
+          const parsed = JSON.parse(stdout.trim());
+          const names = Array.isArray(parsed) ? parsed : [parsed];
+          resolve({ success: true, printers: names.map(name => ({ name, type: 'windows' })) });
+        } catch (parseErr) {
+          resolve({ success: false, printers: [], error: parseErr.message });
+        }
+      }
+    );
   });
 }
 
 // Send raw ESC/POS data to a Windows USB Printer Class printer by name
 // Uses PowerShell Win32 spooler API - works with USB001 / USB Printer Class devices
 async function sendToWindowsPrinter(printerName, data) {
-  return new Promise((resolve, reject) => {
-    try {
-      if (process.platform !== 'win32') {
-        throw new Error('Windows USB printing is only supported on Windows');
-      }
+  if (process.platform !== 'win32') {
+    throw new Error('Windows USB printing is only supported on Windows');
+  }
 
-      const tempDir = path.join(os.tmpdir(), 'pos-receipts');
-      if (!fs.existsSync(tempDir)) {
-        fs.mkdirSync(tempDir, { recursive: true });
-      }
+  const tempDir = path.join(os.tmpdir(), 'pos-receipts');
+  if (!fs.existsSync(tempDir)) {
+    fs.mkdirSync(tempDir, { recursive: true });
+  }
 
-      const ts = Date.now();
-      const receiptFile = path.join(tempDir, `receipt_${ts}.prn`);
-      const psFile = path.join(tempDir, `print_${ts}.ps1`);
+  const ts = Date.now();
+  const receiptFile = path.join(tempDir, `receipt_${ts}.prn`);
+  const psFile = path.join(tempDir, `print_${ts}.ps1`);
 
-      fs.writeFileSync(receiptFile, data);
+  // PowerShell single-quoted strings treat backslashes literally — no escaping needed.
+  // Only escape single quotes (by doubling them).
+  const safePrinter = printerName.replace(/'/g, "''");
+  const safeFile = receiptFile.replace(/'/g, "''");
 
-      // PowerShell single-quoted strings treat backslashes literally — no escaping needed.
-      // Only escape single quotes (by doubling them).
-      const safePrinter = printerName.replace(/'/g, "''");
-      const safeFile = receiptFile.replace(/'/g, "''"); // backslashes stay as-is
-
-      const psScript = `
+  const psScript = `
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -908,101 +911,90 @@ try {
 Write-Output "OK"
 `;
 
-      fs.writeFileSync(psFile, psScript, 'utf8');
+  await fs.promises.writeFile(psFile, psScript, 'utf8');
 
-      console.log(`🖨️ [usbPrinter.js] Sending to Windows printer: "${printerName}"`);
-      execSync(`powershell -ExecutionPolicy Bypass -File "${psFile}"`, {
-        encoding: 'utf8',
-        timeout: 30000
-      });
+  console.log(`🖨️ [usbPrinter.js] Sending to Windows printer: "${printerName}"`);
 
-      try { fs.unlinkSync(receiptFile); } catch (e) { /* ignore */ }
-      try { fs.unlinkSync(psFile); } catch (e) { /* ignore */ }
-
+  return new Promise((resolve, reject) => {
+    exec(`powershell -ExecutionPolicy Bypass -File "${psFile}"`, {
+      encoding: 'utf8',
+      timeout: 30000
+    }, (err) => {
+      try { fs.unlinkSync(receiptFile); } catch {}
+      try { fs.unlinkSync(psFile); } catch {}
+      if (err) {
+        let msg = err.message;
+        if (msg.includes('Cannot open printer') || msg.includes('not found')) {
+          msg = `Printer "${printerName}" not found. Open Windows "Devices & Printers" and check the exact printer name.`;
+        } else if (msg.includes('Access is denied') || msg.includes('access denied')) {
+          msg = `Access denied to printer "${printerName}". Try running the app as Administrator.`;
+        }
+        return reject(new Error(msg));
+      }
       console.log('✅ Windows USB print completed successfully');
       resolve({ success: true });
-    } catch (error) {
-      let msg = error.message;
-      if (msg.includes('Cannot open printer') || msg.includes('not found')) {
-        msg = `Printer "${printerName}" not found. Open Windows "Devices & Printers" and check the exact printer name.`;
-      } else if (msg.includes('Access is denied') || msg.includes('access denied')) {
-        msg = `Access denied to printer "${printerName}". Try running the app as Administrator.`;
-      }
-      reject(new Error(msg));
-    }
+    });
   });
 }
 
 // Send data to USB port
 async function sendToUSBPort(port, data) {
-  return new Promise((resolve, reject) => {
-    try {
-      // Validate port format
-      if (!port || typeof port !== 'string') {
-        throw new Error('Invalid USB port: port is empty or not a string');
-      }
+  if (!port || typeof port !== 'string') {
+    throw new Error('Invalid USB port: port is empty or not a string');
+  }
 
-      // Normalize port format for Windows (e.g., COM3, COM4)
-      let normalizedPort = port.trim().toUpperCase();
-      if (process.platform === 'win32' && !normalizedPort.startsWith('COM') && !normalizedPort.startsWith('\\\\.\\')) {
-        // Try to extract COM port number if it's in a different format
-        const comMatch = normalizedPort.match(/COM\d+/i);
-        if (comMatch) {
-          normalizedPort = comMatch[0].toUpperCase();
-        }
-      }
+  let normalizedPort = port.trim().toUpperCase();
+  if (process.platform === 'win32' && !normalizedPort.startsWith('COM') && !normalizedPort.startsWith('\\\\.\\')) {
+    const comMatch = normalizedPort.match(/COM\d+/i);
+    if (comMatch) normalizedPort = comMatch[0].toUpperCase();
+  }
 
-      console.log(`📍 USB Port: "${port}" -> Normalized: "${normalizedPort}"`);
+  console.log(`📍 USB Port: "${port}" -> Normalized: "${normalizedPort}"`);
 
-      // Use os.tmpdir() instead of process.env.TEMP for reliable cross-platform temp directory
-      const tempDir = path.join(os.tmpdir(), 'pos-receipts');
-      if (!fs.existsSync(tempDir)) {
-        fs.mkdirSync(tempDir, { recursive: true });
-      }
+  const tempDir = path.join(os.tmpdir(), 'pos-receipts');
+  if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
-      const receiptFile = path.join(tempDir, `receipt_${Date.now()}.prn`);
-      fs.writeFileSync(receiptFile, data);
+  const receiptFile = path.join(tempDir, `receipt_${Date.now()}.prn`);
+  await fs.promises.writeFile(receiptFile, data);
 
-      console.log(`📄 Receipt file created: ${receiptFile} (${data.length} bytes)`);
+  console.log(`📄 Receipt file created: ${receiptFile} (${data.length} bytes)`);
 
-      const platform = process.platform;
+  const platform = process.platform;
+  let cmd;
+  if (platform === 'win32') {
+    cmd = `copy /b "${receiptFile}" ${normalizedPort}`;
+  } else if (platform === 'linux' || platform === 'darwin') {
+    cmd = `cat "${receiptFile}" > ${normalizedPort}`;
+  } else {
+    throw new Error(`Unsupported platform: ${platform}`);
+  }
 
-      if (platform === 'win32') {
-        console.log(`Sending to ${normalizedPort} via Windows copy command`);
-        // Increased timeout to 30 seconds for slower printers
-        execSync(`copy /b "${receiptFile}" ${normalizedPort}`, { encoding: 'utf8', timeout: 30000 });
-      } else if (platform === 'linux' || platform === 'darwin') {
-        console.log(`Sending to ${normalizedPort} via cat command`);
-        execSync(`cat "${receiptFile}" > ${normalizedPort}`, { encoding: 'utf8', timeout: 30000 });
-      } else {
-        throw new Error(`Unsupported platform: ${platform}`);
-      }
+  console.log(`Sending to ${normalizedPort} via ${platform === 'win32' ? 'copy' : 'cat'} command`);
 
-      try {
-        fs.unlinkSync(receiptFile);
-      } catch (e) {
-        console.warn('Failed to delete temp file:', e.message);
-      }
-
-      console.log('✅ USB print completed successfully');
-      resolve({ success: true });
-
-    } catch (error) {
-      console.error('❌ USB print error:', error);
-
-      // Provide more helpful error messages
-      let errorMessage = error.message;
-      if (error.message.includes('ENOENT') || error.message.includes('not recognized')) {
-        errorMessage = `USB port "${port}" not found. Please check if the printer is connected and the COM port is correct.`;
-      } else if (error.message.includes('EBUSY') || error.message.includes('Access is denied')) {
-        errorMessage = `USB port "${port}" is busy or access denied. Please close any other applications using this port.`;
-      } else if (error.message.includes('ETIMEDOUT') || error.message.includes('timeout')) {
-        errorMessage = `USB printer timeout. The printer may be offline or not responding on port "${port}".`;
-      }
-
-      reject(new Error(errorMessage));
+  try {
+    await new Promise((resolve, reject) => {
+      exec(cmd, { encoding: 'utf8', timeout: 30000 }, (err) => {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
+  } catch (error) {
+    console.error('❌ USB print error:', error);
+    let errorMessage = error.message;
+    if (error.message.includes('ENOENT') || error.message.includes('not recognized')) {
+      errorMessage = `USB port "${port}" not found. Please check if the printer is connected and the COM port is correct.`;
+    } else if (error.message.includes('EBUSY') || error.message.includes('Access is denied')) {
+      errorMessage = `USB port "${port}" is busy or access denied. Please close any other applications using this port.`;
+    } else if (error.message.includes('ETIMEDOUT') || error.message.includes('timeout')) {
+      errorMessage = `USB printer timeout. The printer may be offline or not responding on port "${port}".`;
     }
-  });
+    throw new Error(errorMessage);
+  } finally {
+    try { fs.unlinkSync(receiptFile); } catch {}
+  }
+
+  console.log('✅ USB print completed successfully');
+  return { success: true };
 }
 
 // Print receipt to USB
@@ -1079,7 +1071,10 @@ function registerUSBPrinter(ipcMain) {
       if (!printerName) return { success: false, error: 'No Windows printer name configured' };
       const assets = await ensureAssets(userProfile?.store_logo, userProfile?.qr_code);
       const receiptData = await generateReceiptESCPOS(orderData, userProfile, assets);
-      await sendToWindowsPrinter(printerName, receiptData);
+      // Fire-and-forget: data is prepared, spawn PowerShell in background so UI unlocks immediately
+      sendToWindowsPrinter(printerName, receiptData).catch(err =>
+        console.error('[USB Print] Background print error:', err.message)
+      );
       return { success: true };
     } catch (error) {
       return { success: false, error: error.message };

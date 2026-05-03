@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowLeft,
@@ -57,6 +57,7 @@ export default function PaymentPage() {
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState(null)
   const [cashAmount, setCashAmount] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
+  const processingLockRef = useRef(false) // Synchronous guard — useState update is async and can miss double-taps
   const [orderComplete, setOrderComplete] = useState(false)
   const [orderNumber, setOrderNumber] = useState('')
   const [dailySerial, setDailySerial] = useState(null)
@@ -99,6 +100,11 @@ export default function PaymentPage() {
 
   // Permission: can this cashier accept payment?
   const [canAcceptPayment, setCanAcceptPayment] = useState(true)
+
+  // POS order behavior settings
+  const [showOrderConfirmationPopup, setShowOrderConfirmationPopup] = useState(true)
+  const [autoPrintKitchen, setAutoPrintKitchen] = useState(false)
+  const [autoPrintReceipt, setAutoPrintReceipt] = useState(false)
 useEffect(() => {
   // Check authentication
   if (!authManager.isLoggedIn()) {
@@ -211,6 +217,16 @@ useEffect(() => {
     setNetworkStatus(cacheManager.getNetworkStatus())
   }, 1000)
 
+  // Load POS order behavior settings
+  try {
+    const showConf = localStorage.getItem('pos_show_order_confirmation')
+    if (showConf !== null) setShowOrderConfirmationPopup(JSON.parse(showConf))
+    const autoKitchen = localStorage.getItem('pos_auto_print_kitchen')
+    if (autoKitchen !== null) setAutoPrintKitchen(JSON.parse(autoKitchen))
+    const autoReceipt = localStorage.getItem('pos_auto_print_receipt')
+    if (autoReceipt !== null) setAutoPrintReceipt(JSON.parse(autoReceipt))
+  } catch {}
+
   return () => clearInterval(statusInterval)
 }, [router])
 
@@ -219,6 +235,21 @@ useEffect(() => {
     setTheme(newTheme)
     themeManager.setTheme(newTheme)
   }
+
+  // Auto-print and skip popup based on admin settings
+  useEffect(() => {
+    if (!orderComplete) return
+    if (autoPrintKitchen) {
+      handlePrintKitchenToken().catch(err => console.error('Auto kitchen print failed:', err))
+    }
+    if (autoPrintReceipt) {
+      handleThermalPrint().catch(err => console.error('Auto receipt print failed:', err))
+    }
+    if (!showOrderConfirmationPopup) {
+      setTimeout(() => handleNewOrder(), 400)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderComplete])
 
   // Smart discount amounts based on total
   const generateSmartDiscounts = (total) => {
@@ -532,7 +563,9 @@ useEffect(() => {
   }
 // COMPLETE UPDATED processOrder function with delivery_charges and delivery_time fixes
 const processOrder = async () => {
-  if (!canProcessPayment() || !orderData) return
+  if (processingLockRef.current || isProcessing) return
+  processingLockRef.current = true
+  if (!canProcessPayment() || !orderData) { processingLockRef.current = false; return }
 
   // Final safety check: Account payment must have customer with name + phone
   if (selectedPaymentMethod?.requiresCustomer) {
@@ -1197,6 +1230,7 @@ const processOrder = async () => {
     console.error('Error processing order:', error)
     notify.error(`Failed to process order: ${error.message}. Please try again.`)
   } finally {
+    processingLockRef.current = false
     setIsProcessing(false)
   }
 }
@@ -1391,7 +1425,11 @@ const handleThermalPrint = async () => {
       serviceChargeValue: serviceChargeValue || 0,
       orderType: orderData.orderType || 'walkin',
       tableName: orderData.tableName || finalOrderData?.tableName || null,
-      order_taker_name: orderTakerForReceipt || null
+      order_taker_name: orderTakerForReceipt || null,
+      delivery_boy_name: orderData.delivery_boy_name ||
+        (orderData.deliveryBoyId
+          ? (cacheManager.getAllDeliveryBoys?.().find(b => b.id === orderData.deliveryBoyId)?.name || null)
+          : null)
     }
 
     // If split payment, add the payment transactions
@@ -1630,6 +1668,8 @@ const handlePrintKitchenToken = async () => {
   // Handle payment completion from split payment modal - creates order + processes payment
   const handleSplitPaymentComplete = async (payments) => {
     if (!orderData) return
+    if (processingLockRef.current || isProcessing) return
+    processingLockRef.current = true
 
     setIsProcessing(true)
 
@@ -1897,6 +1937,7 @@ const handlePrintKitchenToken = async () => {
       console.error('Error processing split payment:', error)
       notify.error(`Failed to process split payment: ${error.message}`)
     } finally {
+      processingLockRef.current = false
       setIsProcessing(false)
     }
   }

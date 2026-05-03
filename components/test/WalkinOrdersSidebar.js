@@ -1,13 +1,192 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react'
+import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
-import { Coffee, RefreshCw, ArrowLeft, Table2, ClipboardList, X, Truck, AlertCircle, User, ShoppingBag, Layers, LayoutList, ChevronDown, ChevronRight, MapPin } from 'lucide-react'
+import { Coffee, RefreshCw, ArrowLeft, Table2, ClipboardList, X, Truck, AlertCircle, User, ShoppingBag, Layers, LayoutList, ChevronDown, ChevronRight, MapPin, CheckCircle, DollarSign, CreditCard, Wallet, Smartphone, Building2, Clock, Gift } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { authManager } from '../../lib/authManager'
 import { cacheManager } from '../../lib/cacheManager'
 import dailySerialManager from '../../lib/utils/dailySerialManager'
 import { getBusinessDate } from '../../lib/utils/businessDayUtils'
+
+// ── Static constants (outside component so they are never re-created) ──────────
+const METHODS = [
+  { id: 'cash',          name: 'Cash',          label: 'Cash',          icon: DollarSign,  color: 'emerald' },
+  { id: 'easypaisa',     name: 'EasyPaisa',     label: 'EasyPaisa',     icon: Smartphone,  color: 'green'   },
+  { id: 'jazzcash',      name: 'JazzCash',      label: 'JazzCash',      icon: Smartphone,  color: 'orange'  },
+  { id: 'bank',          name: 'Bank',          label: 'Bank',          icon: Building2,   color: 'blue'    },
+  { id: 'account',       name: 'Account',       label: 'Account',       icon: CreditCard,  color: 'purple'  },
+  { id: 'unpaid',        name: 'Unpaid',        label: 'Unpaid',        icon: Clock,       color: 'gray'    },
+  { id: 'complimentary', name: 'Complimentary', label: 'Complimentary', icon: Gift,        color: 'pink'    },
+]
+
+// ── Quick-Pay modal — isolated so selecting a method / typing cash
+//    only re-renders this component, not the entire sidebar + order list ───────
+const QuickPayModal = memo(function QuickPayModal({ order, isDark, onClose, onComplete }) {
+  const [selectedMethod, setSelectedMethod] = useState('Cash')
+  const [cashInput, setCashInput] = useState('')
+
+  // Reset to cash whenever the modal is opened for a new order
+  useEffect(() => {
+    if (order) {
+      setSelectedMethod('Cash')
+      setCashInput('')
+    }
+  }, [order?.id])
+
+  const colorMap = useMemo(() => ({
+    emerald: { bg: isDark ? 'bg-emerald-900/40 border-emerald-700' : 'bg-emerald-50 border-emerald-300', text: isDark ? 'text-emerald-300' : 'text-emerald-700', icon: isDark ? 'text-emerald-400' : 'text-emerald-600', sel: 'bg-emerald-600 border-emerald-500 text-white' },
+    green:   { bg: isDark ? 'bg-green-900/40 border-green-700'   : 'bg-green-50 border-green-300',   text: isDark ? 'text-green-300'   : 'text-green-700',   icon: isDark ? 'text-green-400'   : 'text-green-600',   sel: 'bg-green-600 border-green-500 text-white'   },
+    blue:    { bg: isDark ? 'bg-blue-900/40 border-blue-700'     : 'bg-blue-50 border-blue-300',     text: isDark ? 'text-blue-300'    : 'text-blue-700',    icon: isDark ? 'text-blue-400'    : 'text-blue-600',    sel: 'bg-blue-600 border-blue-500 text-white'    },
+    purple:  { bg: isDark ? 'bg-purple-900/40 border-purple-700' : 'bg-purple-50 border-purple-300', text: isDark ? 'text-purple-300'  : 'text-purple-700',  icon: isDark ? 'text-purple-400'  : 'text-purple-600',  sel: 'bg-purple-600 border-purple-500 text-white' },
+    orange:  { bg: isDark ? 'bg-orange-900/40 border-orange-700' : 'bg-orange-50 border-orange-300', text: isDark ? 'text-orange-300'  : 'text-orange-700',  icon: isDark ? 'text-orange-400'  : 'text-orange-600',  sel: 'bg-orange-600 border-orange-500 text-white' },
+    gray:    { bg: isDark ? 'bg-gray-700/60 border-gray-600'     : 'bg-gray-100 border-gray-300',    text: isDark ? 'text-gray-300'    : 'text-gray-600',    icon: isDark ? 'text-gray-400'    : 'text-gray-500',    sel: 'bg-gray-600 border-gray-500 text-white'    },
+    pink:    { bg: isDark ? 'bg-pink-900/40 border-pink-700'     : 'bg-pink-50 border-pink-300',     text: isDark ? 'text-pink-300'    : 'text-pink-700',    icon: isDark ? 'text-pink-400'    : 'text-pink-600',    sel: 'bg-pink-600 border-pink-500 text-white'    },
+  }), [isDark])
+
+  if (!order || typeof document === 'undefined') return null
+
+  const qpTotal          = parseFloat(order.total_amount) || 0
+  const qpCashIn         = parseFloat(cashInput) || 0
+  const qpChange         = Math.max(0, qpCashIn - qpTotal)
+  const qpIsCash         = selectedMethod === 'Cash'
+  const qpAlreadyPaid    = order.payment_status?.toLowerCase() === 'paid'
+  const qpQuickAmounts   = [
+    Math.ceil(qpTotal),
+    Math.ceil(qpTotal / 10) * 10 + 10,
+    Math.ceil(qpTotal / 50) * 50,
+    Math.ceil(qpTotal / 100) * 100,
+  ].filter((v, i, a) => v > qpTotal && a.indexOf(v) === i).slice(0, 4)
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className={`relative w-[760px] max-w-[95vw] rounded-2xl shadow-2xl overflow-hidden ${isDark ? 'bg-gray-900 border border-gray-700' : 'bg-white border border-gray-200'}`}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className={`flex items-center justify-between px-6 py-4 border-b ${isDark ? 'border-gray-700 bg-gray-800' : 'border-gray-100 bg-gray-50'}`}>
+          <div>
+            <h2 className={`text-lg font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>
+              {qpAlreadyPaid ? 'Complete Order' : 'Quick Pay'}
+            </h2>
+            <p className={`text-sm ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+              Order #{order.order_number} &nbsp;·&nbsp; Total: <span className="font-semibold">{qpTotal.toFixed(2)}</span>
+            </p>
+          </div>
+          <button onClick={onClose} className={`p-2 rounded-lg ${isDark ? 'hover:bg-gray-700 text-gray-400' : 'hover:bg-gray-200 text-gray-500'}`}>
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-6">
+          {/* Payment methods — hidden if already paid */}
+          {!qpAlreadyPaid && (
+            <>
+              <p className={`text-xs font-semibold uppercase tracking-wider mb-3 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Select Payment Method</p>
+              <div className="grid grid-cols-4 gap-3 mb-5">
+                {METHODS.map(m => {
+                  const c = colorMap[m.color]
+                  const isSelected = selectedMethod === m.name
+                  const IconComp = m.icon
+                  return (
+                    <button
+                      key={m.id}
+                      onClick={() => { setSelectedMethod(m.name); if (m.id !== 'cash') setCashInput('') }}
+                      className={`flex flex-col items-center gap-2 p-3 rounded-xl border transition-all ${isSelected ? c.sel : `${c.bg} ${c.text}`} hover:opacity-90`}
+                    >
+                      <IconComp className={`w-6 h-6 ${isSelected ? 'text-white' : c.icon}`} />
+                      <span className="text-xs font-medium leading-tight text-center">{m.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+
+              {/* Cash input */}
+              {qpIsCash && (
+                <div className={`rounded-xl border p-4 mb-5 ${isDark ? 'bg-gray-800 border-gray-700' : 'bg-gray-50 border-gray-200'}`}>
+                  <p className={`text-xs font-semibold uppercase tracking-wider mb-3 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Cash Received</p>
+                  <div className="flex gap-2 mb-3">
+                    <div className={`flex-1 flex items-center rounded-lg border px-3 ${isDark ? 'bg-gray-700 border-gray-600' : 'bg-white border-gray-300'}`}>
+                      <span className={`text-sm mr-2 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>PKR</span>
+                      <input
+                        type="number"
+                        value={cashInput}
+                        onChange={e => setCashInput(e.target.value)}
+                        placeholder={qpTotal.toFixed(2)}
+                        className={`flex-1 py-2.5 bg-transparent outline-none text-sm font-semibold ${isDark ? 'text-white' : 'text-gray-900'}`}
+                        autoFocus
+                      />
+                    </div>
+                    <div className={`flex items-center gap-1 px-3 rounded-lg border ${isDark ? 'bg-gray-700 border-gray-600 text-emerald-400' : 'bg-emerald-50 border-emerald-200 text-emerald-700'}`}>
+                      <span className="text-xs">Change</span>
+                      <span className="text-sm font-bold">{qpChange.toFixed(2)}</span>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    {[qpTotal, ...qpQuickAmounts].map((amt, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setCashInput(amt.toFixed(2))}
+                        className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+                          i === 0
+                            ? (isDark ? 'bg-emerald-900/40 border-emerald-700 text-emerald-300' : 'bg-emerald-50 border-emerald-300 text-emerald-700')
+                            : (isDark ? 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600' : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-100')
+                        }`}
+                      >
+                        {i === 0 ? 'Exact' : amt.toFixed(0)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {/* Action buttons */}
+          <div className={`flex gap-3 ${qpAlreadyPaid ? '' : 'border-t pt-4 ' + (isDark ? 'border-gray-700' : 'border-gray-200')}`}>
+            {qpAlreadyPaid ? (
+              <button
+                onClick={() => { onClose(); onComplete?.(order, null, 'complete', '') }}
+                className="flex-1 py-3 rounded-xl bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold text-sm hover:opacity-90 transition-opacity"
+              >
+                Complete Order
+              </button>
+            ) : (
+              <>
+                <button
+                  disabled={!selectedMethod}
+                  onClick={() => { if (!selectedMethod) return; onClose(); onComplete?.(order, selectedMethod, 'pay', cashInput) }}
+                  className="flex-1 py-3 rounded-xl bg-gradient-to-r from-blue-500 to-blue-600 text-white font-semibold text-sm hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Mark as Paid
+                </button>
+                <button
+                  disabled={!selectedMethod}
+                  onClick={() => { if (!selectedMethod) return; onClose(); onComplete?.(order, selectedMethod, 'pay_complete', cashInput) }}
+                  className="flex-1 py-3 rounded-xl bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-semibold text-sm hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Mark as Paid + Complete
+                </button>
+              </>
+            )}
+            <button
+              onClick={onClose}
+              className={`px-5 py-3 rounded-xl border text-sm font-medium transition-colors ${isDark ? 'border-gray-600 text-gray-300 hover:bg-gray-800' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+})
 
 export default function WalkinOrdersSidebar({
   onOrderSelect,
@@ -29,13 +208,17 @@ export default function WalkinOrdersSidebar({
   onDealsClick,
   onOrdersLoaded, // optional: called with fresh orders after each fetch
   onTypeTabChange, // optional: called when sidebar type tab changes (for syncing with parent)
+  onQuickComplete, // optional: (order, paymentMethod) → called for quick-complete without opening order
 }) {
   const [orders, setOrders] = useState([])
   const [loading, setLoading] = useState(!showTypeTabs)
   const [refreshing, setRefreshing] = useState(false)
   const [showOrders, setShowOrders] = useState(false)
+  const [tabCounts, setTabCounts] = useState({ walkin: 0, takeaway: 0, delivery: 0 })
   const [isGrouped, setIsGrouped] = useState(menus.length > 0)
   const [collapsedMenus, setCollapsedMenus] = useState({})
+  const [quickPayModalOrder, setQuickPayModalOrder] = useState(null)
+  const closeQuickPayModal = useCallback(() => setQuickPayModalOrder(null), [])
 
   const toggleMenuCollapse = (menuId) => {
     setCollapsedMenus(prev => ({ ...prev, [menuId]: !prev[menuId] }))
@@ -64,6 +247,33 @@ export default function WalkinOrdersSidebar({
     { id: 'takeaway', label: 'Take Away', icon: ShoppingBag, gradient: 'from-orange-500 to-amber-500' },
     { id: 'delivery', label: 'Delivery', icon: Truck, gradient: 'from-emerald-500 to-teal-600' },
   ]
+
+  const fetchTabCounts = useCallback(async () => {
+    if (!showTypeTabs) return
+    const user = authManager.getCurrentUser()
+    if (!user) return
+    const ACTIVE = ['Pending', 'Preparing', 'Ready', 'Dispatched']
+    if (navigator.onLine && cacheManager.isOnline) {
+      const { data } = await supabase
+        .from('orders')
+        .select('order_type')
+        .eq('user_id', user.id)
+        .in('order_type', ['walkin', 'takeaway', 'delivery'])
+        .in('order_status', ACTIVE)
+      if (data) {
+        const counts = { walkin: 0, takeaway: 0, delivery: 0 }
+        data.forEach(o => { if (counts[o.order_type] !== undefined) counts[o.order_type]++ })
+        setTabCounts(counts)
+      }
+    } else {
+      const all = cacheManager.getAllOrders()
+      const counts = { walkin: 0, takeaway: 0, delivery: 0 }
+      all.forEach(o => {
+        if (ACTIVE.includes(o.order_status) && counts[o.order_type] !== undefined) counts[o.order_type]++
+      })
+      setTabCounts(counts)
+    }
+  }, [showTypeTabs])
 
   // Fast scroll — multiply wheel delta so the list scrolls further per notch
   useEffect(() => {
@@ -385,6 +595,7 @@ export default function WalkinOrdersSidebar({
     } finally {
       setLoading(false)
       setRefreshing(false)
+      fetchTabCounts()
     }
   }
 
@@ -447,6 +658,8 @@ export default function WalkinOrdersSidebar({
     return formattedOrderNumber
   }
 
+
+
   return (
     <div className={`w-64 h-full ${classes.card} ${classes.shadow} shadow-xl ${classes.border} border-r flex flex-col`}>
       {/* Header - Same as CategorySidebar */}
@@ -479,7 +692,7 @@ export default function WalkinOrdersSidebar({
                 if (showTypeTabs) {
                   const next = !showOrders
                   setShowOrders(next)
-                  if (next) { setLoading(true); fetchPendingOrders() }
+                  if (next) { setLoading(true); fetchPendingOrders(); fetchTabCounts() }
                   else { onClose?.() } // closing panel → also close any open order details in parent
                 } else {
                   onClose()
@@ -530,6 +743,7 @@ export default function WalkinOrdersSidebar({
           <div className={`flex rounded-xl overflow-hidden border ${isDark ? 'border-gray-600' : 'border-gray-200'}`}>
             {TYPE_TABS.map((tab, i) => {
               const isActive = activeTypeTab === tab.id
+              const count = tabCounts[tab.id] || 0
               return (
                 <button
                   key={tab.id}
@@ -537,7 +751,7 @@ export default function WalkinOrdersSidebar({
                     setActiveTypeTab(tab.id) // triggers effectiveOrderType change → useEffect fetches
                     onTypeTabChange?.(tab.id) // sync parent's activeOrderType
                   }}
-                  className={`flex-1 flex flex-col items-center gap-0.5 py-1.5 px-1 text-[11px] font-semibold transition-all duration-200 ${
+                  className={`relative flex-1 flex flex-col items-center gap-0.5 py-1.5 px-1 text-[11px] font-semibold transition-all duration-200 ${
                     i !== 0 ? (isDark ? 'border-l border-gray-600' : 'border-l border-gray-200') : ''
                   } ${
                     isActive
@@ -549,6 +763,13 @@ export default function WalkinOrdersSidebar({
                 >
                   <tab.icon className="w-3 h-3" />
                   <span className="leading-tight text-center">{tab.label}</span>
+                  {count > 0 && (
+                    <span className={`absolute -top-1 -right-1 min-w-[16px] h-4 px-0.5 rounded-full text-[9px] font-bold flex items-center justify-center ${
+                      isActive ? 'bg-white/30 text-white' : 'bg-red-500 text-white'
+                    }`}>
+                      {count > 99 ? '99+' : count}
+                    </span>
+                  )}
                 </button>
               )
             })}
@@ -633,51 +854,63 @@ export default function WalkinOrdersSidebar({
           // Orders list
           <div className="space-y-2">
             {orders.map((order) => (
-              <motion.button
+              <motion.div
                 key={order.id}
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
-                onClick={() => onOrderSelect(order)}
-                className={`w-full text-left p-3 rounded-lg transition-all duration-200 ${
+                whileHover={{ scale: 1.01 }}
+                className={`w-full rounded-lg transition-all duration-200 overflow-hidden ${
                   selectedOrderId === order.id
                     ? isDark
                       ? 'bg-green-900/30 border border-green-700'
                       : 'bg-green-50 border border-green-300'
                     : isDark
-                      ? 'bg-gray-700/50 hover:bg-gray-700'
-                      : 'bg-gray-50 hover:bg-gray-100'
+                      ? 'bg-gray-700/50 border border-gray-600/30'
+                      : 'bg-gray-50 border border-gray-200'
                 }`}
               >
-                <div className="flex items-start justify-between mb-2">
-                  <div className="flex items-center">
-                    <div className={`w-8 h-8 rounded-full ${isDark ? 'bg-blue-900/30' : 'bg-blue-100'} flex items-center justify-center mr-2`}>
-                      <Coffee className={`w-4 h-4 ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
-                    </div>
-                    <div>
-                      <div className={`font-semibold ${classes.textPrimary} text-sm`}>
-                        {formatOrderDisplay(order)}
+                {/* Clickable card area */}
+                <div
+                  onClick={() => onOrderSelect(order)}
+                  className="p-3 cursor-pointer"
+                >
+                  {/* Row 1: order number + amount */}
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className={`w-7 h-7 rounded-full flex-shrink-0 ${isDark ? 'bg-blue-900/30' : 'bg-blue-100'} flex items-center justify-center`}>
+                        <Coffee className={`w-3.5 h-3.5 ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
                       </div>
-                      <div className={`text-xs ${classes.textSecondary}`}>
-                        {effectiveOrderType === 'walkin' ? 'Walkin' : effectiveOrderType === 'takeaway' ? 'Takeaway' : 'Delivery'}
+                      <div className="min-w-0">
+                        {(() => {
+                          const display = formatOrderDisplay(order)
+                          const spaceIdx = display.indexOf(' ')
+                          const serial = spaceIdx > 0 ? display.slice(0, spaceIdx) : display
+                          const num    = spaceIdx > 0 ? display.slice(spaceIdx + 1) : null
+                          return (
+                            <>
+                              <div className={`font-bold text-sm leading-tight ${classes.textPrimary}`}>{serial}</div>
+                              {num && <div className={`text-[10px] leading-tight ${classes.textSecondary} opacity-60`}>{num}</div>}
+                            </>
+                          )
+                        })()}
+                      </div>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <div className={`font-bold text-sm leading-tight ${isDark ? 'text-green-400' : 'text-green-600'}`}>
+                        Rs {parseFloat(order.total_amount || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}
+                      </div>
+                      <div className={`text-[10px] leading-tight ${classes.textSecondary}`}>
+                        {formatTime(order.order_time)}
                       </div>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <div className={`font-bold ${isDark ? 'text-green-400' : 'text-green-600'} text-sm`}>
-                      Rs {order.total_amount}
-                    </div>
-                    <div className={`text-xs ${classes.textSecondary}`}>
-                      {formatTime(order.order_time)}
-                    </div>
-                  </div>
-                </div>
 
-                <div className="flex justify-between items-center gap-1">
-                  <div className={`text-xs ${classes.textSecondary} truncate max-w-[80px]`}>
-                    {order.customers?.full_name || 'Walk-in Customer'}
+                  {/* Row 2: customer name */}
+                  <div className={`text-xs font-medium ${classes.textSecondary} mb-1`}>
+                    {order.customers?.full_name || 'Walk-in'}
                   </div>
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${getStatusColor(order.order_status)}`}>
+
+                  {/* Row 3: status badges */}
+                  <div className="flex items-center gap-1 mb-2">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${getStatusColor(order.order_status)}`}>
                       {order.order_status}
                     </span>
                     <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
@@ -688,69 +921,95 @@ export default function WalkinOrdersSidebar({
                       {order.payment_status === 'Paid' ? 'Paid' : 'Unpaid'}
                     </span>
                   </div>
+
+                  {/* Row 3: taker + cashier in one compact line */}
+                  <div className={`flex items-center gap-1 pt-1.5 border-t ${isDark ? 'border-gray-600/60' : 'border-gray-200'} ${classes.textSecondary} text-xs`}>
+                    {order.order_takers?.name && (
+                      <>
+                        <User className="w-3 h-3 flex-shrink-0" />
+                        <span className="truncate">{order.order_takers.name}</span>
+                        <span className="mx-0.5 opacity-40 flex-shrink-0">·</span>
+                      </>
+                    )}
+                    <User className={`w-3 h-3 flex-shrink-0 opacity-50`} />
+                    <span className="truncate">
+                      {order.cashier_id
+                        ? (order.cashiers?.name || 'Cashier')
+                        : (order.users?.customer_name || 'Admin')}
+                    </span>
+                  </div>
+
+                  {/* Table info — walkin only */}
+                  {effectiveOrderType === 'walkin' && order.tables && (
+                    <div className={`flex items-center gap-1 mt-1.5 pt-1.5 border-t ${isDark ? 'border-gray-600/60' : 'border-gray-200'}`}>
+                      <Table2 className={`w-3 h-3 flex-shrink-0 ${isDark ? 'text-purple-400' : 'text-purple-600'}`} />
+                      <span className={`text-xs font-medium truncate ${isDark ? 'text-purple-400' : 'text-purple-600'}`}>
+                        {order.tables.table_name || `Table ${order.tables.table_number}`}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Delivery: address + rider */}
+                  {effectiveOrderType === 'delivery' && (
+                    <>
+                      {(order.delivery_address || order.customers?.addressline) && (
+                        <div className={`flex items-start gap-1 mt-1.5 pt-1.5 border-t ${isDark ? 'border-gray-600/60' : 'border-gray-200'}`}>
+                          <MapPin className={`w-3 h-3 mt-0.5 flex-shrink-0 ${isDark ? 'text-green-400' : 'text-green-600'}`} />
+                          <span className={`text-xs line-clamp-1 ${isDark ? 'text-green-400' : 'text-green-600'}`}>
+                            {order.delivery_address || order.customers?.addressline}
+                          </span>
+                        </div>
+                      )}
+                      <div className={`flex items-center gap-1 mt-1.5 pt-1.5 border-t ${isDark ? 'border-gray-600/60' : 'border-gray-200'}`}>
+                        {order.delivery_boys ? (
+                          <>
+                            <Truck className={`w-3 h-3 flex-shrink-0 ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
+                            <span className={`text-xs font-medium truncate ${isDark ? 'text-blue-400' : 'text-blue-600'}`}>
+                              {order.delivery_boys.name}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className={`w-3 h-3 flex-shrink-0 ${isDark ? 'text-orange-400' : 'text-orange-600'}`} />
+                            <span className={`text-xs ${isDark ? 'text-orange-400' : 'text-orange-600'}`}>No rider</span>
+                          </>
+                        )}
+                      </div>
+                    </>
+                  )}
                 </div>
 
-                {/* Show table info for walkin orders */}
-                {effectiveOrderType === 'walkin' && order.tables && (
-                  <div className={`flex items-center gap-1 mt-1.5 pt-1.5 border-t ${isDark ? 'border-gray-600' : 'border-gray-200'}`}>
-                    <Table2 className={`w-3 h-3 ${isDark ? 'text-purple-400' : 'text-purple-600'}`} />
-                    <span className={`text-xs ${isDark ? 'text-purple-400' : 'text-purple-600'} font-medium`}>
-                      {order.tables.table_name || `Table ${order.tables.table_number}`}
-                    </span>
-                  </div>
-                )}
-
-                {/* Show address for delivery orders */}
-                {effectiveOrderType === 'delivery' && (order.delivery_address || order.customers?.addressline) && (
-                  <div className={`flex items-start gap-1 mt-1.5 pt-1.5 border-t ${isDark ? 'border-gray-600' : 'border-gray-200'}`}>
-                    <MapPin className={`w-3 h-3 mt-0.5 flex-shrink-0 ${isDark ? 'text-green-400' : 'text-green-600'}`} />
-                    <span className={`text-xs ${isDark ? 'text-green-400' : 'text-green-600'} line-clamp-2`}>
-                      {order.delivery_address || order.customers?.addressline}
-                    </span>
-                  </div>
-                )}
-
-                {/* Show rider info for delivery orders */}
-                {effectiveOrderType === 'delivery' && (
-                  <div className={`flex items-center gap-1 mt-1.5 pt-1.5 border-t ${isDark ? 'border-gray-600' : 'border-gray-200'}`}>
-                    {order.delivery_boys ? (
-                      <>
-                        <Truck className={`w-3 h-3 ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
-                        <span className={`text-xs ${isDark ? 'text-blue-400' : 'text-blue-600'} font-medium`}>
-                          {order.delivery_boys.name}
-                        </span>
-                      </>
+                {/* Quick-complete actions */}
+                {onQuickComplete && (
+                  <div className={`px-3 pb-3 pt-0`}>
+                    {order.payment_status === 'Paid' ? (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onQuickComplete(order, null, 'complete') }}
+                        className={`w-full py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border ${
+                          isDark
+                            ? 'bg-emerald-900/40 hover:bg-emerald-800/60 text-emerald-300 border-emerald-700/50'
+                            : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200'
+                        }`}
+                      >
+                        <CheckCircle className="w-3.5 h-3.5" />
+                        Complete Order
+                      </button>
                     ) : (
-                      <>
-                        <AlertCircle className={`w-3 h-3 ${isDark ? 'text-orange-400' : 'text-orange-600'}`} />
-                        <span className={`text-xs ${isDark ? 'text-orange-400' : 'text-orange-600'} font-medium`}>
-                          No rider assigned
-                        </span>
-                      </>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setQuickPayModalOrder(order) }}
+                        className={`w-full py-2 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border ${
+                          isDark
+                            ? 'bg-blue-900/40 hover:bg-blue-800/60 text-blue-300 border-blue-700/50'
+                            : 'bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200'
+                        }`}
+                      >
+                        <Wallet className="w-3.5 h-3.5" />
+                        Quick Pay
+                      </button>
                     )}
                   </div>
                 )}
-
-                {/* Show order taker info */}
-                {order.order_takers?.name && (
-                  <div className={`flex items-center gap-1 mt-1.5 pt-1.5 border-t ${isDark ? 'border-gray-600' : 'border-gray-200'}`}>
-                    <User className={`w-3 h-3 ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
-                    <span className={`text-xs ${isDark ? 'text-blue-400' : 'text-blue-600'} font-medium`}>
-                      {order.order_takers.name}
-                    </span>
-                  </div>
-                )}
-
-                {/* Show cashier/admin info */}
-                <div className={`flex items-center gap-1 mt-1.5 pt-1.5 border-t ${isDark ? 'border-gray-600' : 'border-gray-200'}`}>
-                  <User className={`w-3 h-3 ${isDark ? 'text-gray-400' : 'text-gray-600'}`} />
-                  <span className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-600'} font-medium`}>
-                    {order.cashier_id
-                      ? (order.cashiers?.name || 'Cashier')
-                      : (order.users?.customer_name || 'Admin')}
-                  </span>
-                </div>
-              </motion.button>
+              </motion.div>
             ))}
           </div>
         )}
@@ -882,6 +1141,13 @@ export default function WalkinOrdersSidebar({
           )}
         </div>
       )}
+
+      <QuickPayModal
+        order={quickPayModalOrder}
+        isDark={isDark}
+        onClose={closeQuickPayModal}
+        onComplete={onQuickComplete}
+      />
     </div>
   )
 }

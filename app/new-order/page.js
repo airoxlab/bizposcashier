@@ -21,7 +21,7 @@ import TableSelectionPanel from '../../components/test/TableSelectionPanel'
 import loyaltyManager from '../../lib/loyaltyManager'
 import { webOrderNotificationManager } from '../../lib/webOrderNotification'
 import { usePermissions } from '../../lib/permissionManager'
-import { Users, ShoppingBag, Truck, FileText } from 'lucide-react'
+import { Users, ShoppingBag, Truck, FileText, Printer, CheckCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
 import PosToaster from '@/components/ui/PosToaster'
 import SplitPaymentModal from '../../components/pos/SplitPaymentModal'
@@ -113,6 +113,9 @@ export default function NewOrderPage() {
   const [ordersRefreshTrigger, setOrdersRefreshTrigger] = useState(0)
   const [showSplitPaymentModal, setShowSplitPaymentModal] = useState(false)
   const [splitPaymentOrder, setSplitPaymentOrder] = useState(null)
+  const [showSuccessModal, setShowSuccessModal] = useState(false)
+  const [completedOrderData, setCompletedOrderData] = useState(null)
+  const [isPrinting, setIsPrinting] = useState(false)
 
   // Reopened/modified order state
   const [isReopenedOrder, setIsReopenedOrder] = useState(false)
@@ -244,6 +247,25 @@ export default function NewOrderPage() {
       const savedExtras = localStorage.getItem(`${tab.storageKey}_extras`)
       if (savedExtras) try { restoredExtras[tab.id] = JSON.parse(savedExtras) } catch {}
     })
+    // Seed default delivery charge immediately (same pattern as delivery page)
+    // so the total is correct before the user opens InlineCustomerPanel
+    if (!restoredExtras.delivery.deliveryCharges) {
+      try {
+        const raw = localStorage.getItem('pos_default_delivery_charge')
+        if (raw) {
+          const parsed = JSON.parse(raw)
+          if (parsed?.type === 'fixed' && parsed?.value > 0) {
+            restoredExtras.delivery.deliveryCharges = parsed.value
+          }
+        }
+      } catch {}
+      if (!restoredExtras.delivery.deliveryCharges) {
+        const dc = cacheManager.getDefaultDeliveryCharge?.()
+        if (dc?.type === 'fixed' && dc?.value > 0) {
+          restoredExtras.delivery.deliveryCharges = dc.value
+        }
+      }
+    }
 
     const savedTable = localStorage.getItem('new_order_walkin_table')
     if (savedTable) try { setSelectedTable(JSON.parse(savedTable)) } catch {}
@@ -321,40 +343,21 @@ export default function NewOrderPage() {
 
   const checkAndLoadData = async () => {
     try {
-      // If cache already has data, load instantly — no spinner
       if (cacheManager.isReady()) {
         loadCachedData()
         setIsDataReady(true)
         setIsLoading(false)
         return
       }
-
       setIsLoading(true)
-      const loadingId = notify.loading('Loading menu data...')
-      let attempts = 0
-
-      const checkInterval = setInterval(() => {
-        attempts++
-        if (cacheManager.isReady()) {
-          clearInterval(checkInterval)
-          notify.remove(loadingId)
-          loadCachedData()
-          setIsDataReady(true)
-          setIsLoading(false)
-        } else if (attempts >= 30) {
-          clearInterval(checkInterval)
-          notify.remove(loadingId)
-          cacheManager.initializeCache().then(() => {
-            if (cacheManager.isReady()) {
-              loadCachedData()
-              setIsDataReady(true)
-            } else {
-              notify.error('Failed to load menu data.')
-            }
-            setIsLoading(false)
-          })
-        }
-      }, 100)
+      await cacheManager.initializeCache()
+      if (cacheManager.isReady()) {
+        loadCachedData()
+        setIsDataReady(true)
+      } else {
+        notify.error('Failed to load menu data.')
+      }
+      setIsLoading(false)
     } catch {
       setIsLoading(false)
     }
@@ -503,7 +506,14 @@ export default function NewOrderPage() {
   }
 
   const calculateSubtotal = () => cart.reduce((sum, item) => sum + item.totalPrice, 0)
-  const calculateTotal = () => calculateSubtotal()
+  const calculateTotal = () => {
+    const subtotal = calculateSubtotal()
+    if (activeOrderType === 'delivery') {
+      const dc = parseFloat(orderExtras.delivery?.deliveryCharges) || 0
+      return subtotal + dc
+    }
+    return subtotal
+  }
 
   const handleBackClick = () => {
     if (currentView !== 'products') {
@@ -1317,6 +1327,119 @@ export default function NewOrderPage() {
     }
   }
 
+  const handlePrintReceipt = async (overrideOrderData = null) => {
+    const printData = overrideOrderData || completedOrderData
+    if (!printData) return
+    setIsPrinting(true)
+    try {
+      if (!printerManager.isElectron()) {
+        notify.warning('Printing is only available in the desktop app.')
+        return
+      }
+      if (user?.id) printerManager.setUserId(user.id)
+      const printerConfig = await printerManager.getPrinterForPrinting()
+      if (!printerConfig) {
+        notify.warning('No printer configured. Please configure a printer in Settings.')
+        return
+      }
+      const userProfileRaw = JSON.parse(
+        localStorage.getItem('user_profile') || localStorage.getItem('user') || '{}'
+      )
+      const localLogo = localStorage.getItem('store_logo_local')
+      const localQr = localStorage.getItem('qr_code_local')
+      const order = printData.order
+      const cashierName = order?.cashier_id
+        ? (order.cashiers?.name || 'Cashier')
+        : (order?.users?.customer_name || 'Admin')
+      const userProfileData = {
+        store_name: userProfileRaw?.store_name || '',
+        store_address: userProfileRaw?.store_address || '',
+        phone: userProfileRaw?.phone || '',
+        store_logo: localLogo || userProfileRaw?.store_logo || null,
+        qr_code: localQr || userProfileRaw?.qr_code || null,
+        hashtag1: userProfileRaw?.hashtag1 || '',
+        hashtag2: userProfileRaw?.hashtag2 || '',
+        show_footer_section: userProfileRaw?.show_footer_section !== false,
+        show_logo_on_receipt: userProfileRaw?.show_logo_on_receipt !== false,
+        show_business_name_on_receipt: userProfileRaw?.show_business_name_on_receipt !== false,
+        cashier_name: order?.cashier_id ? cashierName : null,
+        customer_name: !order?.cashier_id ? cashierName : null,
+      }
+      const completedOrderTakerName = order?.order_takers?.name ||
+        (order?.order_taker_id
+          ? (cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null)
+          : null)
+      const { order: _rawOrder, ...printDataWithoutOrder } = printData
+      const finalPrintData = {
+        ...printDataWithoutOrder,
+        orderId: printData.order?.id || printData.orderId,
+        order_taker_name: completedOrderTakerName || null
+      }
+      const result = await printerManager.printReceipt(finalPrintData, userProfileData, printerConfig)
+      if (result.success) {
+        notify.success('Receipt printed successfully')
+        setShowSuccessModal(false)
+      } else {
+        notify.error(`Failed to print receipt: ${result.error || 'Unknown error'}`)
+      }
+    } catch (error) {
+      console.error('Error printing receipt:', error)
+      notify.error(`Error printing receipt: ${error.message}`)
+    } finally {
+      setIsPrinting(false)
+    }
+  }
+
+  const handleQuickCompleteOrder = async (order, paymentMethod, action, cashReceived) => {
+    try {
+      if (!paymentMethod || action === 'complete') {
+        await handleCompleteAlreadyPaidOrder(order)
+      } else {
+        const total = order.total_amount
+        const cash = parseFloat(cashReceived) || total
+        const scAmount = parseFloat(order.service_charge_amount || 0)
+        const scPct    = parseFloat(order.service_charge_percentage || 0)
+        await handlePaymentRequired(order, {
+          paymentMethod,
+          newTotal: total,
+          discountAmount: parseFloat(order.discount_amount || 0),
+          discountType: 'percentage',
+          discountValue: parseFloat(order.discount_percentage || 0),
+          serviceChargeAmount: scAmount,
+          serviceChargeType: 'percentage',
+          serviceChargeValue: scPct,
+          changeAmount: Math.max(0, cash - total),
+          cashAmount: cash,
+          completeOrder: action === 'pay_complete',
+        })
+      }
+      setOrdersRefreshTrigger(prev => prev + 1)
+      if (action === 'pay_complete') {
+        const total = order.total_amount
+        const cash = parseFloat(cashReceived) || total
+        setCompletedOrderData({
+          orderNumber: order.order_number || order.daily_serial_number,
+          total: total,
+          paymentMethod: paymentMethod || order.payment_method || 'Cash',
+          orderType: order.order_type || 'walkin',
+          discountAmount: parseFloat(order.discount_amount || 0),
+          changeAmount: Math.max(0, cash - total),
+          deliveryCharges: order.delivery_charges || 0,
+          deliveryAddress: order.delivery_address || null,
+          delivery_boy_name: order.delivery_boys?.name ||
+            (order.delivery_boy_id
+              ? (cacheManager.getAllDeliveryBoys?.().find(b => b.id === order.delivery_boy_id)?.name || null)
+              : null),
+          order: order,
+        })
+        setShowSuccessModal(true)
+      }
+    } catch (err) {
+      console.error('Quick complete failed:', err)
+      toast.error('Quick complete failed: ' + err.message)
+    }
+  }
+
   return (
     <div className={`h-screen flex ${classes.background} overflow-hidden transition-all duration-500`}>
       <PosToaster isDark={isDark} toastOptions={{ duration: 2000 }} />
@@ -1344,6 +1467,7 @@ export default function NewOrderPage() {
           onCategoryClick={(id) => productGridRef.current?.scrollToCategory(id)}
           onDealsClick={() => productGridRef.current?.scrollToDeals()}
           onTypeTabChange={handleTabSwitch}
+          onQuickComplete={handleQuickCompleteOrder}
         />
 
       {/* Center - Dynamic Content */}
@@ -1478,6 +1602,78 @@ export default function NewOrderPage() {
           isDark={isDark}
           classes={classes}
         />
+      )}
+
+      {/* Quick Pay Success Modal */}
+      {showSuccessModal && completedOrderData && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className={`${isDark ? 'bg-gray-900' : 'bg-white'} rounded-3xl p-8 max-w-md w-full shadow-2xl`}>
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <CheckCircle className="w-8 h-8 text-green-600" />
+              </div>
+              <h2 className={`text-2xl font-bold ${classes.textPrimary}`}>Order Complete!</h2>
+            </div>
+
+            <div className={`${isDark ? 'bg-gray-800/50' : 'bg-gray-50'} rounded-2xl p-4 mb-6 border ${classes.border}`}>
+              <p className={`text-sm ${classes.textSecondary} mb-1`}>Order Number</p>
+              <p className="text-2xl font-bold text-purple-600">{completedOrderData.orderNumber}</p>
+            </div>
+
+            <div className="space-y-2 mb-6 text-left">
+              <div className="flex justify-between">
+                <span className={classes.textSecondary}>Total Amount:</span>
+                <span className={`font-semibold ${classes.textPrimary}`}>Rs {(completedOrderData.total || 0).toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className={classes.textSecondary}>Payment Method:</span>
+                <span className={`font-semibold ${classes.textPrimary}`}>{completedOrderData.paymentMethod || 'N/A'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className={classes.textSecondary}>Order Type:</span>
+                <span className={`font-semibold ${classes.textPrimary} capitalize`}>{completedOrderData.orderType || 'walkin'}</span>
+              </div>
+              {completedOrderData.discountAmount > 0 && (
+                <div className={`flex justify-between ${isDark ? 'text-green-400' : 'text-green-600'}`}>
+                  <span>Discount Applied:</span>
+                  <span className="font-semibold">Rs {(completedOrderData.discountAmount || 0).toFixed(2)}</span>
+                </div>
+              )}
+              {completedOrderData.changeAmount > 0 && (
+                <div className={`flex justify-between ${isDark ? 'text-green-400' : 'text-green-600'}`}>
+                  <span>Change to Return:</span>
+                  <span className="font-semibold">Rs {completedOrderData.changeAmount.toFixed(2)}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-3">
+              <button
+                onClick={() => handlePrintReceipt()}
+                disabled={isPrinting}
+                className={`w-full px-6 py-3 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 text-white font-semibold rounded-xl transition-all duration-200 flex items-center justify-center ${isPrinting ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                {isPrinting ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
+                    Printing...
+                  </>
+                ) : (
+                  <>
+                    <Printer className="w-5 h-5 mr-2" />
+                    Print Receipt
+                  </>
+                )}
+              </button>
+              <button
+                onClick={() => setShowSuccessModal(false)}
+                className={`w-full px-6 py-3 ${isDark ? 'bg-gray-700 hover:bg-gray-600 text-white' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'} font-semibold rounded-xl transition-all duration-200`}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Exit Confirmation Modal */}
