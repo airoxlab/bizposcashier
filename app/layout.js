@@ -2,6 +2,8 @@ import './globals.css'
 import Script from 'next/script'
 import NotificationSystem from '../components/ui/NotificationSystem'
 import GlobalPrintListener from '../components/GlobalPrintListener'
+import TrialBanner from '../components/TrialBanner'
+import TrialExpiredGate from '../components/TrialExpiredGate'
 
 export const metadata = {
   title: 'BizPOS - Point of Sale System',
@@ -38,8 +40,11 @@ export default function RootLayout({ children }) {
         <Script id="theme-init" strategy="beforeInteractive" dangerouslySetInnerHTML={{ __html: setInitialThemeScript }} />
       </head>
       <body className="font-sans" suppressHydrationWarning>
+        <TrialBanner />
         <GlobalPrintListener />
-        {children}
+        <TrialExpiredGate>
+          {children}
+        </TrialExpiredGate>
         <NotificationSystem />
       </body>
     </html>

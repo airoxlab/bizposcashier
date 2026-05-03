@@ -27,6 +27,7 @@ import { printerManager } from "../../lib/printerManager";
 import { cacheManager } from "../../lib/cacheManager";
 import dailySerialManager from "../../lib/utils/dailySerialManager";
 import ProtectedPage from "../../components/ProtectedPage";
+import PlanGate from "../../components/ui/PlanGate";
 import Modal from "../../components/ui/Modal";
 import NotificationSystem, { notify } from "../../components/ui/NotificationSystem";
 
@@ -454,6 +455,7 @@ export default function RidersOrdersPage() {
   const isDark = themeManager.isDark();
 
   return (
+    <PlanGate feature="rider_management">
     <ProtectedPage permissionKey="RIDERS" pageName="Riders Management">
       <div className={`min-h-screen ${classes.background} transition-all duration-500`}>
         {/* Header */}
@@ -909,5 +911,6 @@ export default function RidersOrdersPage() {
         <NotificationSystem />
       </div>
     </ProtectedPage>
+    </PlanGate>
   );
 }

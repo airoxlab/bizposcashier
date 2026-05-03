@@ -50,6 +50,7 @@ import { getOrderChanges, getOrderItemsWithChanges } from '../../lib/utils/order
 import { triggerWhatsAppAutoSend } from '../../lib/whatsappAutoSend'
 import NotificationSystem, { notify } from '../../components/ui/NotificationSystem'
 import ProtectedPage from '../../components/ProtectedPage'
+import PlanGate from '../../components/ui/PlanGate'
 
 export default function KDSPage() {
   const router = useRouter()
@@ -1285,6 +1286,7 @@ export default function KDSPage() {
   }
 
   return (
+    <PlanGate feature="kds">
     <ProtectedPage permissionKey="KDS" pageName="Kitchen Display System">
       <div className={`min-h-screen ${classes.background}`}>
         {/* Hidden audio element for notifications */}
@@ -1751,5 +1753,6 @@ export default function KDSPage() {
       <NotificationSystem />
       </div>
     </ProtectedPage>
+    </PlanGate>
   )
 }
