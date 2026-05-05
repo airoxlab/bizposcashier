@@ -879,6 +879,13 @@ const autoDiscoverPrinters = async () => {
       if (result.success && result.printers && result.printers.length > 0) {
         // Filter out printers that are already configured
         const newPrinters = result.printers.filter(usbPrinter => {
+          if (usbPrinter.isWindowsPrinter) {
+            // Windows printers are stored as WINUSB:<name>
+            return !printers.some(p =>
+              p.usb_device_path === `WINUSB:${usbPrinter.port}` ||
+              p.usb_printer_name === usbPrinter.port
+            )
+          }
           return !printers.some(p =>
             (p.usb_device_path === usbPrinter.port) ||
             (p.usb_port === usbPrinter.port)
@@ -1041,12 +1048,27 @@ const autoDiscoverPrinters = async () => {
   }
 
   const addDetectedUSBPrinter = (usbPrinter) => {
-    setFormData({
-      name: usbPrinter.name,
-      printer_type: 'usb',
-      usb_port: usbPrinter.port,
-      is_default: printers.length === 0 // Make first printer default
-    })
+    if (usbPrinter.isWindowsPrinter) {
+      setFormData({
+        name: usbPrinter.name,
+        printer_type: 'windows_usb',
+        usb_printer_name: usbPrinter.port,
+        usb_port: '',
+        ip_address: '',
+        port: '9100',
+        is_default: printers.length === 0
+      })
+    } else {
+      setFormData({
+        name: usbPrinter.name,
+        printer_type: 'usb',
+        usb_port: usbPrinter.port,
+        usb_printer_name: '',
+        ip_address: '',
+        port: '9100',
+        is_default: printers.length === 0
+      })
+    }
     setShowAddModal(true)
     setDetectedUSBPrinters(prev => prev.filter(p => p.port !== usbPrinter.port))
   }
@@ -1218,12 +1240,12 @@ const autoDiscoverPrinters = async () => {
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
-              className={`${classes.border} border-b ${isDark ? 'bg-blue-900/10' : 'bg-blue-50'}`}
+              className={`${classes.border} border-b ${isDark ? 'bg-blue-900/10' : 'bg-blue-50'} max-h-48 overflow-y-auto`}
             >
               <div className="p-4">
-                <h3 className={`text-sm font-bold ${classes.textPrimary} mb-3 flex items-center`}>
-                  <Usb className="w-4 h-4 mr-2 text-blue-600" />
-                  Found {detectedUSBPrinters.length} USB Printer(s)
+                <h3 className={`text-sm font-bold ${classes.textPrimary} mb-3 flex items-center sticky top-0 ${isDark ? 'bg-blue-900/10' : 'bg-blue-50'} -mx-4 px-4 py-2`}>
+                  <Printer className="w-4 h-4 mr-2 text-blue-600" />
+                  Found {detectedUSBPrinters.length} Printer(s)
                 </h3>
                 <div className="space-y-2">
                   {detectedUSBPrinters.map((printer, index) => (
@@ -1235,15 +1257,18 @@ const autoDiscoverPrinters = async () => {
                       className={`${classes.card} ${classes.border} border rounded-xl p-3 flex justify-between items-center hover:shadow-md transition-all`}
                     >
                       <div className="flex items-center space-x-3">
-                        <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
-                          <Usb className="w-4 h-4 text-blue-600" />
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${printer.isWindowsPrinter ? 'bg-green-100' : 'bg-blue-100'}`}>
+                          {printer.isWindowsPrinter
+                            ? <Monitor className="w-4 h-4 text-green-600" />
+                            : <Usb className="w-4 h-4 text-blue-600" />
+                          }
                         </div>
                         <div>
                           <div className={`font-medium ${classes.textPrimary} text-sm`}>
-                            {printer.port}
-                          </div>
-                          <div className={`text-xs ${classes.textSecondary}`}>
                             {printer.name}
+                          </div>
+                          <div className={`text-xs ${printer.isWindowsPrinter ? 'text-green-600' : classes.textSecondary}`}>
+                            {printer.isWindowsPrinter ? 'Windows Printer' : printer.port}
                           </div>
                           {printer.manufacturer && printer.manufacturer !== 'Unknown' && (
                             <div className={`text-xs ${classes.textSecondary}`}>
@@ -1275,10 +1300,10 @@ const autoDiscoverPrinters = async () => {
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
-              className={`${classes.border} border-b ${isDark ? 'bg-green-900/10' : 'bg-green-50'}`}
+              className={`${classes.border} border-b ${isDark ? 'bg-green-900/10' : 'bg-green-50'} max-h-48 overflow-y-auto`}
             >
               <div className="p-4">
-                <h3 className={`text-sm font-bold ${classes.textPrimary} mb-3 flex items-center`}>
+                <h3 className={`text-sm font-bold ${classes.textPrimary} mb-3 flex items-center sticky top-0 ${isDark ? 'bg-green-900/10' : 'bg-green-50'} -mx-4 px-4 py-2`}>
                   <Zap className="w-4 h-4 mr-2 text-green-600" />
                   Found {discoveredPrinters.length} Printer(s)
                 </h3>

@@ -911,6 +911,7 @@ try {
 Write-Output "OK"
 `;
 
+  await fs.promises.writeFile(receiptFile, data);
   await fs.promises.writeFile(psFile, psScript, 'utf8');
 
   console.log(`🖨️ [usbPrinter.js] Sending to Windows printer: "${printerName}"`);
@@ -1071,11 +1072,7 @@ function registerUSBPrinter(ipcMain) {
       if (!printerName) return { success: false, error: 'No Windows printer name configured' };
       const assets = await ensureAssets(userProfile?.store_logo, userProfile?.qr_code);
       const receiptData = await generateReceiptESCPOS(orderData, userProfile, assets);
-      // Fire-and-forget: data is prepared, spawn PowerShell in background so UI unlocks immediately
-      sendToWindowsPrinter(printerName, receiptData).catch(err =>
-        console.error('[USB Print] Background print error:', err.message)
-      );
-      return { success: true };
+      return await sendToWindowsPrinter(printerName, receiptData);
     } catch (error) {
       return { success: false, error: error.message };
     }

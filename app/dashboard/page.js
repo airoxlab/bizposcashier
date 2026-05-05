@@ -245,6 +245,9 @@ export default function Dashboard() {
         console.log(`✅ Permissions refreshed! ${permResult.count} permissions loaded`)
       }
 
+      // Refresh user profile from DB (picks up setting changes: KDS alerts, receipt options, etc.)
+      await authManager.syncUserDataFromDatabase()
+
       // Refresh plan (picks up plan changes + feature overrides from super-admin)
       const userData = authManager.getCurrentUser()
       if (userData?.id) {

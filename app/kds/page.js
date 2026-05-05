@@ -74,7 +74,15 @@ export default function KDSPage() {
   const [selectedOrderChanges, setSelectedOrderChanges] = useState(null) // Changes for selected order modal
   const [mounted, setMounted] = useState(false) // Tracks client-side hydration completion
   const [orderChangesMap, setOrderChangesMap] = useState({}) // orderId → changes[] for inline display
+  const [kdsNewOrderSound, setKdsNewOrderSound] = useState(false)
+  const [kdsOrderTimeoutMinutes, setKdsOrderTimeoutMinutes] = useState(null)
+  const [kdsTimeoutSoundEnabled, setKdsTimeoutSoundEnabled] = useState(false)
+  const [timedOutOrderIds, setTimedOutOrderIds] = useState(new Set())
   const audioRef = useRef(null)
+  const alertAudioRef = useRef(null)
+  const lastSoundTimeRef = useRef(0)
+  const alertedOrderIdsRef = useRef(new Set())
+  const kdsNewOrderSoundRef = useRef(false)
   const refreshTimerRef = useRef(null)
   const lastOrderCountRef = useRef(0)
   const allOrdersRef = useRef([]) // Ref to always hold current orders for real-time comparison
@@ -184,6 +192,11 @@ export default function KDSPage() {
       printerManager.setUserId(userData.id)
     }
 
+    // Load KDS alert settings from user profile
+    setKdsNewOrderSound(!!userData?.kds_new_order_sound)
+    setKdsOrderTimeoutMinutes(userData?.kds_order_timeout_minutes || null)
+    setKdsTimeoutSoundEnabled(!!userData?.kds_timeout_sound_enabled)
+
     // Load orders with user data immediately
     if (userData?.id) {
       loadOrders(false, userData.id)
@@ -213,8 +226,8 @@ export default function KDSPage() {
             loadOrders(true, userData.id)
           }
 
-          // Play sound for new orders
-          if (payload.eventType === 'INSERT' && soundEnabled) {
+          // Play KDS notification sound for new Pending orders only
+          if (payload.eventType === 'INSERT' && payload.new?.order_status === 'Pending') {
             playNotificationSound()
           }
 
@@ -255,13 +268,70 @@ export default function KDSPage() {
     }
   }, [router, autoRefresh, refreshInterval])
 
+  // Keep ref in sync with state to avoid stale closure in realtime subscription
+  useEffect(() => {
+    kdsNewOrderSoundRef.current = kdsNewOrderSound
+  }, [kdsNewOrderSound])
+
   // No need to reload on filter change - using memoization for instant filtering
 
   const playNotificationSound = () => {
+    if (!kdsNewOrderSoundRef.current) return
+    const now = Date.now()
+    if (now - lastSoundTimeRef.current < 3000) return
+    lastSoundTimeRef.current = now
     if (audioRef.current) {
-      audioRef.current.play().catch(err => console.log('Sound play failed:', err))
+      audioRef.current.currentTime = 0
+      audioRef.current.play().catch(err => console.log('KDS sound play failed:', err))
     }
   }
+
+  // Timeout tracking: check every 30s if any Pending orders have exceeded kdsOrderTimeoutMinutes
+  useEffect(() => {
+    if (!kdsOrderTimeoutMinutes) return
+    const checkTimeout = () => {
+      const now = Date.now()
+      const newTimedOut = new Set()
+      allOrdersRef.current.forEach(order => {
+        if (order.order_status === 'Pending') {
+          const ageMinutes = (now - new Date(order.created_at).getTime()) / 60000
+          if (ageMinutes >= kdsOrderTimeoutMinutes) {
+            newTimedOut.add(order.id)
+            if (!alertedOrderIdsRef.current.has(order.id) && kdsTimeoutSoundEnabled) {
+              alertedOrderIdsRef.current.add(order.id)
+              if (alertAudioRef.current) {
+                alertAudioRef.current.currentTime = 0
+                alertAudioRef.current.play().catch(() => {})
+              }
+            }
+          }
+        }
+      })
+      setTimedOutOrderIds(newTimedOut)
+    }
+    checkTimeout()
+    const interval = setInterval(checkTimeout, 30000)
+    return () => clearInterval(interval)
+  }, [kdsOrderTimeoutMinutes, kdsTimeoutSoundEnabled])
+
+  // Immediately recompute LATE badges whenever orders load/refresh (no sound — just badges)
+  // Also pre-seeds alertedOrderIdsRef so the 30s interval doesn't fire sounds for already-late orders
+  useEffect(() => {
+    if (!kdsOrderTimeoutMinutes || allOrders.length === 0) return
+    const now = Date.now()
+    const newTimedOut = new Set()
+    allOrders.forEach(order => {
+      if (order.order_status === 'Pending') {
+        const ageMinutes = (now - new Date(order.created_at).getTime()) / 60000
+        if (ageMinutes >= kdsOrderTimeoutMinutes) {
+          newTimedOut.add(order.id)
+          // Mark as already alerted so interval doesn't re-play sound for pre-existing late orders
+          alertedOrderIdsRef.current.add(order.id)
+        }
+      }
+    })
+    setTimedOutOrderIds(newTimedOut)
+  }, [allOrders, kdsOrderTimeoutMinutes])
 
   const loadOrders = useCallback(async (silent = false, userId = user?.id) => {
     try {
@@ -632,8 +702,6 @@ export default function KDSPage() {
         )
       )
 
-      // Show success message
-      playNotificationSound()
 
       // ─── WhatsApp auto-send triggers ──────────────────────────────────
       if (isOnline && user?.id) {
@@ -775,35 +843,47 @@ export default function KDSPage() {
       console.log('🖨️ Printer config retrieved:', JSON.stringify(printerConfig, null, 2))
 
       // Validate printer configuration has connection details
-      const hasUSB = printerConfig.usb_port || printerConfig.usb_device_path
-      const hasIP = printerConfig.ip_address || printerConfig.ip
-      const connectionType = printerConfig.connection_type || printerConfig.printer_type
+      const isConfigValid = (cfg) => {
+        if (!cfg) return false
+        const ct = cfg.connection_type || cfg.printer_type
+        if (ct === 'windows_usb') return !!(cfg.usb_printer_name)
+        const usbPort = cfg.usb_port || cfg.usb_device_path
+        if (usbPort && usbPort.startsWith('WINUSB:')) return true
+        if (cfg.usb_printer_name) return true
+        return !!(usbPort || cfg.ip_address || cfg.ip)
+      }
 
-      if (!hasUSB && !hasIP) {
+      if (!isConfigValid(printerConfig)) {
         // Try to get the printer config directly from localStorage as fallback
         const storedPrinters = localStorage.getItem('configured_printers')
         if (storedPrinters) {
-          const printers = JSON.parse(storedPrinters)
-          const userPrinter = printers.find(p => p.user_id === user?.id && (p.ip_address || p.usb_port || p.usb_device_path))
-          if (userPrinter) {
-            console.log('🖨️ Using fallback printer from localStorage:', userPrinter.name)
-            printerConfig = {
-              ...printerConfig,
-              ip_address: userPrinter.ip_address,
-              ip: userPrinter.ip_address,
-              usb_port: userPrinter.usb_port || userPrinter.usb_device_path,
-              usb_device_path: userPrinter.usb_device_path || userPrinter.usb_port,
-              connection_type: userPrinter.connection_type || userPrinter.printer_type,
-              printer_type: userPrinter.printer_type || userPrinter.connection_type,
+          try {
+            const printers = JSON.parse(storedPrinters)
+            // Match any printer — not restricted to current user ID so both admin
+            // and cashier roles find the configured printer
+            const userPrinter = printers.find(p =>
+              p.ip_address || p.usb_port || p.usb_device_path ||
+              p.usb_printer_name || p.connection_type === 'windows_usb'
+            )
+            if (userPrinter) {
+              console.log('🖨️ Using fallback printer from localStorage:', userPrinter.name)
+              printerConfig = {
+                ...printerConfig,
+                ip_address: userPrinter.ip_address,
+                ip: userPrinter.ip_address,
+                usb_port: userPrinter.usb_port || userPrinter.usb_device_path,
+                usb_device_path: userPrinter.usb_device_path || userPrinter.usb_port,
+                usb_printer_name: userPrinter.usb_printer_name,
+                connection_type: userPrinter.connection_type || userPrinter.printer_type,
+                printer_type: userPrinter.printer_type || userPrinter.connection_type,
+              }
             }
+          } catch (e) {
+            console.error('Failed to parse configured_printers from localStorage:', e)
           }
         }
 
-        // Check again after fallback
-        const hasUSBNow = printerConfig.usb_port || printerConfig.usb_device_path
-        const hasIPNow = printerConfig.ip_address || printerConfig.ip
-
-        if (!hasUSBNow && !hasIPNow) {
+        if (!isConfigValid(printerConfig)) {
           notify.error('Printer configuration is incomplete. Please reconfigure your printer in Settings with a valid IP address or USB connection.')
           return
         }
@@ -923,21 +1003,32 @@ export default function KDSPage() {
     const OrderIcon = getOrderTypeIcon(order.order_type)
     const elapsed = getElapsedTime(order.created_at)
     const isUpdated = updatedOrderIds.has(order.id)
+    const isTimedOut = timedOutOrderIds.has(order.id)
 
     return (
       <div
         className={`p-2.5 rounded-lg cursor-pointer border hover:shadow-md relative overflow-hidden ${
-          isUpdated
-            ? `${isDark ? 'border-orange-500 bg-orange-900/20' : 'border-orange-400 bg-orange-50'}`
-            : `${classes.border} ${classes.card}`
+          isTimedOut
+            ? `${isDark ? 'border-red-500 bg-red-900/20' : 'border-red-400 bg-red-50'}`
+            : isUpdated
+              ? `${isDark ? 'border-orange-500 bg-orange-900/20' : 'border-orange-400 bg-orange-50'}`
+              : `${classes.border} ${classes.card}`
         }`}
         onClick={() => {
           setSelectedOrder(order)
           fetchOrderItems(order.id)
         }}
       >
+        {/* LATE corner ribbon — timed-out orders take priority */}
+        {isTimedOut && (
+          <div className="absolute top-0 right-0 z-10">
+            <div className="bg-red-500 text-white text-[9px] font-bold px-2 py-0.5 rounded-bl-lg shadow-md animate-pulse tracking-wide">
+              LATE
+            </div>
+          </div>
+        )}
         {/* UPDATED corner ribbon */}
-        {isUpdated && (
+        {isUpdated && !isTimedOut && (
           <div className="absolute top-0 right-0 z-10">
             <div className="bg-orange-500 text-white text-[9px] font-bold px-2 py-0.5 rounded-bl-lg shadow-md animate-pulse tracking-wide">
               UPDATED
@@ -1054,7 +1145,7 @@ export default function KDSPage() {
   }
 
   // Status Column Component for Column View
-  const StatusColumn = ({ title, icon: Icon, status, orders, config, onOrderClick, onStatusUpdate, onPrintDocket, classes, isDark, updatedIds, changesMap }) => {
+  const StatusColumn = ({ title, icon: Icon, status, orders, config, onOrderClick, onStatusUpdate, onPrintDocket, classes, isDark, updatedIds, changesMap, timedOutIds }) => {
     const updatedCount = updatedIds ? orders.filter(o => updatedIds.has(o.id)).length : 0
 
     return (
@@ -1086,18 +1177,28 @@ export default function KDSPage() {
           ) : (
             orders.map((order) => {
               const isUpdated = updatedIds && updatedIds.has(order.id)
+              const isTimedOut = timedOutIds && timedOutIds.has(order.id)
               return (
               <div
                 key={order.id}
                 className={`rounded-xl cursor-pointer border hover:shadow-lg transition-shadow relative overflow-hidden ${
-                  isUpdated
-                    ? (isDark ? 'border-orange-500 bg-orange-900/20' : 'border-orange-400 bg-orange-50')
-                    : `${config.bg} ${config.border}`
+                  isTimedOut
+                    ? (isDark ? 'border-red-500 bg-red-900/20' : 'border-red-400 bg-red-50')
+                    : isUpdated
+                      ? (isDark ? 'border-orange-500 bg-orange-900/20' : 'border-orange-400 bg-orange-50')
+                      : `${config.bg} ${config.border}`
                 }`}
                 onClick={() => onOrderClick(order)}
               >
+                {/* LATE top banner — timed-out orders take priority */}
+                {isTimedOut && (
+                  <div className="bg-red-500 text-white text-[10px] font-bold px-3 py-1 flex items-center gap-1.5 animate-pulse">
+                    <span className="w-1.5 h-1.5 rounded-full bg-white inline-block" />
+                    LATE
+                  </div>
+                )}
                 {/* UPDATED top banner */}
-                {isUpdated && (
+                {isUpdated && !isTimedOut && (
                   <div className="bg-orange-500 text-white text-[10px] font-bold px-3 py-1 flex items-center gap-1.5 animate-pulse">
                     <span className="w-1.5 h-1.5 rounded-full bg-white inline-block" />
                     ORDER MODIFIED
@@ -1274,12 +1375,12 @@ export default function KDSPage() {
     )
   }
 
-  if (loading) {
+  if (loading || !mounted) {
     return (
-      <div className={`h-screen w-screen flex items-center justify-center ${classes.background}`}>
+      <div className="h-screen w-screen flex items-center justify-center bg-white dark:bg-gray-900">
         <div className="flex flex-col items-center gap-3">
           <div className="animate-spin rounded-full h-10 w-10 border-4 border-emerald-200 border-t-emerald-500" />
-          <p className={`text-sm font-medium ${classes.textSecondary}`}>Loading kitchen display...</p>
+          <p className="text-sm font-medium text-gray-600 dark:text-gray-300">Loading kitchen display...</p>
         </div>
       </div>
     )
@@ -1289,8 +1390,9 @@ export default function KDSPage() {
     <PlanGate feature="kds">
     <ProtectedPage permissionKey="KDS" pageName="Kitchen Display System">
       <div className={`min-h-screen ${classes.background}`}>
-        {/* Hidden audio element for notifications */}
-        <audio ref={audioRef} src="/notification.mp3" preload="auto" />
+        {/* Hidden audio elements for KDS notifications */}
+        <audio ref={audioRef} src="/sounds/kds-notification.wav" preload="auto" />
+        <audio ref={alertAudioRef} src="/sounds/kds-notification.wav" preload="auto" />
 
       {/* Top Bar - Compact Header */}
       <div className={`${classes.card} ${classes.border} border-b sticky top-0 z-50`}>
@@ -1312,6 +1414,29 @@ export default function KDSPage() {
               <p className={`text-sm ${classes.textSecondary}`}>
                 Today • {allOrders.length} orders
               </p>
+              {/* KDS Settings Display */}
+              <div className="flex items-center gap-5 mt-2 text-xs">
+                <div className={`flex items-center gap-1.5 ${kdsNewOrderSound ? 'text-green-500' : 'text-gray-400'} font-medium`}>
+                  <Bell className="w-4 h-4" />
+                  <span>Order Sound: {kdsNewOrderSound ? 'ON' : 'OFF'}</span>
+                </div>
+                {kdsOrderTimeoutMinutes && (
+                  <>
+                    <div className={`flex items-center gap-1.5 ${classes.textSecondary} font-medium`}>
+                      <Clock className="w-4 h-4" />
+                      <span>Timeout: {kdsOrderTimeoutMinutes} min</span>
+                    </div>
+                    <div className={`flex items-center gap-1.5 ${kdsTimeoutSoundEnabled ? 'text-red-500' : 'text-gray-400'} font-medium`}>
+                      {kdsTimeoutSoundEnabled ? (
+                        <Volume2 className="w-4 h-4" />
+                      ) : (
+                        <VolumeX className="w-4 h-4" />
+                      )}
+                      <span>Alert: {kdsTimeoutSoundEnabled ? 'ON' : 'OFF'}</span>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           </div>
 
@@ -1447,6 +1572,7 @@ export default function KDSPage() {
               isDark={isDark}
               updatedIds={updatedOrderIds}
               changesMap={orderChangesMap}
+              timedOutIds={timedOutOrderIds}
             />
 
             {/* Preparing Column */}
@@ -1466,6 +1592,7 @@ export default function KDSPage() {
               isDark={isDark}
               updatedIds={updatedOrderIds}
               changesMap={orderChangesMap}
+              timedOutIds={timedOutOrderIds}
             />
 
             {/* Ready Column */}
@@ -1485,6 +1612,7 @@ export default function KDSPage() {
               isDark={isDark}
               updatedIds={updatedOrderIds}
               changesMap={orderChangesMap}
+              timedOutIds={timedOutOrderIds}
             />
 
             {/* Dispatched Column */}
@@ -1504,6 +1632,7 @@ export default function KDSPage() {
               isDark={isDark}
               updatedIds={updatedOrderIds}
               changesMap={orderChangesMap}
+              timedOutIds={timedOutOrderIds}
             />
           </div>
         </div>
