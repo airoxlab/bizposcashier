@@ -1347,10 +1347,14 @@ function SettingsPageContent() {
     return status === 'paid' ? 'text-green-600' : 'text-red-600'
   }
 
-  const handleLayoutThemeChange = (theme) => {
+  const handleLayoutThemeChange = async (theme) => {
     setLayoutTheme(theme)
-    localStorage.setItem('pos_layout_theme', theme)
-    notify.success('Layout theme saved! Changes apply on next page load.')
+    const result = await authManager.saveLayoutTheme(theme)
+    if (result.success) {
+      notify.success('Layout theme saved! Changes apply on next page load.')
+    } else {
+      notify.error('Failed to save layout preference. Please try again.')
+    }
   }
 
   // Customer CRUD handlers

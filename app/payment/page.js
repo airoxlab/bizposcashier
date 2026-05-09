@@ -9,6 +9,8 @@ import {
   Building,
   Clock,
   DollarSign,
+  Wallet,
+  Banknote,
   Check,
   Printer,
   Volume2,
@@ -98,6 +100,9 @@ export default function PaymentPage() {
   // Complimentary order
   const [complimentaryReason, setComplimentaryReason] = useState('')
 
+  // Dynamic cashier payment accounts
+  const [cashierPaymentAccounts, setCashierPaymentAccounts] = useState([])
+
   // Permission: can this cashier accept payment?
   const [canAcceptPayment, setCanAcceptPayment] = useState(true)
 
@@ -126,6 +131,41 @@ useEffect(() => {
     cacheManager.setUserId(userData.id)
     console.log('✅ [Payment Page] User ID set in printerManager, customerLedgerManager, cacheManager:', userData.id)
   }
+
+  // Fetch payment accounts — admin sees company accounts, cashier sees their own accounts
+  const fetchPaymentAccounts = async () => {
+    const cashier = authManager.getCashier()
+    const currentUser = authManager.getCurrentUser()
+    if (!currentUser?.id) return
+
+    if (cashier?.id) {
+      // Cashier: fetch their own accounts
+      const { data } = await supabase
+        .from('payment_accounts')
+        .select('*')
+        .eq('cashier_id', cashier.id)
+        .eq('is_active', true)
+        .order('sort_order')
+      if (data && data.length > 0) {
+        setCashierPaymentAccounts(data)
+        console.log('✅ [Payment Page] Fetched cashier accounts:', data.length)
+      }
+    } else {
+      // Admin: fetch company-level accounts (cashier_id IS NULL)
+      const { data } = await supabase
+        .from('payment_accounts')
+        .select('*')
+        .eq('user_id', currentUser.id)
+        .is('cashier_id', null)
+        .eq('is_active', true)
+        .order('sort_order')
+      if (data && data.length > 0) {
+        setCashierPaymentAccounts(data)
+        console.log('✅ [Payment Page] Fetched admin/company accounts:', data.length)
+      }
+    }
+  }
+  fetchPaymentAccounts()
 
   // Load and apply theme
   setTheme(themeManager.currentTheme)
@@ -199,7 +239,8 @@ useEffect(() => {
         setServiceChargeType(existingSCPct > 0 ? 'percentage' : 'fixed')
         setServiceChargeValue(existingSCPct > 0 ? existingSCPct : existingSC)
         setShowServiceChargeSection(true)
-      } else {
+      } else if (!parsedOrderData.isModifying) {
+        // New order only: apply global default if no SC on the order
         const defaultSC = JSON.parse(localStorage.getItem('pos_default_service_charge') || '{}')
         if (defaultSC.value > 0) {
           setServiceChargeType(defaultSC.type || 'percentage')
@@ -207,6 +248,7 @@ useEffect(() => {
           setShowServiceChargeSection(true)
         }
       }
+      // Reopened order with SC = 0: leave at 0, do not apply global default
     } catch (e) {
       // ignore parse errors
     }
@@ -277,40 +319,38 @@ useEffect(() => {
 
   const smartDiscounts = orderData ? generateSmartDiscounts(originalSubtotal) : []
 
+  // Maps DB payment_method_key → UI properties for cashier till accounts
+  const METHOD_KEY_UI = {
+    cash:      { icon: DollarSign, color: 'from-green-500 to-green-600',  requiresAmount: true,  logo: null },
+    easypaisa: { icon: Smartphone, color: 'from-green-600 to-green-700',  requiresAmount: false, logo: '/images/Easypaisa-logo.png' },
+    jazzcash:  { icon: Smartphone, color: 'from-orange-500 to-red-600',   requiresAmount: false, logo: '/images/new-Jazzcash-logo.png' },
+    bank:      { icon: Building,   color: 'from-blue-500 to-indigo-600',  requiresAmount: false, logo: '/images/meezan-bank-logo.png' },
+  }
+  const DEFAULT_METHOD_UI = { icon: Wallet, color: 'from-indigo-500 to-purple-600', requiresAmount: false, logo: null }
+
+  // Till methods: dynamic from DB when cashier has accounts, else hardcoded fallback
+  const tillMethods = cashierPaymentAccounts.length > 0
+    ? cashierPaymentAccounts.map(acct => {
+        const ui = METHOD_KEY_UI[acct.payment_method_key] || DEFAULT_METHOD_UI
+        return {
+          id: acct.name,
+          name: acct.name,
+          icon: ui.icon,
+          color: ui.color,
+          requiresAmount: ui.requiresAmount,
+          logo: ui.logo,
+          accountId: acct.id,
+        }
+      })
+    : [
+        { id: 'cash',      name: 'Cash',       icon: DollarSign, color: 'from-green-500 to-green-600', requiresAmount: true,  logo: null },
+        { id: 'easypaisa', name: 'EasyPaisa',  icon: Smartphone, color: 'from-green-600 to-green-700', requiresAmount: false, logo: '/images/Easypaisa-logo.png' },
+        { id: 'jazzcash',  name: 'JazzCash',   icon: Smartphone, color: 'from-orange-500 to-red-600',  requiresAmount: false, logo: '/images/new-Jazzcash-logo.png' },
+        { id: 'bank',      name: 'Bank',       displayName: 'Meezan Bank', icon: Building, color: 'from-blue-500 to-indigo-600', requiresAmount: false, logo: '/images/meezan-bank-logo.png' },
+      ]
+
   const paymentMethods = [
-    {
-      id: 'cash',
-      name: 'Cash',
-      icon: DollarSign,
-      color: 'from-green-500 to-green-600',
-      requiresAmount: true,
-      logo: null
-    },
-    {
-      id: 'easypaisa',
-      name: 'EasyPaisa',
-      icon: Smartphone,
-      color: 'from-green-600 to-green-700',
-      requiresAmount: false,
-      logo: '/images/Easypaisa-logo.png'
-    },
-    {
-      id: 'jazzcash',
-      name: 'JazzCash',
-      icon: Smartphone,
-      color: 'from-orange-500 to-red-600',
-      requiresAmount: false,
-      logo: '/images/new-Jazzcash-logo.png'
-    },
-    {
-      id: 'bank',
-      name: 'Bank',
-      displayName: 'Meezan Bank',
-      icon: Building,
-      color: 'from-blue-500 to-indigo-600',
-      requiresAmount: false,
-      logo: '/images/meezan-bank-logo.png'
-    },
+    ...tillMethods,
     {
       id: 'account',
       name: 'Account',

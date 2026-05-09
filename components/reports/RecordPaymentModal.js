@@ -3,12 +3,13 @@
  * Modal for recording customer payments with FIFO allocation
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X, DollarSign, CreditCard, Calendar, FileText, Check } from 'lucide-react';
 import { ledgerManager } from '../../lib/ledgerManager';
 import { notify } from '../ui/NotificationSystem';
 import { authManager } from '../../lib/authManager';
 import { themeManager } from '../../lib/themeManager';
+import { supabase } from '../../lib/supabase';
 
 export default function RecordPaymentModal({ customer, unpaidOrders, customerSummary, userId, onClose, onPaymentRecorded }) {
   const [amount, setAmount] = useState('');
@@ -16,8 +17,18 @@ export default function RecordPaymentModal({ customer, unpaidOrders, customerSum
   const [referenceNumber, setReferenceNumber] = useState('');
   const [notes, setNotes] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [paymentMethods, setPaymentMethods] = useState(['Cash', 'EasyPaisa', 'JazzCash', 'Bank', 'Card']);
 
-  const paymentMethods = ['Cash', 'EasyPaisa', 'JazzCash', 'Bank', 'Card'];
+  useEffect(() => {
+    const cashier = authManager.getCashier()
+    if (cashier?.id) {
+      supabase.from('payment_accounts').select('name, payment_method_key')
+        .eq('cashier_id', cashier.id).eq('is_active', true).order('sort_order')
+        .then(({ data }) => {
+          if (data?.length > 0) setPaymentMethods(data.map(a => a.name))
+        })
+    }
+  }, []);
 
   const handleAmountChange = (value) => {
     setAmount(value);

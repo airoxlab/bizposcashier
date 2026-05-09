@@ -2598,6 +2598,7 @@ export default function WalkInPage() {
     localStorage.removeItem('walkin_original_amount_paid')
     localStorage.removeItem('walkin_original_payment_method')
     localStorage.removeItem('walkin_can_decrease_qty')
+    localStorage.removeItem('walkin_original_service_charge')
   }
 
   const handleConfirmExit = () => {
@@ -2636,6 +2637,13 @@ export default function WalkInPage() {
       return
     }
 
+    // Restore original service charge for this walkin order (saved when reopening)
+    let scAmount = 0, scPercentage = 0
+    try {
+      const scStr = localStorage.getItem('walkin_original_service_charge')
+      if (scStr) { const sc = JSON.parse(scStr); scAmount = sc.amount || 0; scPercentage = sc.percentage || 0 }
+    } catch {}
+
     const orderData = {
       cart,
       customer,
@@ -2651,15 +2659,14 @@ export default function WalkInPage() {
       isModifying: isReopenedOrder,
       existingOrderId: originalOrderId,
       existingOrderNumber: localStorage.getItem('walkin_modifying_order_number'),
-      // 🆕 Include original payment information for modified order payment calculation
       originalPaymentStatus: localStorage.getItem('walkin_original_payment_status'),
       originalAmountPaid: parseFloat(localStorage.getItem('walkin_original_amount_paid')) || 0,
       originalPaymentMethod: localStorage.getItem('walkin_original_payment_method'),
-      // Preserve original order status so editing doesn't revert it back to Pending
-      // WalkinOrderDetails.js saves this as `walkin_original_order_status` when reopening
       originalOrderStatus: localStorage.getItem('walkin_original_order_status') || null,
       tableId: selectedTable?.id || null,
-      tableName: selectedTable?.table_name || selectedTable?.table_number || null
+      tableName: selectedTable?.table_name || selectedTable?.table_number || null,
+      serviceChargeAmount: scAmount,
+      serviceChargePercentage: scPercentage
     }
 
     console.log('🔵 [Walkin] Order data prepared:', {

@@ -14,6 +14,9 @@ import {
   Tag
 } from 'lucide-react'
 import Image from 'next/image'
+import { supabase } from '../../lib/supabase'
+import { authManager } from '../../lib/authManager'
+import { Wallet } from 'lucide-react'
 
 export default function PaymentModal({
   isOpen,
@@ -28,6 +31,16 @@ export default function PaymentModal({
   const [cashAmount, setCashAmount] = useState('')
   const [changeAmount, setChangeAmount] = useState(0)
   const [isProcessing, setIsProcessing] = useState(false)
+  const [cashierAccounts, setCashierAccounts] = useState([])
+
+  useEffect(() => {
+    const cashier = authManager.getCashier()
+    if (cashier?.id) {
+      supabase.from('payment_accounts').select('*')
+        .eq('cashier_id', cashier.id).eq('is_active', true).order('sort_order')
+        .then(({ data }) => { if (data?.length > 0) setCashierAccounts(data) })
+    }
+  }, [])
 
   // Smart Discount States
   const [showDiscountSection, setShowDiscountSection] = useState(false)
@@ -42,41 +55,26 @@ export default function PaymentModal({
   const [serviceChargeValue, setServiceChargeValue] = useState(0)
   const [serviceChargeAmount, setServiceChargeAmount] = useState(0)
 
-  const paymentMethods = [
-    {
-      id: 'cash',
-      name: 'Cash',
-      icon: DollarSign,
-      color: 'from-green-500 to-green-600',
-      requiresAmount: true,
-      logo: null
-    },
-    {
-      id: 'easypaisa',
-      name: 'EasyPaisa',
-      icon: Smartphone,
-      color: 'from-green-600 to-green-700',
-      requiresAmount: false,
-      logo: '/images/Easypaisa-logo.png'
-    },
-    {
-      id: 'jazzcash',
-      name: 'JazzCash',
-      icon: Smartphone,
-      color: 'from-orange-500 to-red-600',
-      requiresAmount: false,
-      logo: '/images/new-Jazzcash-logo.png'
-    },
-    {
-      id: 'bank',
-      name: 'Bank',
-      displayName: 'Meezan Bank',
-      icon: Building,
-      color: 'from-blue-500 to-indigo-600',
-      requiresAmount: false,
-      logo: '/images/meezan-bank-logo.png'
-    }
-  ]
+  const METHOD_KEY_UI = {
+    cash:      { icon: DollarSign, color: 'from-green-500 to-green-600',  requiresAmount: true,  logo: null },
+    easypaisa: { icon: Smartphone, color: 'from-green-600 to-green-700',  requiresAmount: false, logo: '/images/Easypaisa-logo.png' },
+    jazzcash:  { icon: Smartphone, color: 'from-orange-500 to-red-600',   requiresAmount: false, logo: '/images/new-Jazzcash-logo.png' },
+    bank:      { icon: Building,   color: 'from-blue-500 to-indigo-600',  requiresAmount: false, logo: '/images/meezan-bank-logo.png' },
+  }
+  const DEFAULT_ACCT_UI = { icon: Wallet, color: 'from-indigo-500 to-purple-600', requiresAmount: false, logo: null }
+
+  const paymentMethods = cashierAccounts.length > 0
+    ? cashierAccounts.map(acct => ({
+        id: acct.name,
+        name: acct.name,
+        ...(METHOD_KEY_UI[acct.payment_method_key] || DEFAULT_ACCT_UI),
+      }))
+    : [
+        { id: 'cash',      name: 'Cash',      icon: DollarSign, color: 'from-green-500 to-green-600', requiresAmount: true,  logo: null },
+        { id: 'easypaisa', name: 'EasyPaisa', icon: Smartphone, color: 'from-green-600 to-green-700', requiresAmount: false, logo: '/images/Easypaisa-logo.png' },
+        { id: 'jazzcash',  name: 'JazzCash',  icon: Smartphone, color: 'from-orange-500 to-red-600',  requiresAmount: false, logo: '/images/new-Jazzcash-logo.png' },
+        { id: 'bank',      name: 'Bank',      icon: Building,   color: 'from-blue-500 to-indigo-600', requiresAmount: false, logo: '/images/meezan-bank-logo.png' },
+      ]
 
   useEffect(() => {
     if (order) {
