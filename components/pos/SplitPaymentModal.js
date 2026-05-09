@@ -12,6 +12,8 @@ import {
   AlertTriangle
 } from 'lucide-react'
 import { themeManager } from '../../lib/themeManager'
+import { supabase } from '../../lib/supabase'
+import { authManager } from '../../lib/authManager'
 
 /**
  * Fast Split Payment Modal - Optimized for Peak Hours
@@ -26,20 +28,23 @@ export default function SplitPaymentModal({
   customer = null,
   title = 'Split Payment'
 }) {
-  // Single state object for all payment amounts
-  const [amounts, setAmounts] = useState({
-    Cash: '',
-    EasyPaisa: '',
-    JazzCash: '',
-    Bank: '',
-    Account: ''
-  })
-
+  const [amounts, setAmounts] = useState({})
   const [errors, setErrors] = useState({})
   const [isProcessing, setIsProcessing] = useState(false)
+  const [cashierAccounts, setCashierAccounts] = useState([])
 
   const isDark = themeManager.isDark()
   const classes = themeManager.getClasses()
+
+  // Load cashier's real payment accounts from DB
+  useEffect(() => {
+    const cashier = authManager.getCashier()
+    if (cashier?.id) {
+      supabase.from('payment_accounts').select('*')
+        .eq('cashier_id', cashier.id).eq('is_active', true).order('sort_order')
+        .then(({ data }) => { if (data?.length > 0) setCashierAccounts(data) })
+    }
+  }, [])
 
   // Format currency — show decimals only when needed
   const fmtRs = (v) => {
@@ -47,64 +52,42 @@ export default function SplitPaymentModal({
     return n % 1 === 0 ? `Rs ${n}` : `Rs ${n.toFixed(2)}`
   }
 
-  // Payment methods with icons
+  const METHOD_KEY_UI = {
+    cash:      { icon: DollarSign, color: 'bg-green-500',  borderColor: 'border-green-500',  focusRing: 'focus:ring-green-500' },
+    easypaisa: { icon: Smartphone, color: 'bg-green-600',  borderColor: 'border-green-600',  focusRing: 'focus:ring-green-600' },
+    jazzcash:  { icon: Smartphone, color: 'bg-orange-500', borderColor: 'border-orange-500', focusRing: 'focus:ring-orange-500' },
+    bank:      { icon: Building,   color: 'bg-blue-500',   borderColor: 'border-blue-500',   focusRing: 'focus:ring-blue-500'  },
+  }
+  const DEFAULT_SPLIT_UI = { icon: User, color: 'bg-indigo-500', borderColor: 'border-indigo-500', focusRing: 'focus:ring-indigo-500' }
+
+  const tillMethods = cashierAccounts.length > 0
+    ? cashierAccounts.map(acct => ({
+        id: acct.name,
+        name: acct.name,
+        ...(METHOD_KEY_UI[acct.payment_method_key] || DEFAULT_SPLIT_UI),
+      }))
+    : [
+        { id: 'Cash',      name: 'Cash',      icon: DollarSign, color: 'bg-green-500',  borderColor: 'border-green-500',  focusRing: 'focus:ring-green-500' },
+        { id: 'EasyPaisa', name: 'EasyPaisa', icon: Smartphone, color: 'bg-green-600',  borderColor: 'border-green-600',  focusRing: 'focus:ring-green-600' },
+        { id: 'JazzCash',  name: 'JazzCash',  icon: Smartphone, color: 'bg-orange-500', borderColor: 'border-orange-500', focusRing: 'focus:ring-orange-500' },
+        { id: 'Bank',      name: 'Bank',      icon: Building,   color: 'bg-blue-500',   borderColor: 'border-blue-500',   focusRing: 'focus:ring-blue-500'  },
+      ]
+
   const paymentMethods = [
-    {
-      id: 'Cash',
-      name: 'Cash',
-      icon: DollarSign,
-      color: 'bg-green-500',
-      borderColor: 'border-green-500',
-      focusRing: 'focus:ring-green-500'
-    },
-    {
-      id: 'EasyPaisa',
-      name: 'EasyPaisa',
-      icon: Smartphone,
-      color: 'bg-green-600',
-      borderColor: 'border-green-600',
-      focusRing: 'focus:ring-green-600'
-    },
-    {
-      id: 'JazzCash',
-      name: 'JazzCash',
-      icon: Smartphone,
-      color: 'bg-orange-500',
-      borderColor: 'border-orange-500',
-      focusRing: 'focus:ring-orange-500'
-    },
-    {
-      id: 'Bank',
-      name: 'Meezan Bank',
-      icon: Building,
-      color: 'bg-blue-500',
-      borderColor: 'border-blue-500',
-      focusRing: 'focus:ring-blue-500'
-    },
-    {
-      id: 'Account',
-      name: 'Customer Account',
-      icon: User,
-      color: 'bg-purple-500',
-      borderColor: 'border-purple-500',
-      focusRing: 'focus:ring-purple-500',
-      disabled: !customer
-    }
+    ...tillMethods,
+    { id: 'Account', name: 'Customer Account', icon: User, color: 'bg-purple-500', borderColor: 'border-purple-500', focusRing: 'focus:ring-purple-500', disabled: !customer },
   ]
 
-  // Reset when modal opens
+  // Reset amounts when modal opens or accounts load — keys are the method names
   useEffect(() => {
     if (isOpen) {
-      setAmounts({
-        Cash: '',
-        EasyPaisa: '',
-        JazzCash: '',
-        Bank: '',
-        Account: ''
-      })
+      const initial = {}
+      tillMethods.forEach(m => { initial[m.id] = '' })
+      initial['Account'] = ''
+      setAmounts(initial)
       setErrors({})
     }
-  }, [isOpen])
+  }, [isOpen, cashierAccounts])
 
   // Calculate total entered
   const totalEntered = Object.values(amounts).reduce((sum, val) => {

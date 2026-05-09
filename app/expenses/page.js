@@ -29,6 +29,7 @@ import {
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
+import { authManager } from '../../lib/authManager'
 import { cacheManager } from '../../lib/cacheManager'
 import Modal from '../../components/ui/Modal'
 import PinPad from '../../components/ui/PinPad'
@@ -86,50 +87,15 @@ export default function ExpensesPage() {
     subcategories: ['']
   })
 
-  const paymentMethods = [
-    {
-      id: 'Cash',
-      name: 'Cash',
-      icon: DollarSign,
-      color: 'from-green-500 to-green-600',
-      logo: null
-    },
-    {
-      id: 'Petty Cash',
-      name: 'Petty Cash',
-      icon: Wallet,
-      color: 'from-purple-500 to-indigo-600',
-      logo: null
-    },
-    {
-      id: 'EasyPaisa',
-      name: 'EasyPaisa',
-      icon: Smartphone,
-      color: 'from-green-600 to-green-700',
-      logo: '/images/Easypaisa-logo.png'
-    },
-    {
-      id: 'JazzCash',
-      name: 'JazzCash',
-      icon: Smartphone,
-      color: 'from-orange-500 to-red-600',
-      logo: '/images/new-Jazzcash-logo.png'
-    },
-    {
-      id: 'Bank',
-      name: 'Bank Transfer',
-      icon: Building,
-      color: 'from-blue-500 to-indigo-600',
-      logo: '/images/meezan-bank-logo.png'
-    },
-    {
-      id: 'Unpaid',
-      name: 'Unpaid',
-      icon: Clock,
-      color: 'from-gray-500 to-gray-600',
-      logo: null
-    }
-  ]
+  // Maps payment_account.payment_method_key (lowercase) → expenses.payment_method (constraint value)
+  const ACCOUNT_KEY_TO_METHOD = {
+    cash: 'Cash',
+    easypaisa: 'EasyPaisa',
+    jazzcash: 'JazzCash',
+    bank: 'Bank',
+    card: 'Card',
+    'petty cash': 'Petty Cash',
+  }
 
   // Theme management
   const themeClasses = themeManager.getClasses()
@@ -213,6 +179,7 @@ export default function ExpensesPage() {
       const [expensesResult, categoriesResult, subcategoriesResult] = await Promise.all([
         // Expenses query
         (async () => {
+          const currentCashierId = authManager.getCashier()?.id
           let query = supabase
             .from('expenses')
             .select(`
@@ -226,6 +193,7 @@ export default function ExpensesPage() {
               created_at,
               category_id,
               subcategory_id,
+              cashier_id,
               category:expense_categories (
                 id,
                 name
@@ -237,6 +205,11 @@ export default function ExpensesPage() {
             `)
             .eq('user_id', user.id)
             .order('expense_date', { ascending: false })
+
+          // Cashiers only see their own expenses
+          if (currentCashierId) {
+            query = query.eq('cashier_id', currentCashierId)
+          }
 
           if (dateFrom) {
             query = query.gte('expense_date', dateFrom)
@@ -401,22 +374,41 @@ export default function ExpensesPage() {
   const fetchPaymentAccounts = async () => {
     try {
       if (!user?.id) return
+
+      // Prefer cashier's own till accounts when a cashier is logged in
+      const cashierId = authManager.getCashier()?.id
+
+      if (cashierId) {
+        const { data: cashierAccounts, error } = await supabase
+          .from('payment_accounts')
+          .select('*')
+          .eq('cashier_id', cashierId)
+          .eq('is_active', true)
+          .order('sort_order', { ascending: true })
+        if (!error && cashierAccounts && cashierAccounts.length > 0) {
+          setPaymentAccounts(cashierAccounts)
+          return
+        }
+      }
+
+      // Fall back to admin/company accounts
       const { data, error } = await supabase
         .from('payment_accounts')
         .select('*')
         .eq('user_id', user.id)
+        .is('cashier_id', null)
         .eq('is_active', true)
         .order('sort_order', { ascending: true })
 
       if (error) throw error
 
-      // Auto-initialize if no accounts exist
       if (!data || data.length === 0) {
         await supabase.rpc('initialize_default_payment_accounts', { p_user_id: user.id })
         const { data: newAccounts } = await supabase
           .from('payment_accounts')
           .select('*')
           .eq('user_id', user.id)
+          .is('cashier_id', null)
           .eq('is_active', true)
           .order('sort_order', { ascending: true })
         setPaymentAccounts(newAccounts || [])
@@ -447,6 +439,7 @@ export default function ExpensesPage() {
 
       const expenseData = {
         user_id: user.id,
+        cashier_id: authManager.getCashier()?.id || null,
         amount: amount,
         category_id: expenseForm.categoryId,
         subcategory_id: expenseForm.subcategoryId || null,
@@ -481,8 +474,9 @@ export default function ExpensesPage() {
       fetchExpenses()
       notify.success(editingExpense ? 'Expense updated successfully' : 'Expense added successfully')
     } catch (error) {
-      console.error('Error saving expense:', error)
-      notify.error('Failed to save expense')
+      const msg = error?.message || error?.details || JSON.stringify(error) || 'Unknown error'
+      console.error('Error saving expense:', msg)
+      notify.error(`Failed to save expense: ${msg}`)
     }
   }
 
@@ -625,14 +619,26 @@ export default function ExpensesPage() {
     setShowAddExpense(true)
   }
 
+  const METHOD_KEY_ICON = {
+    cash: DollarSign, easypaisa: Smartphone, jazzcash: Smartphone,
+    bank: Building, card: DollarSign, 'petty cash': Wallet
+  }
+  const METHOD_KEY_COLOR = {
+    cash: 'from-green-500 to-green-600', easypaisa: 'from-green-600 to-green-700',
+    jazzcash: 'from-orange-500 to-red-600', bank: 'from-blue-500 to-indigo-600',
+    card: 'from-purple-500 to-indigo-600', 'petty cash': 'from-purple-500 to-indigo-600'
+  }
+
   const getPaymentMethodIcon = (method) => {
-    const config = paymentMethods.find(p => p.id === method)
-    return config?.icon || DollarSign
+    const acct = paymentAccounts.find(a => a.name === method)
+    if (acct) return METHOD_KEY_ICON[acct.payment_method_key?.toLowerCase()] || Wallet
+    return METHOD_KEY_ICON[method?.toLowerCase()] || DollarSign
   }
 
   const getPaymentMethodColor = (method) => {
-    const config = paymentMethods.find(p => p.id === method)
-    return config?.color || 'from-gray-500 to-gray-600'
+    const acct = paymentAccounts.find(a => a.name === method)
+    if (acct) return METHOD_KEY_COLOR[acct.payment_method_key?.toLowerCase()] || 'from-gray-500 to-gray-600'
+    return METHOD_KEY_COLOR[method?.toLowerCase()] || 'from-gray-500 to-gray-600'
   }
 
   const getTotalExpenses = () => {
@@ -756,8 +762,8 @@ export default function ExpensesPage() {
               className={`text-xs ${themeClasses.input} rounded px-2 py-1`}
             >
               <option value="All">All Payments</option>
-              {paymentMethods.map(method => (
-                <option key={method.id} value={method.id}>{method.name}</option>
+              {paymentAccounts.map(account => (
+                <option key={account.id} value={account.name}>{account.name}</option>
               ))}
             </select>
 
@@ -1112,7 +1118,7 @@ export default function ExpensesPage() {
                         onClick={() => setExpenseForm({
                           ...expenseForm,
                           paymentAccountId: account.id,
-                          paymentMethod: account.payment_method_key || 'Cash'
+                          paymentMethod: account.name
                         })}
                         className={`p-3 rounded-xl border-2 transition-all ${expenseForm.paymentAccountId === account.id
                             ? `border-purple-500 ${isDark ? 'bg-purple-900/50' : 'bg-purple-50'}`
@@ -1154,26 +1160,7 @@ export default function ExpensesPage() {
                     </button>
                   </div>
                 ) : (
-                  /* Fallback: old payment method grid if no accounts set up */
-                  <div className="grid grid-cols-2 gap-3">
-                    {paymentMethods.map((method) => (
-                      <button
-                        key={method.id}
-                        onClick={() => setExpenseForm({ ...expenseForm, paymentMethod: method.id })}
-                        className={`p-3 rounded-xl border-2 transition-all ${expenseForm.paymentMethod === method.id
-                            ? `border-purple-500 ${isDark ? 'bg-purple-900/50' : 'bg-purple-50'}`
-                            : `${themeClasses.border} ${themeClasses.hover} ${themeClasses.card}`
-                          }`}
-                      >
-                        <div className="flex flex-col items-center">
-                          <div className={`w-8 h-8 bg-gradient-to-r ${method.color} rounded-lg flex items-center justify-center mb-2`}>
-                            {React.createElement(method.icon, { className: "w-4 h-4 text-white" })}
-                          </div>
-                          <span className={`text-xs font-medium ${themeClasses.textPrimary}`}>{method.name}</span>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
+                  <div className={`text-xs ${themeClasses.textSecondary} text-center py-4`}>Loading accounts...</div>
                 )}
               </div>
 

@@ -1019,23 +1019,6 @@ export default function OrdersPage() {
           cacheManager.setPaymentTransactions(selectedOrder.id, transactions);
         }
 
-        // Log the payment action (don't fail if this fails)
-        try {
-          await authManager.logOrderAction(
-            selectedOrder.id,
-            'payment_completed',
-            {
-              payment_method: 'Split',
-              amount: totalPaid,
-              transactions: paymentData
-            },
-            `Split payment completed: Rs ${totalPaid} across ${paymentData.length} methods`
-          );
-        } catch (logError) {
-          console.error('⚠️ Failed to log payment action:', logError);
-          // Continue even if logging fails
-        }
-
         // Update local selected order state
         setSelectedOrder({
           ...selectedOrder,
@@ -1085,23 +1068,6 @@ export default function OrdersPage() {
         } catch (dbError) {
           console.error('❌ Database error:', dbError);
           throw new Error(`Database error: ${dbError.message}`);
-        }
-
-        // Log the payment action (don't fail if this fails)
-        try {
-          await authManager.logOrderAction(
-            selectedOrder.id,
-            'payment_completed',
-            {
-              payment_method: paymentData.paymentMethod,
-              amount: paymentData.newTotal,
-              discount: paymentData.discountAmount
-            },
-            `Payment completed: ${paymentData.paymentMethod} - Rs ${paymentData.newTotal}`
-          );
-        } catch (logError) {
-          console.error('⚠️ Failed to log payment action:', logError);
-          // Continue even if logging fails
         }
 
         // Handle customer ledger entry for Account payments
@@ -1655,6 +1621,14 @@ export default function OrdersPage() {
       `${orderTypePrefix}_original_payment_method`,
       order.payment_method || 'Cash'
     );
+
+    // Save original service charge for walkin orders so payment page can restore it
+    if (order.order_type === 'walkin') {
+      localStorage.setItem('walkin_original_service_charge', JSON.stringify({
+        amount: parseFloat(order.service_charge_amount || 0),
+        percentage: parseFloat(order.service_charge_percentage || 0)
+      }))
+    }
 
     // 🔥 FIX: Save delivery-specific data for delivery orders
     if (order.order_type === "delivery") {
@@ -3943,6 +3917,7 @@ export default function OrdersPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {orderHistory.map((history, index) => {
                 const actionName =
+                  history.actor_name ||
                   history.cashiers?.name ||
                   history.users?.customer_name ||
                   "System";

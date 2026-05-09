@@ -573,14 +573,18 @@ export default function NewOrderPage() {
     setOriginalPaymentMethod(reopenData.originalPaymentMethod || null)
     setCanDecreaseQty(reopenData.canDecreaseQty !== false)
 
-    // Set extras (discount, delivery charges, etc.)
+    // Set extras (discount, delivery charges, service charge, etc.)
     setOrderExtras(prev => ({
       ...prev,
       [orderType]: {
         discount: reopenData.discount || 0,
         ...(reopenData.deliveryCharges ? { deliveryCharges: reopenData.deliveryCharges } : {}),
         ...(reopenData.deliveryTime ? { deliveryTime: reopenData.deliveryTime } : {}),
-        ...(reopenData.pickupTime ? { pickupTime: reopenData.pickupTime } : {})
+        ...(reopenData.pickupTime ? { pickupTime: reopenData.pickupTime } : {}),
+        ...(orderType === 'walkin' ? {
+          serviceChargeAmount: parseFloat(reopenData.serviceChargeAmount || 0),
+          serviceChargePercentage: reopenData.serviceChargeType === 'percentage' ? parseFloat(reopenData.serviceChargeValue || 0) : 0
+        } : {})
       }
     }))
 
@@ -636,6 +640,15 @@ export default function NewOrderPage() {
     localStorage.removeItem('new_order_original_amount_paid')
     localStorage.removeItem('new_order_original_payment_method')
     localStorage.removeItem('new_order_can_decrease_qty')
+    // Clear per-tab service charge when modification is cancelled/completed
+    setOrderExtras(prev => {
+      const updated = { ...prev }
+      if (updated.walkin) {
+        const { serviceChargeAmount: _a, serviceChargePercentage: _p, ...rest } = updated.walkin
+        updated.walkin = rest
+      }
+      return updated
+    })
   }
 
   const handleOrderAndPay = () => {
@@ -694,7 +707,10 @@ export default function NewOrderPage() {
       const changes = {
         itemsAdded: [],
         itemsRemoved: [],
-        itemsModified: []
+        itemsModified: [],
+        oldTotal: originalState.total,
+        newTotal: orderData.total,
+        oldSubtotal: originalState.subtotal
       }
 
       // Find removed items

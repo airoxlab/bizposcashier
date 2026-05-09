@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Users,
@@ -36,7 +36,10 @@ import {
   DollarSign,
   Clock,
   ArrowRight,
-  Zap
+  Zap,
+  Package,
+  Building2,
+  BookOpen
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
@@ -49,6 +52,17 @@ import ProtectedPage from '../../components/ProtectedPage'
 import CashierAnalytics from '../../components/pos/CashierAnalytics'
 import { usePermissions, permissionManager } from '../../lib/permissionManager'
 import { planManager } from '../../lib/planManager'
+
+function Tooltip({ label, children }) {
+  return (
+    <div className="relative group/tip inline-flex">
+      {children}
+      <span className="pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-2 whitespace-nowrap text-xs font-semibold px-2 py-1 rounded-md bg-gray-900 dark:bg-white text-white dark:text-gray-900 opacity-0 group-hover/tip:opacity-100 transition-opacity duration-75 z-[60] shadow-md">
+        {label}
+      </span>
+    </div>
+  )
+}
 
 export default function Dashboard() {
   const [user, setUser] = useState(null)
@@ -198,6 +212,9 @@ export default function Dashboard() {
     wa.onStatus(({ status }) => setWaStatus(status))
     return () => wa.removeListeners()
   }, [])
+
+  // Quick actions: fixed 8-column row, last slot is "Others" folder when overflow
+  const QUICK_ACTIONS_PER_ROW = 8
 
   const initializeCache = async () => {
     try {
@@ -366,16 +383,10 @@ export default function Dashboard() {
     // }
   ]
 
-  const bottomMenuItems = [
-
-    {
-      id: 'expenses',
-      title: 'Expenses',
-      icon: Receipt,
-      gradient: 'from-purple-500 to-indigo-600',
-      route: '/expenses',
-      permissionKey: 'EXPENSES'
-    },
+  // ============================================================================
+  // MAIN QUICK ACTIONS - Always visible on dashboard
+  // ============================================================================
+  const mainQuickItems = [
     {
       id: 'orders',
       title: 'Orders',
@@ -383,15 +394,6 @@ export default function Dashboard() {
       gradient: 'from-pink-500 to-rose-600',
       route: '/orders',
       permissionKey: 'ORDERS'
-    },
-    {
-      id: 'web-orders',
-      title: 'Web Orders',
-      icon: Globe,
-      gradient: 'from-purple-500 to-pink-600',
-      route: '/web-orders',
-      permissionKey: 'WEB_ORDERS',
-      featureKey: 'customer_website'
     },
     {
       id: 'kds',
@@ -403,13 +405,12 @@ export default function Dashboard() {
       featureKey: 'kds'
     },
     {
-      id: 'riders',
-      title: 'Riders Orders',
-      icon: Truck,
-      gradient: 'from-blue-500 to-cyan-600',
-      route: '/riders',
-      permissionKey: 'RIDERS',
-      featureKey: 'rider_management'
+      id: 'expenses',
+      title: 'Expenses',
+      icon: Receipt,
+      gradient: 'from-purple-500 to-indigo-600',
+      route: '/expenses',
+      permissionKey: 'EXPENSES'
     },
     {
       id: 'reports',
@@ -420,13 +421,12 @@ export default function Dashboard() {
       permissionKey: 'REPORTS'
     },
     {
-      id: 'petty-cash',
-      title: 'Petty Cash',
+      id: 'my-till',
+      title: 'My Till',
       icon: Wallet,
-      gradient: 'from-indigo-500 to-purple-600',
-      route: '/petty-cash',
-      permissionKey: 'PETTY_CASH_USE',
-      featureKey: 'petty_cash'
+      gradient: 'from-violet-500 to-purple-600',
+      route: '/my-till',
+      permissionKey: 'MY_TILL'
     },
     {
       id: 'marketing',
@@ -434,14 +434,90 @@ export default function Dashboard() {
       icon: MessageSquare,
       gradient: 'from-cyan-500 to-teal-600',
       route: '/marketing',
-      permissionKey: 'MARKETING',
-      featureKey: 'marketing_module'
+      permissionKey: 'MARKETING'
     }
   ]
 
-  const visibleBottomMenuItems = bottomMenuItems.filter(item =>
-    !item.featureKey || planManager.can(item.featureKey)
-  )
+  // ============================================================================
+  // OTHER QUICK ACTIONS - Hidden in "Others" folder (mobile phone style)
+  // ============================================================================
+  const otherQuickItems = [
+    {
+      id: 'web-orders',
+      title: 'Web Orders',
+      icon: Globe,
+      gradient: 'from-purple-500 to-pink-600',
+      route: '/web-orders',
+      permissionKey: 'WEB_ORDERS',
+      featureKey: 'customer_website'
+    },
+    {
+      id: 'riders',
+      title: 'Riders Orders',
+      icon: Truck,
+      gradient: 'from-blue-500 to-cyan-600',
+      route: '/riders',
+      permissionKey: 'RIDERS',
+      featureKey: 'rider_management'
+    },
+    {
+      id: 'purchase-orders',
+      title: 'Purchase Orders',
+      icon: Package,
+      gradient: 'from-teal-500 to-cyan-600',
+      route: '/purchase-orders',
+      permissionKey: 'PURCHASE_ORDERS',
+      featureKey: 'purchase_orders'
+    },
+    {
+      id: 'suppliers',
+      title: 'Suppliers',
+      icon: Building2,
+      gradient: 'from-amber-500 to-orange-600',
+      route: '/suppliers',
+      permissionKey: 'SUPPLIERS'
+    },
+    {
+      id: 'ledgers',
+      title: 'Supplier Ledger',
+      icon: BookOpen,
+      gradient: 'from-blue-500 to-indigo-600',
+      route: '/ledgers',
+      permissionKey: 'SUPPLIER_LEDGER'
+    },
+    {
+      id: 'petty-cash',
+      title: 'Petty Cash',
+      icon: Wallet,
+      gradient: 'from-indigo-500 to-purple-600',
+      route: '/petty-cash',
+      permissionKey: 'PETTY_CASH_USE',
+      featureKey: 'petty_cash'
+    }
+  ]
+
+  // Helper to check if user has permission for a card
+  const hasCardPermission = (permissionKey) => {
+    if (!permissionKey) return true // No permission required
+    return permissions.hasPermission(permissionKey)
+  }
+
+  // Helper: feature is locked by current plan (only if a featureKey is set)
+  const isFeatureLocked = (featureKey) => {
+    if (!featureKey) return false
+    if (!planReady) return false // wait for plan load before showing locks
+    return !planManager.can(featureKey)
+  }
+
+  // Combine all quick actions into a single list. If they exceed one row,
+  // last slot becomes the "Others" folder containing the overflow.
+  const allQuickItems = [...mainQuickItems, ...otherQuickItems]
+  const overflows = allQuickItems.length > QUICK_ACTIONS_PER_ROW
+  const visibleMainItems = overflows
+    ? allQuickItems.slice(0, QUICK_ACTIONS_PER_ROW - 1)
+    : allQuickItems
+  const dynamicOtherItems = overflows ? allQuickItems.slice(QUICK_ACTIONS_PER_ROW - 1) : []
+  const hasVisibleOtherItems = overflows
 
   const handleNavigation = (route, permissionKey) => {
     // Debug logging
@@ -460,17 +536,12 @@ export default function Dashboard() {
     router.push(route)
   }
 
-  // Helper to check if user has permission for a card
-  const hasCardPermission = (permissionKey) => {
-    if (!permissionKey) return true // No permission required
-    return permissions.hasPermission(permissionKey)
-  }
-
   // Get theme classes from theme manager
   const themeClasses = themeManager.getClasses()
   const isDark = themeManager.isDark()
   const [showAnalytics, setShowAnalytics] = useState(false)
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false)
+  const [showOthersFolder, setShowOthersFolder] = useState(false) // Mobile folder modal state
 
   // Get role badge color
   const getRoleBadge = () => {
@@ -596,12 +667,14 @@ export default function Dashboard() {
             <div className="flex items-center justify-end space-x-2 pr-4">
               {/* Network Status */}
               <div className="flex items-center space-x-2">
-                {cacheStatus.networkStatus.isOnline ? (
-                  <Wifi className="w-5 h-5 text-green-500" />
-                ) : (
-                  <WifiOff className="w-5 h-5 text-red-500" />
-                )}
-                
+                <Tooltip label={cacheStatus.networkStatus.isOnline ? 'Online' : 'Offline'}>
+                  {cacheStatus.networkStatus.isOnline ? (
+                    <Wifi className="w-5 h-5 text-green-500" />
+                  ) : (
+                    <WifiOff className="w-5 h-5 text-red-500" />
+                  )}
+                </Tooltip>
+
                 {cacheStatus.networkStatus.unsyncedOrders > 0 && (
                   <div className={`flex items-center space-x-1 ${isDark ? 'bg-orange-900' : 'bg-orange-100'} px-2 py-1 rounded-full`}>
                     <AlertCircle className="w-4 h-4 text-orange-600" />
@@ -610,7 +683,7 @@ export default function Dashboard() {
                     </span>
                   </div>
                 )}
-                
+
                 {cacheStatus.networkStatus.isSyncing && (
                   <RefreshCw className="w-4 h-4 text-blue-500 animate-spin" />
                 )}
@@ -618,121 +691,129 @@ export default function Dashboard() {
 
               {/* Analytics Button */}
               {permissions.canViewSalesAnalytics() && (
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  onClick={() => setShowAnalytics(true)}
-                  className={`p-3 rounded-xl ${themeClasses.button} transition-all`}
-                  title="My Shift Analytics"
-                >
-                  <BarChart3 className="w-5 h-5 text-indigo-500" />
-                </motion.button>
+                <Tooltip label="Analytics">
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => setShowAnalytics(true)}
+                    className={`p-3 rounded-xl ${themeClasses.button} transition-all`}
+                  >
+                    <BarChart3 className="w-5 h-5 text-indigo-500" />
+                  </motion.button>
+                </Tooltip>
               )}
 
               {/* Refresh Button */}
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={handleRefreshCache}
-                disabled={cacheStatus.isLoading}
-                className={`p-3 rounded-xl ${themeClasses.button} transition-all disabled:opacity-50`}
-                title="Refresh Cache & Permissions - Sync data and check for updated access rights"
-              >
-                <RefreshCw className={`w-5 h-5 ${themeClasses.textSecondary} ${cacheStatus.isLoading ? 'animate-spin' : ''}`} />
-              </motion.button>
+              <Tooltip label="Refresh">
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={handleRefreshCache}
+                  disabled={cacheStatus.isLoading}
+                  className={`p-3 rounded-xl ${themeClasses.button} transition-all disabled:opacity-50`}
+                >
+                  <RefreshCw className={`w-5 h-5 ${themeClasses.textSecondary} ${cacheStatus.isLoading ? 'animate-spin' : ''}`} />
+                </motion.button>
+              </Tooltip>
 
               {/* Theme Toggle */}
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={toggleTheme}
-                className={`p-3 rounded-xl ${themeClasses.button} transition-all`}
-              >
-                <AnimatePresence mode="wait">
-                  {theme === 'dark' ? (
-                    <motion.div
-                      key="sun"
-                      initial={{ rotate: -90, opacity: 0 }}
-                      animate={{ rotate: 0, opacity: 1 }}
-                      exit={{ rotate: 90, opacity: 0 }}
-                      transition={{ duration: 0.3 }}
-                    >
-                      <Sun className="w-5 h-5 text-yellow-500" />
-                    </motion.div>
-                  ) : (
-                    <motion.div
-                      key="moon"
-                      initial={{ rotate: 90, opacity: 0 }}
-                      animate={{ rotate: 0, opacity: 1 }}
-                      exit={{ rotate: -90, opacity: 0 }}
-                      transition={{ duration: 0.3 }}
-                    >
-                      <Moon className={`w-5 h-5 ${themeClasses.textSecondary}`} />
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </motion.button>
+              <Tooltip label={theme === 'dark' ? 'Light Mode' : 'Dark Mode'}>
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={toggleTheme}
+                  className={`p-3 rounded-xl ${themeClasses.button} transition-all`}
+                >
+                  <AnimatePresence mode="wait">
+                    {theme === 'dark' ? (
+                      <motion.div
+                        key="sun"
+                        initial={{ rotate: -90, opacity: 0 }}
+                        animate={{ rotate: 0, opacity: 1 }}
+                        exit={{ rotate: 90, opacity: 0 }}
+                        transition={{ duration: 0.3 }}
+                      >
+                        <Sun className="w-5 h-5 text-yellow-500" />
+                      </motion.div>
+                    ) : (
+                      <motion.div
+                        key="moon"
+                        initial={{ rotate: 90, opacity: 0 }}
+                        animate={{ rotate: 0, opacity: 1 }}
+                        exit={{ rotate: -90, opacity: 0 }}
+                        transition={{ duration: 0.3 }}
+                      >
+                        <Moon className={`w-5 h-5 ${themeClasses.textSecondary}`} />
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </motion.button>
+              </Tooltip>
 
               {/* Offline Orders Button */}
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => handleNavigation('/offline-orders', 'OFFLINE_ORDERS')}
-                className={`p-3 rounded-xl ${themeClasses.button} transition-all relative ${!permissions.hasPermission('OFFLINE_ORDERS') ? 'opacity-50 cursor-not-allowed' : ''}`}
-                title={cacheStatus.networkStatus.unsyncedOrders > 0
-                  ? `View ${cacheStatus.networkStatus.unsyncedOrders} offline order(s)`
-                  : 'No offline orders'}
-              >
-                <Database className={`w-5 h-5 ${themeClasses.textSecondary}`} />
-                {cacheStatus.networkStatus.unsyncedOrders > 0 && (
-                  <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[18px] h-[18px] px-1 bg-blue-500 text-white text-xs font-bold rounded-full">
-                    {cacheStatus.networkStatus.unsyncedOrders}
-                  </span>
-                )}
-              </motion.button>
+              <Tooltip label="Offline Orders">
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => handleNavigation('/offline-orders', 'OFFLINE_ORDERS')}
+                  className={`p-3 rounded-xl ${themeClasses.button} transition-all relative ${!permissions.hasPermission('OFFLINE_ORDERS') ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  <Database className={`w-5 h-5 ${themeClasses.textSecondary}`} />
+                  {cacheStatus.networkStatus.unsyncedOrders > 0 && (
+                    <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[18px] h-[18px] px-1 bg-blue-500 text-white text-xs font-bold rounded-full">
+                      {cacheStatus.networkStatus.unsyncedOrders}
+                    </span>
+                  )}
+                </motion.button>
+              </Tooltip>
 
               {/* Printer Button */}
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => handleNavigation('/printer', 'PRINTERS')}
-                className={`p-3 rounded-xl ${themeClasses.button} transition-all ${!permissions.hasPermission('PRINTERS') ? 'opacity-50 cursor-not-allowed' : ''}`}
-                title="Printer"
-              >
-                <Printer className={`w-5 h-5 ${themeClasses.textSecondary}`} />
-              </motion.button>
+              <Tooltip label="Printer">
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => handleNavigation('/printer', 'PRINTERS')}
+                  className={`p-3 rounded-xl ${themeClasses.button} transition-all ${!permissions.hasPermission('PRINTERS') ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  <Printer className={`w-5 h-5 ${themeClasses.textSecondary}`} />
+                </motion.button>
+              </Tooltip>
 
               {/* Plan Button */}
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => router.push('/settings?tab=plan')}
-                className={`p-3 rounded-xl ${themeClasses.button} transition-all`}
-                title="Plan & Billing"
-              >
-                <Crown className={`w-5 h-5 ${themeClasses.textSecondary}`} />
-              </motion.button>
+              <Tooltip label="Plan & Billing">
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => router.push('/settings?tab=plan')}
+                  className={`p-3 rounded-xl ${themeClasses.button} transition-all`}
+                >
+                  <Crown className={`w-5 h-5 ${themeClasses.textSecondary}`} />
+                </motion.button>
+              </Tooltip>
 
               {/* Settings Button */}
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => handleNavigation('/settings', 'SETTINGS')}
-                className={`p-3 rounded-xl ${themeClasses.button} transition-all ${!permissions.hasPermission('SETTINGS') ? 'opacity-50 cursor-not-allowed' : ''}`}
-                title="Settings"
-              >
-                <Settings className={`w-5 h-5 ${themeClasses.textSecondary}`} />
-              </motion.button>
+              <Tooltip label="Settings">
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => handleNavigation('/settings', 'SETTINGS')}
+                  className={`p-3 rounded-xl ${themeClasses.button} transition-all ${!permissions.hasPermission('SETTINGS') ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  <Settings className={`w-5 h-5 ${themeClasses.textSecondary}`} />
+                </motion.button>
+              </Tooltip>
 
               {/* Logout Button */}
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={handleLogout}
-                className="p-3 rounded-xl bg-red-500 hover:bg-red-600 text-white hover:shadow-lg transition-all"
-              >
-                <LogOut className="w-5 h-5" />
-              </motion.button>
+              <Tooltip label="Sign Out">
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={handleLogout}
+                  className="p-3 rounded-xl bg-red-500 hover:bg-red-600 text-white hover:shadow-lg transition-all"
+                >
+                  <LogOut className="w-5 h-5" />
+                </motion.button>
+              </Tooltip>
             </div>
           </div>
         </div>
@@ -980,7 +1061,7 @@ export default function Dashboard() {
           )}
         </motion.div>
 
-        {/* Bottom Menu */}
+        {/* Quick Actions - Mobile Folder Style */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -990,57 +1071,198 @@ export default function Dashboard() {
           <h3 className={`text-2xl font-bold ${themeClasses.textPrimary} mb-6 text-center`}>
             Quick Actions
           </h3>
-          <div className="flex flex-wrap justify-center gap-4">
-            {visibleBottomMenuItems.map((item, index) => {
-              const hasPermission = hasCardPermission(item.permissionKey)
-              return (
-              <motion.div
-                key={item.id}
-                initial={{ opacity: 0, scale: 0.8 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: 0.7 + index * 0.05 }}
-                whileHover={hasPermission ? { y: -5, scale: 1.05 } : {}}
-                whileTap={hasPermission ? { scale: 0.95 } : {}}
-                onClick={() => handleNavigation(item.route, item.permissionKey)}
-                className={`w-[calc(50%-0.5rem)] sm:w-40 md:w-36 lg:w-40 ${hasPermission ? 'cursor-pointer' : 'cursor-not-allowed'} group`}
-              >
-                <div className={`${themeClasses.card} rounded-2xl p-4 ${themeClasses.shadow} ${hasPermission ? 'hover:shadow-xl' : 'opacity-60'} transition-all duration-300 ${themeClasses.border} border relative`}>
-                  {!hasPermission && (
-                    <div className="absolute -top-2 -right-2 z-20">
-                      <div className="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-md">
-                        <Shield className="w-2.5 h-2.5" />
-                        LOCKED
+
+          {/* Single Row - Full Width 8-column grid */}
+          <div className="w-full px-4">
+            <div className="grid grid-cols-8 gap-3 w-full">
+              {/* Main Quick Actions */}
+              {visibleMainItems.map((item, index) => {
+                const hasPermission = hasCardPermission(item.permissionKey)
+                const planLocked = isFeatureLocked(item.featureKey)
+                const requiredPlan = planLocked ? (planManager.getLockedReason(item.featureKey).replace('Available on ', '').replace(' plan', '')) : null
+                const interactive = hasPermission // plan-locked cards are still clickable (route to plan page)
+                return (
+                  <motion.div
+                    key={item.id}
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: 0.7 + index * 0.05 }}
+                    whileHover={interactive ? { y: -5, scale: 1.05 } : {}}
+                    whileTap={interactive ? { scale: 0.95 } : {}}
+                    onClick={() => {
+                      if (!hasPermission) return
+                      if (planLocked) { router.push('/settings?tab=plan'); return }
+                      handleNavigation(item.route, item.permissionKey)
+                    }}
+                    className={`${interactive ? 'cursor-pointer' : 'cursor-not-allowed'} w-full`}
+                  >
+                    <div className={`${themeClasses.card} rounded-2xl p-4 ${themeClasses.shadow} ${interactive ? 'hover:shadow-xl' : 'opacity-60'} transition-all duration-300 ${themeClasses.border} border relative h-full flex flex-col items-center justify-center`}>
+                      {!hasPermission ? (
+                        <div className="absolute -top-2 -right-2 z-20">
+                          <div className="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-md">
+                            <Shield className="w-2.5 h-2.5" />
+                            LOCKED
+                          </div>
+                        </div>
+                      ) : planLocked ? (
+                        <div className="absolute -top-2 -right-2 z-20">
+                          <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-md">
+                            <Crown className="w-2.5 h-2.5" />
+                            {requiredPlan?.toUpperCase() || 'PRO'}
+                          </div>
+                        </div>
+                      ) : null}
+                      <motion.div
+                        whileHover={hasPermission ? { rotate: 10, scale: 1.1 } : {}}
+                        className={`w-10 h-10 mb-3 bg-gradient-to-r ${item.gradient} rounded-xl flex items-center justify-center shadow-lg relative`}
+                      >
+                        <item.icon className="w-5 h-5 text-white" />
+                        {item.id === 'web-orders' && pendingWebOrders > 0 && (
+                          <motion.div
+                            initial={{ scale: 0 }}
+                            animate={{ scale: [1, 1.1, 1] }}
+                            transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
+                            className="absolute -top-2 -right-2 bg-red-500 text-white text-xs font-bold rounded-full w-6 h-6 flex items-center justify-center shadow-lg border-2 border-white z-10"
+                          >
+                            {pendingWebOrders}
+                          </motion.div>
+                        )}
+                      </motion.div>
+                      <h4 className={`text-center font-medium text-xs sm:text-sm ${themeClasses.textPrimary}`}>
+                        {item.title}
+                      </h4>
+                    </div>
+                  </motion.div>
+                )
+              })}
+
+              {/* Others Folder - Always Last Card (if there are visible other items with permissions) */}
+              {hasVisibleOtherItems && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: 0.7 + visibleMainItems.length * 0.05 }}
+                  whileHover={{ y: -5, scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => setShowOthersFolder(true)}
+                  className="cursor-pointer w-full"
+                >
+                  <div className={`${themeClasses.card} rounded-2xl p-4 ${themeClasses.shadow} hover:shadow-xl transition-all duration-300 ${themeClasses.border} border relative h-full flex flex-col items-center justify-center`}>
+                    {/* iOS-style folder: 2×2 grid of mini gradient swatches */}
+                    <div className={`w-10 h-10 mb-3 ${isDark ? 'bg-gray-700' : 'bg-gray-200'} rounded-xl flex items-center justify-center shadow-lg`}>
+                      <div className="grid grid-cols-2 gap-1">
+                        {Array.from({ length: 4 }).map((_, i) => {
+                          const o = dynamicOtherItems[i]
+                          return o
+                            ? <div key={i} className={`w-2 h-2 rounded-sm bg-gradient-to-br ${o.gradient}`} />
+                            : <div key={i} className={`w-2 h-2 rounded-sm ${isDark ? 'bg-gray-600' : 'bg-gray-400'}`} />
+                        })}
                       </div>
                     </div>
-                  )}
-                  <motion.div
-                    whileHover={hasPermission ? { rotate: 10, scale: 1.1 } : {}}
-                    className={`w-10 h-10 mx-auto mb-3 bg-gradient-to-r ${item.gradient} rounded-xl flex items-center justify-center shadow-lg relative`}
-                  >
-                    <item.icon className="w-5 h-5 text-white" />
-                    {/* Show badge for web orders with pending count */}
-                    {item.id === 'web-orders' && pendingWebOrders > 0 && (
-                      <motion.div
-                        initial={{ scale: 0 }}
-                        animate={{ scale: [1, 1.1, 1] }}
-                        transition={{
-                          repeat: Infinity,
-                          duration: 2,
-                          ease: "easeInOut"
-                        }}
-                        className="absolute -top-2 -right-2 bg-red-500 text-white text-sm font-bold rounded-full min-w-[28px] h-7 px-2 flex items-center justify-center shadow-lg border-2 border-white z-10"
-                      >
-                        {pendingWebOrders}
-                      </motion.div>
+                    <h4 className={`text-center font-medium text-xs sm:text-sm ${themeClasses.textPrimary}`}>Others</h4>
+                    {dynamicOtherItems.length > 0 && (
+                      <div className="absolute -top-2 -right-2 bg-blue-500 text-white text-[10px] font-bold min-w-[20px] h-5 px-1 rounded-full flex items-center justify-center shadow-md">
+                        {dynamicOtherItems.length}
+                      </div>
                     )}
-                  </motion.div>
-                  <h4 className={`text-center font-medium text-sm ${themeClasses.textPrimary}`}>
-                    {item.title}
-                  </h4>
-                </div>
-              </motion.div>
-            )})}
+                  </div>
+                </motion.div>
+              )}
+            </div>
           </div>
+
+          {/* Others Folder Modal - Mobile Phone Style Popup */}
+          <AnimatePresence>
+            {showOthersFolder && (
+              <>
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setShowOthersFolder(false)}
+                  className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40"
+                />
+                <motion.div
+                  initial={{ opacity: 0, y: 16, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 16, scale: 0.95 }}
+                  className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-50 ${themeClasses.card} rounded-3xl p-6 shadow-2xl ${themeClasses.border} border max-w-md w-[90vw]`}
+                >
+                  <div className="flex items-center justify-between mb-4">
+                    <h4 className={`font-bold text-lg ${themeClasses.textPrimary}`}>More Actions</h4>
+                    <button
+                      onClick={() => setShowOthersFolder(false)}
+                      className={`w-8 h-8 rounded-full ${isDark ? 'bg-gray-700 hover:bg-gray-600' : 'bg-gray-100 hover:bg-gray-200'} flex items-center justify-center transition-colors`}
+                    >
+                      <X className={`w-4 h-4 ${themeClasses.textSecondary}`} />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    {dynamicOtherItems.map((item, index) => {
+                      const hasPermission = hasCardPermission(item.permissionKey)
+                      const planLocked = isFeatureLocked(item.featureKey)
+                      const requiredPlan = planLocked ? (planManager.getLockedReason(item.featureKey).replace('Available on ', '').replace(' plan', '')) : null
+                      const interactive = hasPermission
+                      return (
+                        <motion.div
+                          key={item.id}
+                          initial={{ opacity: 0, scale: 0.8 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          transition={{ delay: index * 0.05 }}
+                          whileHover={interactive ? { y: -5, scale: 1.05 } : {}}
+                          whileTap={interactive ? { scale: 0.95 } : {}}
+                          onClick={() => {
+                            if (!hasPermission) return
+                            setShowOthersFolder(false)
+                            if (planLocked) { router.push('/settings?tab=plan'); return }
+                            handleNavigation(item.route, item.permissionKey)
+                          }}
+                          className={`${interactive ? 'cursor-pointer' : 'cursor-not-allowed'}`}
+                        >
+                          <div className={`${themeClasses.card} rounded-2xl p-4 ${themeClasses.shadow} ${interactive ? 'hover:shadow-xl' : 'opacity-60'} transition-all duration-300 ${themeClasses.border} border relative h-full flex flex-col items-center`}>
+                            {!hasPermission ? (
+                              <div className="absolute -top-2 -right-2 z-20">
+                                <div className="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-md">
+                                  <Shield className="w-2.5 h-2.5" />
+                                  LOCKED
+                                </div>
+                              </div>
+                            ) : planLocked ? (
+                              <div className="absolute -top-2 -right-2 z-20">
+                                <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-md">
+                                  <Crown className="w-2.5 h-2.5" />
+                                  {requiredPlan?.toUpperCase() || 'PRO'}
+                                </div>
+                              </div>
+                            ) : null}
+                            <motion.div
+                              whileHover={hasPermission ? { rotate: 10, scale: 1.1 } : {}}
+                              className={`w-10 h-10 mx-auto mb-3 bg-gradient-to-r ${item.gradient} rounded-xl flex items-center justify-center shadow-lg relative`}
+                            >
+                              <item.icon className="w-5 h-5 text-white" />
+                              {item.id === 'web-orders' && pendingWebOrders > 0 && (
+                                <motion.div
+                                  initial={{ scale: 0 }}
+                                  animate={{ scale: [1, 1.1, 1] }}
+                                  transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
+                                  className="absolute -top-2 -right-2 bg-red-500 text-white text-sm font-bold rounded-full min-w-[28px] h-7 px-2 flex items-center justify-center shadow-lg border-2 border-white z-10"
+                                >
+                                  {pendingWebOrders}
+                                </motion.div>
+                              )}
+                            </motion.div>
+                            <h4 className={`text-center font-medium text-sm ${themeClasses.textPrimary}`}>
+                              {item.title}
+                            </h4>
+                          </div>
+                        </motion.div>
+                      )
+                    })}
+                  </div>
+                </motion.div>
+              </>
+            )}
+          </AnimatePresence>
         </motion.div>
       </main>
       </div>
