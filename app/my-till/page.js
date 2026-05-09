@@ -12,17 +12,14 @@ import {
   TrendingUp,
   TrendingDown,
   RefreshCw,
-  Calendar,
   ArrowDownLeft,
   ArrowUpRight,
   BookOpen,
   Banknote,
   User,
-  AlertCircle,
   ChevronDown,
-  ChevronUp,
-  Filter,
-  X,
+  ChevronLeft,
+  ChevronRight,
   Clock,
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
@@ -47,12 +44,6 @@ const SOURCE_LABELS = {
   adjustment:       'Adjustment',
 }
 
-const ACCOUNT_COLORS = {
-  cash:      'from-green-500 to-emerald-600',
-  easypaisa: 'from-green-600 to-teal-700',
-  jazzcash:  'from-orange-500 to-red-600',
-  bank:      'from-blue-500 to-indigo-600',
-}
 
 function MyTillContent() {
   const router = useRouter()
@@ -63,10 +54,8 @@ function MyTillContent() {
   const [ledgerEntries, setLedgerEntries] = useState([])
   const [ledgerLoading, setLedgerLoading] = useState(false)
   const [selectedAccountId, setSelectedAccountId] = useState('all')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0])
   const [typeFilter, setTypeFilter] = useState('all')
-  const [showFilters, setShowFilters] = useState(false)
   const [expandedEntry, setExpandedEntry] = useState(null)
 
   useEffect(() => {
@@ -145,13 +134,12 @@ function MyTillContent() {
         .from('payment_account_ledger')
         .select('*, payment_accounts(id, name, icon, color)')
         .in('account_id', accountIds)
+        .eq('transaction_date', selectedDate)
         .order('created_at', { ascending: false })
 
-      if (dateFrom) query = query.gte('transaction_date', dateFrom)
-      if (dateTo)   query = query.lte('transaction_date', dateTo)
       if (typeFilter !== 'all') query = query.eq('transaction_type', typeFilter)
 
-      const { data, error } = await query.limit(500)
+      const { data, error } = await query
       if (error) throw error
       setLedgerEntries(data || [])
     } catch (err) {
@@ -160,7 +148,23 @@ function MyTillContent() {
     } finally {
       setLedgerLoading(false)
     }
-  }, [accounts, selectedAccountId, dateFrom, dateTo, typeFilter])
+  }, [accounts, selectedAccountId, selectedDate, typeFilter])
+
+  const today = new Date().toISOString().split('T')[0]
+  const isToday = selectedDate === today
+
+  const goToPrevDay = () => {
+    const d = new Date(selectedDate + 'T12:00:00')
+    d.setDate(d.getDate() - 1)
+    setSelectedDate(d.toISOString().split('T')[0])
+  }
+
+  const goToNextDay = () => {
+    const d = new Date(selectedDate + 'T12:00:00')
+    d.setDate(d.getDate() + 1)
+    const next = d.toISOString().split('T')[0]
+    if (next <= today) setSelectedDate(next)
+  }
 
   useEffect(() => {
     if (accounts.length) fetchLedger()
@@ -256,7 +260,7 @@ function MyTillContent() {
             <div className="grid grid-cols-2 gap-3">
               {accounts.map((account, i) => {
                 const IconComponent = getIconComponent(account.icon)
-                const gradientClass = ACCOUNT_COLORS[account.payment_method_key] || 'from-slate-500 to-slate-600'
+                const baseColor = (account.color || '#6366f1').slice(0, 7)
                 const balance = parseFloat(account.current_balance || 0)
                 const isSelected = selectedAccountId === account.id
                 return (
@@ -266,7 +270,8 @@ function MyTillContent() {
                     animate={{ opacity: 1, scale: 1 }}
                     transition={{ delay: i * 0.05 }}
                     onClick={() => setSelectedAccountId(isSelected ? 'all' : account.id)}
-                    className={`bg-gradient-to-br ${gradientClass} rounded-xl p-3.5 text-white cursor-pointer shadow-md transition-all active:scale-95 ${
+                    style={{ background: `linear-gradient(135deg, ${baseColor}, ${baseColor}cc)` }}
+                    className={`rounded-xl p-3.5 text-white cursor-pointer shadow-md transition-all active:scale-95 ${
                       isSelected ? 'ring-2 ring-white/70 ring-offset-2 ring-offset-transparent scale-[1.02]' : 'hover:scale-[1.01]'
                     }`}
                   >
@@ -301,9 +306,9 @@ function MyTillContent() {
         <div className="flex-1 flex flex-col overflow-hidden">
 
           {/* Ledger toolbar */}
-          <div className={`flex items-center gap-3 px-4 py-3 border-b flex-shrink-0 ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-gray-200'}`}>
+          <div className={`flex items-center gap-2 px-4 py-3 border-b flex-shrink-0 ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-white border-gray-200'}`}>
             <BookOpen className="w-4 h-4 text-indigo-500 flex-shrink-0" />
-            <span className={`font-semibold text-sm flex-1 ${isDark ? 'text-white' : 'text-gray-900'}`}>
+            <span className={`font-semibold text-sm ${isDark ? 'text-white' : 'text-gray-900'}`}>
               Ledger
               {ledgerEntries.length > 0 && (
                 <span className={`ml-2 text-xs font-normal px-1.5 py-0.5 rounded-full ${isDark ? 'bg-slate-700 text-gray-300' : 'bg-gray-100 text-gray-500'}`}>
@@ -312,47 +317,53 @@ function MyTillContent() {
               )}
             </span>
 
-            {/* Inline filters */}
-            <div className="flex items-center gap-2">
-              <input
-                type="date"
-                value={dateFrom}
-                onChange={e => setDateFrom(e.target.value)}
-                className={`text-xs px-2 py-1.5 rounded-lg border ${
-                  isDark ? 'bg-slate-700 border-slate-600 text-white' : 'bg-gray-50 border-gray-300 text-gray-900'
-                } focus:outline-none focus:border-indigo-500 transition-colors`}
-              />
-              <span className={`text-xs ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>–</span>
-              <input
-                type="date"
-                value={dateTo}
-                onChange={e => setDateTo(e.target.value)}
-                className={`text-xs px-2 py-1.5 rounded-lg border ${
-                  isDark ? 'bg-slate-700 border-slate-600 text-white' : 'bg-gray-50 border-gray-300 text-gray-900'
-                } focus:outline-none focus:border-indigo-500 transition-colors`}
-              />
-              <select
-                value={typeFilter}
-                onChange={e => setTypeFilter(e.target.value)}
-                className={`text-xs px-2 py-1.5 rounded-lg border ${
-                  isDark ? 'bg-slate-700 border-slate-600 text-white' : 'bg-gray-50 border-gray-300 text-gray-900'
-                } focus:outline-none focus:border-indigo-500 transition-colors`}
+            {/* Day navigator */}
+            <div className="flex items-center gap-1 ml-auto">
+              <button
+                onClick={goToPrevDay}
+                className={`p-1.5 rounded-lg ${isDark ? 'text-gray-400 hover:text-white hover:bg-slate-700' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'} transition-colors`}
+                title="Previous day"
               >
-                <option value="all">All</option>
-                <option value="credit">In</option>
-                <option value="debit">Out</option>
-              </select>
-              {(dateFrom || dateTo || typeFilter !== 'all') && (
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              <span className={`text-xs font-medium px-2 py-1 rounded-lg min-w-[80px] text-center ${isDark ? 'bg-slate-700 text-gray-200' : 'bg-gray-100 text-gray-700'}`}>
+                {isToday ? 'Today' : selectedDate}
+              </span>
+              <button
+                onClick={goToNextDay}
+                disabled={isToday}
+                className={`p-1.5 rounded-lg transition-colors ${
+                  isToday
+                    ? isDark ? 'text-slate-600 cursor-not-allowed' : 'text-gray-300 cursor-not-allowed'
+                    : isDark ? 'text-gray-400 hover:text-white hover:bg-slate-700' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-100'
+                }`}
+                title="Next day"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+              {!isToday && (
                 <button
-                  onClick={() => { setDateFrom(''); setDateTo(''); setTypeFilter('all') }}
-                  className={`p-1.5 rounded-lg ${isDark ? 'text-gray-400 hover:text-white hover:bg-slate-700' : 'text-gray-400 hover:text-gray-700 hover:bg-gray-100'} transition-colors`}
-                  title="Clear filters"
+                  onClick={() => setSelectedDate(today)}
+                  className={`text-xs px-2 py-1 rounded-lg font-medium transition-colors ${isDark ? 'bg-indigo-900/40 text-indigo-400 hover:bg-indigo-900/60' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'}`}
                 >
-                  <X className="w-3.5 h-3.5" />
+                  Today
                 </button>
               )}
-              {ledgerLoading && <RefreshCw className="w-3.5 h-3.5 text-indigo-400 animate-spin flex-shrink-0" />}
             </div>
+
+            {/* Type filter */}
+            <select
+              value={typeFilter}
+              onChange={e => setTypeFilter(e.target.value)}
+              className={`text-xs px-2 py-1.5 rounded-lg border ${
+                isDark ? 'bg-slate-700 border-slate-600 text-white' : 'bg-gray-50 border-gray-300 text-gray-900'
+              } focus:outline-none focus:border-indigo-500 transition-colors`}
+            >
+              <option value="all">All</option>
+              <option value="credit">In</option>
+              <option value="debit">Out</option>
+            </select>
+            {ledgerLoading && <RefreshCw className="w-3.5 h-3.5 text-indigo-400 animate-spin flex-shrink-0" />}
           </div>
 
           {/* Ledger entries — scrollable */}
@@ -365,10 +376,10 @@ function MyTillContent() {
             ) : ledgerEntries.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full gap-2">
                 <BookOpen className={`w-12 h-12 opacity-20 ${isDark ? 'text-gray-400' : 'text-gray-400'}`} />
-                <p className={`text-sm font-medium ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>No transactions found</p>
-                {(dateFrom || dateTo) && (
-                  <p className={`text-xs ${isDark ? 'text-gray-600' : 'text-gray-400'}`}>Try adjusting the date filters</p>
-                )}
+                <p className={`text-sm font-medium ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>No transactions</p>
+                <p className={`text-xs ${isDark ? 'text-gray-600' : 'text-gray-400'}`}>
+                  {isToday ? 'No activity today' : `No activity on ${selectedDate}`}
+                </p>
               </div>
             ) : (
               ledgerEntries.map((entry) => {

@@ -53,9 +53,50 @@ import CashierAnalytics from '../../components/pos/CashierAnalytics'
 import { usePermissions, permissionManager } from '../../lib/permissionManager'
 import { planManager } from '../../lib/planManager'
 
-function Tooltip({ label, children }) {
+// ── Plan route definitions ──────────────────────────────────────────────────
+// Single source of truth for dashboard card gating. To add a new page, put
+// its route in the appropriate plan object — no other change needed.
+const CASHIER_PLANS = {
+  starter: {
+    name: 'Starter',
+    routes: new Set([
+      '/walkin', '/takeaway', '/delivery', '/new-order',
+      '/orders', '/payment', '/expenses', '/reports',
+      '/riders', '/printer', '/settings',
+    ]),
+  },
+  growth: {
+    name: 'Growth',
+    routes: new Set([
+      '/kds', '/marketing', '/offline-orders',
+    ]),
+  },
+  business: {
+    name: 'Business',
+    routes: new Set([
+      '/petty-cash', '/purchase-orders', '/suppliers',
+      '/ledgers', '/my-till', '/web-orders',
+    ]),
+  },
+}
+const PLAN_TIER = { starter: 0, growth: 1, business: 2 }
+
+// Returns the required plan display name if current plan cannot access route, else null.
+function getRoutePlanLock(route, currentSlug) {
+  for (const [slug, plan] of Object.entries(CASHIER_PLANS)) {
+    if (plan.routes.has(route)) {
+      const currentTier = PLAN_TIER[currentSlug ?? 'starter'] ?? 0
+      if (currentTier >= PLAN_TIER[slug]) return null
+      return plan.name
+    }
+  }
+  return null
+}
+// ────────────────────────────────────────────────────────────────────────────
+
+function Tooltip({ label, children, className = '' }) {
   return (
-    <div className="relative group/tip inline-flex">
+    <div className={`relative group/tip inline-flex ${className}`}>
       {children}
       <span className="pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-2 whitespace-nowrap text-xs font-semibold px-2 py-1 rounded-md bg-gray-900 dark:bg-white text-white dark:text-gray-900 opacity-0 group-hover/tip:opacity-100 transition-opacity duration-75 z-[60] shadow-md">
         {label}
@@ -81,16 +122,15 @@ export default function Dashboard() {
   const [activeOrders, setActiveOrders] = useState([])
   const [ordersLoading, setOrdersLoading] = useState(true)
   const [waStatus, setWaStatus] = useState('disconnected')
-  const [planReady, setPlanReady] = useState(planManager.isLoaded)
+  const [planVersion, setPlanVersion] = useState(planManager.isLoaded ? 1 : 0)
+  const planReady = planVersion > 0
   const router = useRouter()
   const permissions = usePermissions()
 
   useEffect(() => {
-    if (planManager.isLoaded) {
-      setPlanReady(true)
-      return
-    }
-    const onLoaded = () => setPlanReady(true)
+    const onLoaded = () => setPlanVersion(v => v + 1)
+    // Fire immediately if plan is already in cache — covers the mount case
+    if (planManager.isLoaded) onLoaded()
     window.addEventListener('planmanager:loaded', onLoaded)
     return () => window.removeEventListener('planmanager:loaded', onLoaded)
   }, [])
@@ -401,8 +441,7 @@ export default function Dashboard() {
       icon: ChefHat,
       gradient: 'from-orange-500 to-red-600',
       route: '/kds',
-      permissionKey: 'KDS',
-      featureKey: 'kds'
+      permissionKey: 'KDS'
     },
     {
       id: 'expenses',
@@ -421,12 +460,12 @@ export default function Dashboard() {
       permissionKey: 'REPORTS'
     },
     {
-      id: 'my-till',
-      title: 'My Till',
-      icon: Wallet,
-      gradient: 'from-violet-500 to-purple-600',
-      route: '/my-till',
-      permissionKey: 'MY_TILL'
+      id: 'riders',
+      title: 'Riders Orders',
+      icon: Truck,
+      gradient: 'from-blue-500 to-cyan-600',
+      route: '/riders',
+      permissionKey: 'RIDERS'
     },
     {
       id: 'marketing',
@@ -435,6 +474,14 @@ export default function Dashboard() {
       gradient: 'from-cyan-500 to-teal-600',
       route: '/marketing',
       permissionKey: 'MARKETING'
+    },
+    {
+      id: 'my-till',
+      title: 'My Till',
+      icon: Wallet,
+      gradient: 'from-violet-500 to-purple-600',
+      route: '/my-till',
+      permissionKey: 'MY_TILL'
     }
   ]
 
@@ -448,17 +495,7 @@ export default function Dashboard() {
       icon: Globe,
       gradient: 'from-purple-500 to-pink-600',
       route: '/web-orders',
-      permissionKey: 'WEB_ORDERS',
-      featureKey: 'customer_website'
-    },
-    {
-      id: 'riders',
-      title: 'Riders Orders',
-      icon: Truck,
-      gradient: 'from-blue-500 to-cyan-600',
-      route: '/riders',
-      permissionKey: 'RIDERS',
-      featureKey: 'rider_management'
+      permissionKey: 'WEB_ORDERS'
     },
     {
       id: 'purchase-orders',
@@ -466,8 +503,7 @@ export default function Dashboard() {
       icon: Package,
       gradient: 'from-teal-500 to-cyan-600',
       route: '/purchase-orders',
-      permissionKey: 'PURCHASE_ORDERS',
-      featureKey: 'purchase_orders'
+      permissionKey: 'PURCHASE_ORDERS'
     },
     {
       id: 'suppliers',
@@ -491,8 +527,7 @@ export default function Dashboard() {
       icon: Wallet,
       gradient: 'from-indigo-500 to-purple-600',
       route: '/petty-cash',
-      permissionKey: 'PETTY_CASH_USE',
-      featureKey: 'petty_cash'
+      permissionKey: 'PETTY_CASH_USE'
     }
   ]
 
@@ -502,11 +537,10 @@ export default function Dashboard() {
     return permissions.hasPermission(permissionKey)
   }
 
-  // Helper: feature is locked by current plan (only if a featureKey is set)
-  const isFeatureLocked = (featureKey) => {
-    if (!featureKey) return false
-    if (!planReady) return false // wait for plan load before showing locks
-    return !planManager.can(featureKey)
+  const currentPlanSlug = planReady ? (planManager.getPlanSlug() ?? 'starter') : 'starter'
+  const getCardPlanLock = (route) => {
+    if (!planReady) return null
+    return getRoutePlanLock(route, currentPlanSlug)
   }
 
   // Combine all quick actions into a single list. If they exceed one row,
@@ -1078,25 +1112,23 @@ export default function Dashboard() {
               {/* Main Quick Actions */}
               {visibleMainItems.map((item, index) => {
                 const hasPermission = hasCardPermission(item.permissionKey)
-                const planLocked = isFeatureLocked(item.featureKey)
-                const requiredPlan = planLocked ? (planManager.getLockedReason(item.featureKey).replace('Available on ', '').replace(' plan', '')) : null
-                const interactive = hasPermission // plan-locked cards are still clickable (route to plan page)
+                const planLock = getCardPlanLock(item.route)
+                const locked = !hasPermission || !!planLock
                 return (
                   <motion.div
                     key={item.id}
                     initial={{ opacity: 0, scale: 0.8 }}
                     animate={{ opacity: 1, scale: 1 }}
                     transition={{ delay: 0.7 + index * 0.05 }}
-                    whileHover={interactive ? { y: -5, scale: 1.05 } : {}}
-                    whileTap={interactive ? { scale: 0.95 } : {}}
+                    whileHover={!locked ? { y: -5, scale: 1.05 } : {}}
+                    whileTap={!locked ? { scale: 0.95 } : {}}
                     onClick={() => {
-                      if (!hasPermission) return
-                      if (planLocked) { router.push('/settings?tab=plan'); return }
+                      if (locked) return
                       handleNavigation(item.route, item.permissionKey)
                     }}
-                    className={`${interactive ? 'cursor-pointer' : 'cursor-not-allowed'} w-full`}
+                    className={`${locked ? 'cursor-not-allowed' : 'cursor-pointer'} w-full`}
                   >
-                    <div className={`${themeClasses.card} rounded-2xl p-4 ${themeClasses.shadow} ${interactive ? 'hover:shadow-xl' : 'opacity-60'} transition-all duration-300 ${themeClasses.border} border relative h-full flex flex-col items-center justify-center`}>
+                    <div className={`${themeClasses.card} rounded-2xl p-4 ${themeClasses.shadow} ${!locked ? 'hover:shadow-xl' : ''} transition-all duration-300 ${themeClasses.border} border relative h-full flex flex-col items-center justify-center`}>
                       {!hasPermission ? (
                         <div className="absolute -top-2 -right-2 z-20">
                           <div className="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-md">
@@ -1104,33 +1136,35 @@ export default function Dashboard() {
                             LOCKED
                           </div>
                         </div>
-                      ) : planLocked ? (
+                      ) : planLock ? (
                         <div className="absolute -top-2 -right-2 z-20">
                           <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-md">
                             <Crown className="w-2.5 h-2.5" />
-                            {requiredPlan?.toUpperCase() || 'PRO'}
+                            {planLock.toUpperCase()}
                           </div>
                         </div>
                       ) : null}
-                      <motion.div
-                        whileHover={hasPermission ? { rotate: 10, scale: 1.1 } : {}}
-                        className={`w-10 h-10 mb-3 bg-gradient-to-r ${item.gradient} rounded-xl flex items-center justify-center shadow-lg relative`}
-                      >
-                        <item.icon className="w-5 h-5 text-white" />
-                        {item.id === 'web-orders' && pendingWebOrders > 0 && (
-                          <motion.div
-                            initial={{ scale: 0 }}
-                            animate={{ scale: [1, 1.1, 1] }}
-                            transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
-                            className="absolute -top-2 -right-2 bg-red-500 text-white text-xs font-bold rounded-full w-6 h-6 flex items-center justify-center shadow-lg border-2 border-white z-10"
-                          >
-                            {pendingWebOrders}
-                          </motion.div>
-                        )}
-                      </motion.div>
-                      <h4 className={`text-center font-medium text-xs sm:text-sm ${themeClasses.textPrimary}`}>
-                        {item.title}
-                      </h4>
+                      <div className={locked ? 'blur-sm pointer-events-none flex flex-col items-center' : 'flex flex-col items-center'}>
+                        <motion.div
+                          whileHover={!locked ? { rotate: 10, scale: 1.1 } : {}}
+                          className={`w-10 h-10 mb-3 bg-gradient-to-r ${item.gradient} rounded-xl flex items-center justify-center shadow-lg relative`}
+                        >
+                          <item.icon className="w-5 h-5 text-white" />
+                          {item.id === 'web-orders' && pendingWebOrders > 0 && (
+                            <motion.div
+                              initial={{ scale: 0 }}
+                              animate={{ scale: [1, 1.1, 1] }}
+                              transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
+                              className="absolute -top-2 -right-2 bg-red-500 text-white text-xs font-bold rounded-full w-6 h-6 flex items-center justify-center shadow-lg border-2 border-white z-10"
+                            >
+                              {pendingWebOrders}
+                            </motion.div>
+                          )}
+                        </motion.div>
+                        <h4 className={`text-center font-medium text-xs sm:text-sm ${themeClasses.textPrimary}`}>
+                          {item.title}
+                        </h4>
+                      </div>
                     </div>
                   </motion.div>
                 )
@@ -1200,26 +1234,24 @@ export default function Dashboard() {
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                     {dynamicOtherItems.map((item, index) => {
                       const hasPermission = hasCardPermission(item.permissionKey)
-                      const planLocked = isFeatureLocked(item.featureKey)
-                      const requiredPlan = planLocked ? (planManager.getLockedReason(item.featureKey).replace('Available on ', '').replace(' plan', '')) : null
-                      const interactive = hasPermission
+                      const planLock = getCardPlanLock(item.route)
+                      const locked = !hasPermission || !!planLock
                       return (
                         <motion.div
                           key={item.id}
                           initial={{ opacity: 0, scale: 0.8 }}
                           animate={{ opacity: 1, scale: 1 }}
                           transition={{ delay: index * 0.05 }}
-                          whileHover={interactive ? { y: -5, scale: 1.05 } : {}}
-                          whileTap={interactive ? { scale: 0.95 } : {}}
+                          whileHover={!locked ? { y: -5, scale: 1.05 } : {}}
+                          whileTap={!locked ? { scale: 0.95 } : {}}
                           onClick={() => {
-                            if (!hasPermission) return
+                            if (locked) return
                             setShowOthersFolder(false)
-                            if (planLocked) { router.push('/settings?tab=plan'); return }
                             handleNavigation(item.route, item.permissionKey)
                           }}
-                          className={`${interactive ? 'cursor-pointer' : 'cursor-not-allowed'}`}
+                          className={`${locked ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                         >
-                          <div className={`${themeClasses.card} rounded-2xl p-4 ${themeClasses.shadow} ${interactive ? 'hover:shadow-xl' : 'opacity-60'} transition-all duration-300 ${themeClasses.border} border relative h-full flex flex-col items-center`}>
+                          <div className={`${themeClasses.card} rounded-2xl p-4 ${themeClasses.shadow} ${!locked ? 'hover:shadow-xl' : ''} transition-all duration-300 ${themeClasses.border} border relative h-full flex flex-col items-center`}>
                             {!hasPermission ? (
                               <div className="absolute -top-2 -right-2 z-20">
                                 <div className="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-md">
@@ -1227,33 +1259,35 @@ export default function Dashboard() {
                                   LOCKED
                                 </div>
                               </div>
-                            ) : planLocked ? (
+                            ) : planLock ? (
                               <div className="absolute -top-2 -right-2 z-20">
                                 <div className="bg-gradient-to-r from-amber-500 to-orange-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-md">
                                   <Crown className="w-2.5 h-2.5" />
-                                  {requiredPlan?.toUpperCase() || 'PRO'}
+                                  {planLock.toUpperCase()}
                                 </div>
                               </div>
                             ) : null}
-                            <motion.div
-                              whileHover={hasPermission ? { rotate: 10, scale: 1.1 } : {}}
-                              className={`w-10 h-10 mx-auto mb-3 bg-gradient-to-r ${item.gradient} rounded-xl flex items-center justify-center shadow-lg relative`}
-                            >
-                              <item.icon className="w-5 h-5 text-white" />
-                              {item.id === 'web-orders' && pendingWebOrders > 0 && (
-                                <motion.div
-                                  initial={{ scale: 0 }}
-                                  animate={{ scale: [1, 1.1, 1] }}
-                                  transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
-                                  className="absolute -top-2 -right-2 bg-red-500 text-white text-sm font-bold rounded-full min-w-[28px] h-7 px-2 flex items-center justify-center shadow-lg border-2 border-white z-10"
-                                >
-                                  {pendingWebOrders}
-                                </motion.div>
-                              )}
-                            </motion.div>
-                            <h4 className={`text-center font-medium text-sm ${themeClasses.textPrimary}`}>
-                              {item.title}
-                            </h4>
+                            <div className={locked ? 'blur-sm pointer-events-none flex flex-col items-center' : 'flex flex-col items-center'}>
+                              <motion.div
+                                whileHover={!locked ? { rotate: 10, scale: 1.1 } : {}}
+                                className={`w-10 h-10 mx-auto mb-3 bg-gradient-to-r ${item.gradient} rounded-xl flex items-center justify-center shadow-lg relative`}
+                              >
+                                <item.icon className="w-5 h-5 text-white" />
+                                {item.id === 'web-orders' && pendingWebOrders > 0 && (
+                                  <motion.div
+                                    initial={{ scale: 0 }}
+                                    animate={{ scale: [1, 1.1, 1] }}
+                                    transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
+                                    className="absolute -top-2 -right-2 bg-red-500 text-white text-sm font-bold rounded-full min-w-[28px] h-7 px-2 flex items-center justify-center shadow-lg border-2 border-white z-10"
+                                  >
+                                    {pendingWebOrders}
+                                  </motion.div>
+                                )}
+                              </motion.div>
+                              <h4 className={`text-center font-medium text-sm ${themeClasses.textPrimary}`}>
+                                {item.title}
+                              </h4>
+                            </div>
                           </div>
                         </motion.div>
                       )

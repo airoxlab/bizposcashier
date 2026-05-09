@@ -32,13 +32,27 @@ export default function PaymentModal({
   const [changeAmount, setChangeAmount] = useState(0)
   const [isProcessing, setIsProcessing] = useState(false)
   const [cashierAccounts, setCashierAccounts] = useState([])
+  const [accountsLoading, setAccountsLoading] = useState(true)
 
   useEffect(() => {
     const cashier = authManager.getCashier()
+    const userId = authManager.getCurrentUser()?.id
+    if (!userId) { setAccountsLoading(false); return }
+
     if (cashier?.id) {
       supabase.from('payment_accounts').select('*')
-        .eq('cashier_id', cashier.id).eq('is_active', true).order('sort_order')
-        .then(({ data }) => { if (data?.length > 0) setCashierAccounts(data) })
+        .eq('user_id', userId)
+        .eq('cashier_id', cashier.id)
+        .eq('is_active', true)
+        .order('sort_order')
+        .then(({ data }) => { setCashierAccounts(data || []); setAccountsLoading(false) })
+    } else {
+      supabase.from('payment_accounts').select('*')
+        .eq('user_id', userId)
+        .is('cashier_id', null)
+        .eq('is_active', true)
+        .order('sort_order')
+        .then(({ data }) => { setCashierAccounts(data || []); setAccountsLoading(false) })
     }
   }, [])
 
@@ -63,18 +77,12 @@ export default function PaymentModal({
   }
   const DEFAULT_ACCT_UI = { icon: Wallet, color: 'from-indigo-500 to-purple-600', requiresAmount: false, logo: null }
 
-  const paymentMethods = cashierAccounts.length > 0
-    ? cashierAccounts.map(acct => ({
-        id: acct.name,
-        name: acct.name,
-        ...(METHOD_KEY_UI[acct.payment_method_key] || DEFAULT_ACCT_UI),
-      }))
-    : [
-        { id: 'cash',      name: 'Cash',      icon: DollarSign, color: 'from-green-500 to-green-600', requiresAmount: true,  logo: null },
-        { id: 'easypaisa', name: 'EasyPaisa', icon: Smartphone, color: 'from-green-600 to-green-700', requiresAmount: false, logo: '/images/Easypaisa-logo.png' },
-        { id: 'jazzcash',  name: 'JazzCash',  icon: Smartphone, color: 'from-orange-500 to-red-600',  requiresAmount: false, logo: '/images/new-Jazzcash-logo.png' },
-        { id: 'bank',      name: 'Bank',      icon: Building,   color: 'from-blue-500 to-indigo-600', requiresAmount: false, logo: '/images/meezan-bank-logo.png' },
-      ]
+  const paymentMethods = cashierAccounts.map(acct => ({
+    id: acct.name,
+    name: acct.name,
+    accountId: acct.id,
+    ...(METHOD_KEY_UI[acct.payment_method_key] || DEFAULT_ACCT_UI),
+  }))
 
   useEffect(() => {
     if (order) {
@@ -418,6 +426,19 @@ export default function PaymentModal({
               {/* Payment Methods - Compact */}
               <div className={`${classes.card} rounded-lg ${classes.shadow} shadow-sm ${classes.border} border p-3 flex-1 flex flex-col overflow-hidden`}>
                 <h3 className={`text-sm font-bold ${classes.textPrimary} mb-2`}>Select Payment Method</h3>
+
+                {accountsLoading ? (
+                  <div className="flex items-center justify-center flex-1 gap-2">
+                    <div className="animate-spin rounded-full h-5 w-5 border-2 border-purple-500 border-t-transparent" />
+                    <span className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Loading accounts…</span>
+                  </div>
+                ) : paymentMethods.length === 0 ? (
+                  <div className={`flex-1 flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed p-4 ${isDark ? 'border-slate-600 text-gray-500' : 'border-gray-300 text-gray-400'}`}>
+                    <Wallet className="w-8 h-8 opacity-30" />
+                    <p className="text-xs font-medium text-center">No payment accounts found.</p>
+                    <p className="text-[11px] text-center">Ask your admin to set up till accounts.</p>
+                  </div>
+                ) : (
                 <div className="grid grid-cols-2 gap-2 mb-2">
                   {paymentMethods.map((method) => (
                     <button
@@ -449,7 +470,10 @@ export default function PaymentModal({
                     </button>
                   ))}
                 </div>
+                )}
 
+                {!accountsLoading && (
+                <>
                 {/* Unpaid Option */}
                 <button
                   onClick={() => handlePaymentMethodSelect({ id: 'unpaid', name: 'Unpaid', requiresAmount: false })}
@@ -465,7 +489,8 @@ export default function PaymentModal({
                   </div>
                 </button>
 
-                {/* Split Payment Button */}
+                {/* Split Payment Button — only when accounts are available */}
+                {paymentMethods.length > 0 && (
                 <button
                   onClick={() => {
                     onPaymentComplete({ useSplitPayment: true })
@@ -479,6 +504,9 @@ export default function PaymentModal({
                   </div>
                   <p className="text-[10px] text-orange-100 mt-0.5">Pay using multiple payment methods (e.g., Rs 1000 Cash + Rs 960 EasyPaisa)</p>
                 </button>
+                )}
+                </>
+                )}
               </div>
             </div>
             {/* End LEFT COLUMN */}
@@ -660,146 +688,6 @@ export default function PaymentModal({
                 ) : (
                   <>
                     <CheckCircle className="w-4 h-4 inline mr-1.5" />
-                    Complete Payment
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </motion.div>
-      </div>
-    </AnimatePresence>
-  )
-}
-
-                <h3 className={`text-lg font-bold ${classes.textPrimary} mb-4`}>Cash Payment Details</h3>
-
-                {/* Quick Amount Buttons */}
-                <div className="mb-4">
-                  <label className={`block text-sm font-medium ${classes.textSecondary} mb-2`}>
-                    Quick Amount
-                  </label>
-                  <div className="grid grid-cols-4 md:grid-cols-8 gap-2">
-                    {quickAmounts.map((amount) => (
-                      <button
-                        key={amount}
-                        onClick={() => handleQuickAmount(amount)}
-                        className={`p-2 rounded-lg font-semibold transition-all text-xs ${
-                          parseInt(cashAmount) === amount
-                            ? 'bg-purple-600 text-white shadow-lg'
-                            : `${classes.button} ${classes.textPrimary}`
-                        }`}
-                      >
-                        Rs {amount}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-4">
-                  <div>
-                    <label className={`block text-sm font-medium ${classes.textSecondary} mb-2`}>
-                      Cash Received
-                    </label>
-                    <input
-                      type="number"
-                      value={cashAmount}
-                      onChange={(e) => handleCashAmountChange(e.target.value)}
-                      className={`w-full px-4 py-2 ${classes.input} rounded-lg focus:ring-2 focus:ring-purple-500`}
-                    />
-                  </div>
-
-                  <div>
-                    <label className={`block text-sm font-medium ${classes.textSecondary} mb-2`}>
-                      Order Total
-                    </label>
-                    <div className={`px-4 py-2 ${isDark ? 'bg-gray-700/50' : 'bg-gray-50'} rounded-lg font-semibold ${classes.textPrimary}`}>
-                      Rs {getCurrentTotal().toFixed(2)}
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className={`block text-sm font-medium ${classes.textSecondary} mb-2`}>
-                      Change
-                    </label>
-                    <div className={`px-4 py-2 rounded-lg font-bold ${
-                      changeAmount > 0
-                        ? `${isDark ? 'bg-green-900/20 text-green-400' : 'bg-green-50 text-green-600'}`
-                        : `${isDark ? 'bg-gray-700/50 text-gray-400' : 'bg-gray-50 text-gray-500'}`
-                    }`}>
-                      Rs {changeAmount.toFixed(2)}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Warnings */}
-                {cashAmount && parseFloat(cashAmount) < getCurrentTotal() && (
-                  <div className={`mt-3 p-3 rounded-lg border ${isDark ? 'bg-red-900/20 border-red-800/30' : 'bg-red-50 border-red-200'}`}>
-                    <div className="flex items-center">
-                      <AlertTriangle className={`w-4 h-4 mr-2 ${isDark ? 'text-red-400' : 'text-red-600'}`} />
-                      <p className={`font-medium text-sm ${isDark ? 'text-red-300' : 'text-red-700'}`}>
-                        Insufficient! Need Rs {(getCurrentTotal() - parseFloat(cashAmount)).toFixed(2)} more.
-                      </p>
-                    </div>
-                  </div>
-                )}
-
-                {changeAmount > 0 && (
-                  <div className={`mt-3 p-3 rounded-lg border ${isDark ? 'bg-green-900/20 border-green-800/30' : 'bg-green-50 border-green-200'}`}>
-                    <div className="flex items-center">
-                      <CheckCircle className={`w-4 h-4 mr-2 ${isDark ? 'text-green-400' : 'text-green-600'}`} />
-                      <p className={`font-medium text-sm ${isDark ? 'text-green-300' : 'text-green-700'}`}>
-                        Payment sufficient! Change: Rs {changeAmount.toFixed(2)}
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Order Summary */}
-            <div className={`${isDark ? 'bg-gray-800/50' : 'bg-gray-50'} rounded-xl p-4 space-y-2`}>
-              <div className="flex justify-between">
-                <span className={classes.textSecondary}>Subtotal:</span>
-                <span className={`font-semibold ${classes.textPrimary}`}>Rs {originalSubtotal.toFixed(2)}</span>
-              </div>
-              {discountAmount > 0 && (
-                <div className={`flex justify-between ${isDark ? 'text-green-400' : 'text-green-600'}`}>
-                  <span>Discount ({discountType === 'percentage' ? `${discountValue}%` : `Rs ${discountValue}`}):</span>
-                  <span className="font-semibold">-Rs {discountAmount.toFixed(2)}</span>
-                </div>
-              )}
-              <div className={`flex justify-between text-xl font-bold ${classes.textPrimary} border-t ${classes.border} pt-2`}>
-                <span>Total:</span>
-                <span className="text-green-600">Rs {getCurrentTotal().toFixed(2)}</span>
-              </div>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="flex gap-3">
-              <button
-                onClick={onClose}
-                className={`flex-1 py-3 rounded-xl font-semibold ${classes.button} transition-all`}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handlePayment}
-                disabled={!canProcessPayment() || isProcessing}
-                className={`flex-1 py-3 rounded-xl font-semibold transition-all ${
-                  canProcessPayment() && !isProcessing
-                    ? 'bg-green-600 hover:bg-green-700 text-white'
-                    : `${isDark ? 'bg-gray-600 text-gray-400' : 'bg-gray-300 text-gray-500'} cursor-not-allowed`
-                }`}
-              >
-                {isProcessing ? (
-                  <div className="flex items-center justify-center">
-                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-2"></div>
-                    Processing...
-                  </div>
-                ) : (
-                  <>
-                    <CheckCircle className="w-5 h-5 inline mr-2" />
                     Complete Payment
                   </>
                 )}

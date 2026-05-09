@@ -325,23 +325,58 @@ useEffect(() => {
     easypaisa: { icon: Smartphone, color: 'from-green-600 to-green-700',  requiresAmount: false, logo: '/images/Easypaisa-logo.png' },
     jazzcash:  { icon: Smartphone, color: 'from-orange-500 to-red-600',   requiresAmount: false, logo: '/images/new-Jazzcash-logo.png' },
     bank:      { icon: Building,   color: 'from-blue-500 to-indigo-600',  requiresAmount: false, logo: '/images/meezan-bank-logo.png' },
+    upaisa:    { icon: Smartphone, color: 'from-purple-500 to-purple-700', requiresAmount: false, logo: '/images/upaisa.png', logoClass: 'scale-150' },
+    nayapay:   { icon: Smartphone, color: 'from-red-500 to-red-700',      requiresAmount: false, logo: '/images/nayapay.png' },
+    sadapay:   { icon: Smartphone, color: 'from-pink-500 to-pink-700',    requiresAmount: false, logo: '/images/sadapay.png' },
+    hbl:       { icon: Building,   color: 'from-green-700 to-green-900',  requiresAmount: false, logo: '/images/hbl.png' },
+    hbl_pay:   { icon: Building,   color: 'from-green-700 to-green-900',  requiresAmount: false, logo: '/images/hbl.png' },
   }
   const DEFAULT_METHOD_UI = { icon: Wallet, color: 'from-indigo-500 to-purple-600', requiresAmount: false, logo: null }
 
+  const DEFAULT_KEY_ORDER = ['cash', 'easypaisa', 'jazzcash', 'bank']
+  const getDefaultIndex = (acct) => {
+    const byKey = DEFAULT_KEY_ORDER.indexOf(acct.payment_method_key)
+    if (byKey !== -1) return byKey
+    const n = (acct.name || '').toLowerCase().trim()
+    if (n === 'cash') return 0
+    if (n === 'easypaisa') return 1
+    if (n === 'jazzcash') return 2
+    if (n === 'bank') return 3
+    return -1
+  }
+
   // Till methods: dynamic from DB when cashier has accounts, else hardcoded fallback
   const tillMethods = cashierPaymentAccounts.length > 0
-    ? cashierPaymentAccounts.map(acct => {
-        const ui = METHOD_KEY_UI[acct.payment_method_key] || DEFAULT_METHOD_UI
-        return {
-          id: acct.name,
-          name: acct.name,
-          icon: ui.icon,
-          color: ui.color,
-          requiresAmount: ui.requiresAmount,
-          logo: ui.logo,
-          accountId: acct.id,
-        }
-      })
+    ? [...cashierPaymentAccounts]
+        .sort((a, b) => {
+          const ai = getDefaultIndex(a), bi = getDefaultIndex(b)
+          if (ai !== -1 && bi === -1) return -1
+          if (ai === -1 && bi !== -1) return 1
+          if (ai !== -1 && bi !== -1) return ai - bi
+          return (a.sort_order || 0) - (b.sort_order || 0)
+        })
+        .map(acct => {
+          const _name = (acct.name || '').toLowerCase()
+          const nameUi = _name.includes('easypaisa') ? METHOD_KEY_UI.easypaisa
+            : _name.includes('jazzcash') ? METHOD_KEY_UI.jazzcash
+            : _name.includes('upaisa') ? METHOD_KEY_UI.upaisa
+            : _name.includes('nayapay') ? METHOD_KEY_UI.nayapay
+            : _name.includes('sadapay') ? METHOD_KEY_UI.sadapay
+            : _name.includes('hbl') ? METHOD_KEY_UI.hbl
+            : _name.includes('cash') ? METHOD_KEY_UI.cash
+            : _name.includes('bank') ? METHOD_KEY_UI.bank
+            : null
+          const ui = METHOD_KEY_UI[acct.payment_method_key] || nameUi || DEFAULT_METHOD_UI
+          return {
+            id: acct.name,
+            name: acct.name,
+            icon: ui.icon,
+            color: ui.color,
+            requiresAmount: ui.requiresAmount,
+            logo: ui.logo,
+            accountId: acct.id,
+          }
+        })
     : [
         { id: 'cash',      name: 'Cash',       icon: DollarSign, color: 'from-green-500 to-green-600', requiresAmount: true,  logo: null },
         { id: 'easypaisa', name: 'EasyPaisa',  icon: Smartphone, color: 'from-green-600 to-green-700', requiresAmount: false, logo: '/images/Easypaisa-logo.png' },
@@ -2492,7 +2527,7 @@ if (orderComplete) {
                           <div className="flex flex-col items-center gap-0.5">
                             {method.logo ? (
                               <div className="w-7 h-7 relative">
-                                <Image src={method.logo} alt={method.name} fill className="object-contain" />
+                                <Image src={method.logo} alt={method.name} fill className={`object-contain ${method.logoClass || ''}`} />
                               </div>
                             ) : (
                               <div className={`w-7 h-7 bg-gradient-to-br ${method.color} rounded-lg flex items-center justify-center shadow-sm`}>
