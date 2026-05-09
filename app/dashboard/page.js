@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Users,
@@ -36,7 +36,9 @@ import {
   DollarSign,
   Clock,
   ArrowRight,
-  Zap
+  Zap,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
@@ -68,6 +70,12 @@ export default function Dashboard() {
   const [ordersLoading, setOrdersLoading] = useState(true)
   const [waStatus, setWaStatus] = useState('disconnected')
   const [planReady, setPlanReady] = useState(planManager.isLoaded)
+  const [canScrollLeft, setCanScrollLeft] = useState(false)
+  const [canScrollRight, setCanScrollRight] = useState(false)
+  const [isDragging, setIsDragging] = useState(false)
+  const [dragStart, setDragStart] = useState({ x: 0, scrollLeft: 0 })
+  const [isHovering, setIsHovering] = useState(false)
+  const scrollContainerRef = useRef(null)
   const router = useRouter()
   const permissions = usePermissions()
 
@@ -80,6 +88,71 @@ export default function Dashboard() {
     window.addEventListener('planmanager:loaded', onLoaded)
     return () => window.removeEventListener('planmanager:loaded', onLoaded)
   }, [])
+
+  // Check scroll position for arrow visibility
+  const checkScroll = () => {
+    if (scrollContainerRef.current) {
+      const { scrollLeft, scrollWidth, clientWidth } = scrollContainerRef.current
+      setCanScrollLeft(scrollLeft > 0)
+      setCanScrollRight(scrollLeft < scrollWidth - clientWidth - 10)
+    }
+  }
+
+  const scroll = (direction) => {
+    if (scrollContainerRef.current) {
+      const scrollAmount = 400
+      scrollContainerRef.current.scrollBy({
+        left: direction === 'left' ? -scrollAmount : scrollAmount,
+        behavior: 'smooth'
+      })
+    }
+  }
+
+  const handleMouseDown = (e) => {
+    setIsDragging(true)
+    setDragStart({
+      x: e.clientX,
+      scrollLeft: scrollContainerRef.current?.scrollLeft || 0
+    })
+  }
+
+  const handleMouseMove = (e) => {
+    if (!isDragging || !scrollContainerRef.current) return
+    e.preventDefault()
+    const walk = (e.clientX - dragStart.x) * 1
+    scrollContainerRef.current.scrollLeft = dragStart.scrollLeft - walk
+    checkScroll()
+  }
+
+  const handleMouseUp = () => {
+    setIsDragging(false)
+  }
+
+  useEffect(() => {
+    const container = scrollContainerRef.current
+    if (!container) return
+
+    // Run after paint so the DOM is fully laid out
+    const rafId = requestAnimationFrame(checkScroll)
+
+    container.addEventListener('scroll', checkScroll)
+    container.addEventListener('mousedown', handleMouseDown)
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+
+    // Recheck whenever the scroll container's content changes size
+    const ro = new ResizeObserver(() => requestAnimationFrame(checkScroll))
+    ro.observe(container)
+
+    return () => {
+      cancelAnimationFrame(rafId)
+      container.removeEventListener('scroll', checkScroll)
+      container.removeEventListener('mousedown', handleMouseDown)
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+      ro.disconnect()
+    }
+  }, [isDragging, dragStart])
 
   useEffect(() => {
     // Check authentication first
@@ -408,8 +481,7 @@ export default function Dashboard() {
       icon: Truck,
       gradient: 'from-blue-500 to-cyan-600',
       route: '/riders',
-      permissionKey: 'RIDERS',
-      featureKey: 'rider_management'
+      permissionKey: 'RIDERS'
     },
     {
       id: 'reports',
@@ -426,7 +498,9 @@ export default function Dashboard() {
       gradient: 'from-indigo-500 to-purple-600',
       route: '/petty-cash',
       permissionKey: 'PETTY_CASH_USE',
-      featureKey: 'petty_cash'
+      hideForStarter: true,
+      hideForGrowth: true,
+      hideForBusiness: true
     },
     {
       id: 'marketing',
@@ -435,13 +509,42 @@ export default function Dashboard() {
       gradient: 'from-cyan-500 to-teal-600',
       route: '/marketing',
       permissionKey: 'MARKETING',
-      featureKey: 'marketing_module'
+      hideForStarter: true
+    },
+    {
+      id: 'printer',
+      title: 'Printer',
+      icon: Printer,
+      gradient: 'from-amber-500 to-orange-600',
+      route: '/printer',
+      hideForGrowth: true
+    },
+    {
+      id: 'plan',
+      title: 'Plan',
+      icon: Crown,
+      gradient: 'from-yellow-500 to-amber-600',
+      route: '/plan',
+      hideForGrowth: true
+    },
+    {
+      id: 'settings',
+      title: 'Settings',
+      icon: Settings,
+      gradient: 'from-slate-500 to-gray-600',
+      route: '/settings'
     }
   ]
 
-  const visibleBottomMenuItems = bottomMenuItems.filter(item =>
-    !item.featureKey || planManager.can(item.featureKey)
-  )
+  const planSlug = planManager.getPlanSlug()
+  const visibleBottomMenuItems = bottomMenuItems.filter(item => {
+    if (item.featureKey && !planManager.can(item.featureKey)) return false
+    if (item.starterOnly && planSlug !== 'starter') return false
+    if (item.hideForBusiness && planSlug === 'business') return false
+    if (item.hideForStarter && planSlug === 'starter') return false
+    if (item.hideForGrowth && planSlug === 'growth') return false
+    return true
+  })
 
   const handleNavigation = (route, permissionKey) => {
     // Debug logging
@@ -532,8 +635,8 @@ export default function Dashboard() {
                   <p className={`${themeClasses.textSecondary} font-medium`}>
                     {user.store_name}
                   </p>
-                  {/* WhatsApp Status Badge */}
-                  <button
+                  {/* WhatsApp Status Badge — hidden on starter plan */}
+                  {planSlug !== 'starter' && <button
                     onClick={() => router.push('/settings/whatsapp')}
                     title={waStatus === 'connected' ? 'WhatsApp Connected' : waStatus === 'connecting' ? 'WhatsApp Connecting...' : 'WhatsApp Disconnected — Click to connect'}
                     className={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-xs font-medium transition-all ${
@@ -552,7 +655,7 @@ export default function Dashboard() {
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" className="flex-shrink-0">
                       <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347zM12 0C5.373 0 0 5.373 0 12c0 2.135.561 4.14 1.541 5.874L0 24l6.336-1.521A11.94 11.94 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.8 9.8 0 01-5.015-1.374l-.36-.214-3.762.903.964-3.674-.234-.375A9.778 9.778 0 012.182 12C2.182 6.57 6.57 2.182 12 2.182S21.818 6.57 21.818 12 17.43 21.818 12 21.818z"/>
                     </svg>
-                  </button>
+                  </button>}
                 </div>
 
                   {/* Plan Badge */}
@@ -618,121 +721,153 @@ export default function Dashboard() {
 
               {/* Analytics Button */}
               {permissions.canViewSalesAnalytics() && (
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  onClick={() => setShowAnalytics(true)}
-                  className={`p-3 rounded-xl ${themeClasses.button} transition-all`}
-                  title="My Shift Analytics"
-                >
-                  <BarChart3 className="w-5 h-5 text-indigo-500" />
-                </motion.button>
+                <div className="relative group">
+                  <motion.button
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => setShowAnalytics(true)}
+                    className={`p-3 rounded-xl ${themeClasses.button} transition-all`}
+                  >
+                    <BarChart3 className="w-5 h-5 text-indigo-500" />
+                  </motion.button>
+                  <span className={`pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-100 z-50 ${isDark ? 'bg-gray-700 text-gray-100 shadow-lg shadow-black/40' : 'bg-gray-800 text-white shadow-lg shadow-black/20'}`}>
+                    Analytics
+                  </span>
+                </div>
               )}
 
               {/* Refresh Button */}
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={handleRefreshCache}
-                disabled={cacheStatus.isLoading}
-                className={`p-3 rounded-xl ${themeClasses.button} transition-all disabled:opacity-50`}
-                title="Refresh Cache & Permissions - Sync data and check for updated access rights"
-              >
-                <RefreshCw className={`w-5 h-5 ${themeClasses.textSecondary} ${cacheStatus.isLoading ? 'animate-spin' : ''}`} />
-              </motion.button>
+              <div className="relative group">
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={handleRefreshCache}
+                  disabled={cacheStatus.isLoading}
+                  className={`p-3 rounded-xl ${themeClasses.button} transition-all disabled:opacity-50`}
+                >
+                  <RefreshCw className={`w-5 h-5 ${themeClasses.textSecondary} ${cacheStatus.isLoading ? 'animate-spin' : ''}`} />
+                </motion.button>
+                <span className={`pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-100 z-50 ${isDark ? 'bg-gray-700 text-gray-100 shadow-lg shadow-black/40' : 'bg-gray-800 text-white shadow-lg shadow-black/20'}`}>
+                  {cacheStatus.isLoading ? 'Refreshing…' : 'Refresh'}
+                </span>
+              </div>
 
               {/* Theme Toggle */}
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={toggleTheme}
-                className={`p-3 rounded-xl ${themeClasses.button} transition-all`}
-              >
-                <AnimatePresence mode="wait">
-                  {theme === 'dark' ? (
-                    <motion.div
-                      key="sun"
-                      initial={{ rotate: -90, opacity: 0 }}
-                      animate={{ rotate: 0, opacity: 1 }}
-                      exit={{ rotate: 90, opacity: 0 }}
-                      transition={{ duration: 0.3 }}
-                    >
-                      <Sun className="w-5 h-5 text-yellow-500" />
-                    </motion.div>
-                  ) : (
-                    <motion.div
-                      key="moon"
-                      initial={{ rotate: 90, opacity: 0 }}
-                      animate={{ rotate: 0, opacity: 1 }}
-                      exit={{ rotate: -90, opacity: 0 }}
-                      transition={{ duration: 0.3 }}
-                    >
-                      <Moon className={`w-5 h-5 ${themeClasses.textSecondary}`} />
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </motion.button>
+              <div className="relative group">
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={toggleTheme}
+                  className={`p-3 rounded-xl ${themeClasses.button} transition-all`}
+                >
+                  <AnimatePresence mode="wait">
+                    {theme === 'dark' ? (
+                      <motion.div
+                        key="sun"
+                        initial={{ rotate: -90, opacity: 0 }}
+                        animate={{ rotate: 0, opacity: 1 }}
+                        exit={{ rotate: 90, opacity: 0 }}
+                        transition={{ duration: 0.3 }}
+                      >
+                        <Sun className="w-5 h-5 text-yellow-500" />
+                      </motion.div>
+                    ) : (
+                      <motion.div
+                        key="moon"
+                        initial={{ rotate: 90, opacity: 0 }}
+                        animate={{ rotate: 0, opacity: 1 }}
+                        exit={{ rotate: -90, opacity: 0 }}
+                        transition={{ duration: 0.3 }}
+                      >
+                        <Moon className={`w-5 h-5 ${themeClasses.textSecondary}`} />
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </motion.button>
+                <span className={`pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-100 z-50 ${isDark ? 'bg-gray-700 text-gray-100 shadow-lg shadow-black/40' : 'bg-gray-800 text-white shadow-lg shadow-black/20'}`}>
+                  {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+                </span>
+              </div>
 
               {/* Offline Orders Button */}
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => handleNavigation('/offline-orders', 'OFFLINE_ORDERS')}
-                className={`p-3 rounded-xl ${themeClasses.button} transition-all relative ${!permissions.hasPermission('OFFLINE_ORDERS') ? 'opacity-50 cursor-not-allowed' : ''}`}
-                title={cacheStatus.networkStatus.unsyncedOrders > 0
-                  ? `View ${cacheStatus.networkStatus.unsyncedOrders} offline order(s)`
-                  : 'No offline orders'}
-              >
-                <Database className={`w-5 h-5 ${themeClasses.textSecondary}`} />
-                {cacheStatus.networkStatus.unsyncedOrders > 0 && (
-                  <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[18px] h-[18px] px-1 bg-blue-500 text-white text-xs font-bold rounded-full">
-                    {cacheStatus.networkStatus.unsyncedOrders}
-                  </span>
-                )}
-              </motion.button>
+              <div className="relative group">
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => handleNavigation('/offline-orders', 'OFFLINE_ORDERS')}
+                  className={`p-3 rounded-xl ${themeClasses.button} transition-all relative ${!permissions.hasPermission('OFFLINE_ORDERS') ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  <Database className={`w-5 h-5 ${themeClasses.textSecondary}`} />
+                  {cacheStatus.networkStatus.unsyncedOrders > 0 && (
+                    <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[18px] h-[18px] px-1 bg-blue-500 text-white text-xs font-bold rounded-full">
+                      {cacheStatus.networkStatus.unsyncedOrders}
+                    </span>
+                  )}
+                </motion.button>
+                <span className={`pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-100 z-50 ${isDark ? 'bg-gray-700 text-gray-100 shadow-lg shadow-black/40' : 'bg-gray-800 text-white shadow-lg shadow-black/20'}`}>
+                  {cacheStatus.networkStatus.unsyncedOrders > 0 ? `${cacheStatus.networkStatus.unsyncedOrders} Offline Order${cacheStatus.networkStatus.unsyncedOrders !== 1 ? 's' : ''}` : 'Offline Orders'}
+                </span>
+              </div>
 
               {/* Printer Button */}
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => handleNavigation('/printer', 'PRINTERS')}
-                className={`p-3 rounded-xl ${themeClasses.button} transition-all ${!permissions.hasPermission('PRINTERS') ? 'opacity-50 cursor-not-allowed' : ''}`}
-                title="Printer"
-              >
-                <Printer className={`w-5 h-5 ${themeClasses.textSecondary}`} />
-              </motion.button>
+              <div className="relative group">
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => handleNavigation('/printer', 'PRINTERS')}
+                  className={`p-3 rounded-xl ${themeClasses.button} transition-all ${!permissions.hasPermission('PRINTERS') ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  <Printer className={`w-5 h-5 ${themeClasses.textSecondary}`} />
+                </motion.button>
+                <span className={`pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-100 z-50 ${isDark ? 'bg-gray-700 text-gray-100 shadow-lg shadow-black/40' : 'bg-gray-800 text-white shadow-lg shadow-black/20'}`}>
+                  Printer
+                </span>
+              </div>
 
               {/* Plan Button */}
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => router.push('/settings?tab=plan')}
-                className={`p-3 rounded-xl ${themeClasses.button} transition-all`}
-                title="Plan & Billing"
-              >
-                <Crown className={`w-5 h-5 ${themeClasses.textSecondary}`} />
-              </motion.button>
+              <div className="relative group">
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => router.push('/settings?tab=plan')}
+                  className={`p-3 rounded-xl ${themeClasses.button} transition-all`}
+                >
+                  <Crown className={`w-5 h-5 ${themeClasses.textSecondary}`} />
+                </motion.button>
+                <span className={`pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-100 z-50 ${isDark ? 'bg-gray-700 text-gray-100 shadow-lg shadow-black/40' : 'bg-gray-800 text-white shadow-lg shadow-black/20'}`}>
+                  Plan & Billing
+                </span>
+              </div>
 
               {/* Settings Button */}
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => handleNavigation('/settings', 'SETTINGS')}
-                className={`p-3 rounded-xl ${themeClasses.button} transition-all ${!permissions.hasPermission('SETTINGS') ? 'opacity-50 cursor-not-allowed' : ''}`}
-                title="Settings"
-              >
-                <Settings className={`w-5 h-5 ${themeClasses.textSecondary}`} />
-              </motion.button>
+              <div className="relative group">
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => handleNavigation('/settings', 'SETTINGS')}
+                  className={`p-3 rounded-xl ${themeClasses.button} transition-all ${!permissions.hasPermission('SETTINGS') ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  <Settings className={`w-5 h-5 ${themeClasses.textSecondary}`} />
+                </motion.button>
+                <span className={`pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-100 z-50 ${isDark ? 'bg-gray-700 text-gray-100 shadow-lg shadow-black/40' : 'bg-gray-800 text-white shadow-lg shadow-black/20'}`}>
+                  Settings
+                </span>
+              </div>
 
               {/* Logout Button */}
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={handleLogout}
-                className="p-3 rounded-xl bg-red-500 hover:bg-red-600 text-white hover:shadow-lg transition-all"
-              >
-                <LogOut className="w-5 h-5" />
-              </motion.button>
+              <div className="relative group">
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={handleLogout}
+                  className="p-3 rounded-xl bg-red-500 hover:bg-red-600 text-white hover:shadow-lg transition-all"
+                >
+                  <LogOut className="w-5 h-5" />
+                </motion.button>
+                <span className="pointer-events-none absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity duration-100 z-50 bg-red-600 text-white shadow-lg shadow-red-900/30">
+                  Logout
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -990,8 +1125,40 @@ export default function Dashboard() {
           <h3 className={`text-2xl font-bold ${themeClasses.textPrimary} mb-6 text-center`}>
             Quick Actions
           </h3>
-          <div className="flex flex-wrap justify-center gap-4">
-            {visibleBottomMenuItems.map((item, index) => {
+          <div className="relative" onMouseEnter={() => setIsHovering(true)} onMouseLeave={() => setIsHovering(false)}>
+            {/* Left Arrow */}
+            <AnimatePresence>
+              {canScrollLeft && isHovering && (
+                <motion.button
+                  key="scroll-left"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => scroll('left')}
+                  className={`absolute left-0 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full ${isDark ? 'bg-gray-700 hover:bg-gray-600' : 'bg-white hover:bg-gray-50'} shadow-lg transition-all`}
+                >
+                  <ChevronLeft className={`w-6 h-6 ${themeClasses.textPrimary}`} />
+                </motion.button>
+              )}
+            </AnimatePresence>
+
+            {/* Scrollable Container */}
+            <div
+              ref={scrollContainerRef}
+              className="overflow-x-auto pb-2 scroll-smooth"
+              style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+            >
+              <style>{`
+                div[style*="scrollbarWidth"] {
+                  -ms-overflow-style: none;
+                  scrollbar-width: none;
+                }
+                div[style*="scrollbarWidth"]::-webkit-scrollbar {
+                  display: none;
+                }
+              `}</style>
+              <div className="flex justify-center gap-4 min-w-min">
+              {visibleBottomMenuItems.map((item, index) => {
               const hasPermission = hasCardPermission(item.permissionKey)
               return (
               <motion.div
@@ -1002,7 +1169,7 @@ export default function Dashboard() {
                 whileHover={hasPermission ? { y: -5, scale: 1.05 } : {}}
                 whileTap={hasPermission ? { scale: 0.95 } : {}}
                 onClick={() => handleNavigation(item.route, item.permissionKey)}
-                className={`w-[calc(50%-0.5rem)] sm:w-40 md:w-36 lg:w-40 ${hasPermission ? 'cursor-pointer' : 'cursor-not-allowed'} group`}
+                className={`w-40 flex-shrink-0 ${hasPermission ? 'cursor-pointer' : 'cursor-not-allowed'} group`}
               >
                 <div className={`${themeClasses.card} rounded-2xl p-4 ${themeClasses.shadow} ${hasPermission ? 'hover:shadow-xl' : 'opacity-60'} transition-all duration-300 ${themeClasses.border} border relative`}>
                   {!hasPermission && (
@@ -1040,6 +1207,24 @@ export default function Dashboard() {
                 </div>
               </motion.div>
             )})}
+              </div>
+            </div>
+
+            {/* Right Arrow */}
+            <AnimatePresence>
+              {canScrollRight && isHovering && (
+                <motion.button
+                  key="scroll-right"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => scroll('right')}
+                  className={`absolute right-0 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full ${isDark ? 'bg-gray-700 hover:bg-gray-600' : 'bg-white hover:bg-gray-50'} shadow-lg transition-all`}
+                >
+                  <ChevronRight className={`w-6 h-6 ${themeClasses.textPrimary}`} />
+                </motion.button>
+              )}
+            </AnimatePresence>
           </div>
         </motion.div>
       </main>

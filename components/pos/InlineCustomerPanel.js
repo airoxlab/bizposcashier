@@ -24,6 +24,7 @@ export default function InlineCustomerPanel({
   const [suggestions, setSuggestions] = useState([])
   const [allCustomers, setAllCustomers] = useState([])
   const [deliveryBoys, setDeliveryBoys] = useState([])
+  const [loadingDeliveryBoys, setLoadingDeliveryBoys] = useState(false)
   const [showNewCustForm, setShowNewCustForm] = useState(false)
   const [newCustName, setNewCustName] = useState('')
   const [newCustPhone, setNewCustPhone] = useState('')
@@ -55,29 +56,25 @@ export default function InlineCustomerPanel({
     }
   }, [])
 
-  // Load delivery boys — use cache first, fall back to direct fetch if cache not ready yet
+  // Load delivery boys from DB
   useEffect(() => {
     if (orderType !== 'delivery') return
-    const cached = cacheManager.getAllDeliveryBoys?.() || []
-    if (cached.length > 0) {
-      setDeliveryBoys(cached)
-      return
+    const fetchBoys = async () => {
+      setLoadingDeliveryBoys(true)
+      try {
+        const userId = cacheManager.userId
+        if (!userId) return
+        const { data } = await supabase
+          .from('delivery_boys')
+          .select('id, name, phone')
+          .eq('user_id', userId)
+          .eq('status', 'active')
+          .order('name')
+        setDeliveryBoys(data || [])
+      } catch {}
+      finally { setLoadingDeliveryBoys(false) }
     }
-    // Cache not populated yet — fetch directly so the dropdown shows immediately
-    const userId = cacheManager.userId
-    if (!userId) return
-    supabase
-      .from('delivery_boys')
-      .select('id, name, phone, vehicle_type, status')
-      .eq('user_id', userId)
-      .eq('status', 'active')
-      .order('name')
-      .then(({ data }) => {
-        if (data?.length) {
-          setDeliveryBoys(data)
-          if (cacheManager.cache) cacheManager.cache.delivery_boys = data
-        }
-      })
+    fetchBoys()
   }, [orderType])
 
   // Auto-focus search input
@@ -538,15 +535,23 @@ export default function InlineCustomerPanel({
             <textarea value={orderData.addressLine || ''} onChange={e => update('addressLine', e.target.value)} placeholder="Enter full delivery address..." rows={2} className={`${inputCls} resize-none`} />
           </div>
 
-          {deliveryBoys.length > 0 && (
-            <div>
-              <label className={labelCls}><Truck className="inline w-3 h-3 mr-1" />Delivery Boy <span className="font-normal opacity-60">(Optional)</span></label>
-              <select value={orderData.deliveryBoyId || ''} onChange={e => update('deliveryBoyId', e.target.value)} className={inputCls}>
-                <option value="">Select Delivery Boy (Optional)</option>
-                {deliveryBoys.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </select>
-            </div>
-          )}
+          <div>
+            <label className={labelCls}><Truck className="inline w-3 h-3 mr-1" />Delivery Boy <span className="font-normal opacity-60">(Optional)</span></label>
+            <select
+              value={orderData.deliveryBoyId || ''}
+              onChange={e => update('deliveryBoyId', e.target.value)}
+              disabled={loadingDeliveryBoys}
+              className={`${inputCls} disabled:opacity-50`}
+            >
+              <option value="">{loadingDeliveryBoys ? 'Loading...' : 'Select Delivery Boy (Optional)'}</option>
+              {deliveryBoys.map(b => (
+                <option key={b.id} value={b.id}>{b.name}{b.phone ? ` — ${b.phone}` : ''}</option>
+              ))}
+            </select>
+            {!loadingDeliveryBoys && deliveryBoys.length === 0 && (
+              <p className="text-xs mt-1 opacity-50">No active delivery boys found</p>
+            )}
+          </div>
 
           <div>
             <label className={labelCls}><Clock className="inline w-3 h-3 mr-1" />Delivery Time *</label>

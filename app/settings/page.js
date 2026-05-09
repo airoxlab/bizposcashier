@@ -1474,6 +1474,7 @@ function SettingsPageContent() {
       name: 'WhatsApp',
       icon: MessageSquare,
       description: 'Messaging & automation',
+      hideForStarter: true,
     },
     {
       id: 'customer-account',
@@ -1481,6 +1482,7 @@ function SettingsPageContent() {
       icon: CreditCard,
       description: 'Account alerts & receipts',
       permissionKey: 'CUSTOMER_ACCOUNT',
+      hideForStarter: true,
     },
     {
       id: 'plan',
@@ -1489,11 +1491,9 @@ function SettingsPageContent() {
       description: 'Subscription & features',
     }
   ].filter(item => {
-    // If no permission required, always show
+    if (item.hideForStarter && planManager.getPlanSlug() === 'starter') return false
     if (!item.permissionKey) return true
-    // Admin always sees everything
     if (authManager.getRole() === 'admin') return true
-    // Cashier needs the permission
     return permissionManager.hasPermission(item.permissionKey)
   });
 
@@ -2186,8 +2186,8 @@ function SettingsPageContent() {
                               )}
                             </div>
                             <div className="text-left flex-1">
-                              <div className={`font-semibold text-sm ${classes.textPrimary}`}>{theme.name}</div>
-                              <div className={`text-xs ${classes.textSecondary}`}>
+                              <div className={`font-semibold text-sm ${isDark ? 'text-white' : 'text-gray-900'}`}>{theme.name}</div>
+                              <div className={`text-xs ${isDark ? 'text-gray-300' : 'text-gray-500'}`}>
                                 {themeKey === 'light' ? 'Bright interface' : 'Dark interface'}
                               </div>
                             </div>
