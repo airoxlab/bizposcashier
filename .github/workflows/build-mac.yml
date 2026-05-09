@@ -1,0 +1,33 @@
+name: Build Mac DMG
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Mac DMG
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: npm run build-mac-nosign
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BizPOS-mac-${{ github.run_number }}
+          path: dist/*.dmg
+          retention-days: 30
