@@ -425,17 +425,20 @@ export default function NewOrderPage() {
     const variants = cacheManager.getProductVariants(product.id)
     setProductVariants(variants)
     if (!variants || variants.length === 0) {
+      const basePrice = parseFloat(product.base_price)
+      const discount = parseFloat(product.discount_percentage) || 0
+      const finalPrice = basePrice * (1 - discount / 100)
       handleAddToCart({
         id: `${product.id}-base-${Date.now()}`,
         productId: product.id,
         variantId: null,
         productName: product.name,
         variantName: null,
-        basePrice: parseFloat(product.base_price),
+        basePrice: basePrice,
         variantPrice: 0,
-        finalPrice: parseFloat(product.base_price),
+        finalPrice: finalPrice,
         quantity: 1,
-        totalPrice: parseFloat(product.base_price),
+        totalPrice: finalPrice,
         image: product.image_url
       })
     } else {
@@ -485,9 +488,35 @@ export default function NewOrderPage() {
 
   const updateCartItemQuantity = (itemId, newQuantity) => {
     if (newQuantity <= 0) { removeCartItem(itemId); return }
-    setCart(prev => prev.map(item =>
-      item.id === itemId ? { ...item, quantity: newQuantity, totalPrice: item.finalPrice * newQuantity } : item
-    ))
+    setCart(prev => prev.map(item => {
+      if (item.id !== itemId) return item
+      const gross = item.finalPrice * newQuantity
+      const discountAmount = item.itemDiscountType === 'percentage' && item.itemDiscountValue
+        ? (gross * item.itemDiscountValue) / 100
+        : item.itemDiscountType === 'fixed'
+          ? Math.min(item.itemDiscountValue || 0, gross)
+          : 0
+      return { ...item, quantity: newQuantity, totalPrice: gross - discountAmount, itemDiscountAmount: discountAmount }
+    }))
+  }
+
+  const updateItemDiscount = (itemId, discountType, discountValue) => {
+    setCart(prev => prev.map(item => {
+      if (item.id !== itemId) return item
+      const gross = item.finalPrice * item.quantity
+      const discountAmount = discountType === 'percentage'
+        ? (gross * discountValue) / 100
+        : discountType === 'fixed'
+          ? Math.min(discountValue, gross)
+          : 0
+      return {
+        ...item,
+        itemDiscountType: discountType,
+        itemDiscountValue: discountValue,
+        itemDiscountAmount: discountAmount,
+        totalPrice: gross - discountAmount,
+      }
+    }))
   }
 
   const updateItemInstruction = (itemId, instruction) => {
@@ -829,11 +858,17 @@ export default function NewOrderPage() {
       if (!printer) { toast.error('No printer configured. Please configure a printer in settings.'); return }
 
       let orderItems = []
-      if (order.id && navigator.onLine) {
+      if (order.id && cacheManager.checkOnlineStatus()) {
         const { data } = await supabase.from('order_items').select('*').eq('order_id', order.id)
         orderItems = data || []
       }
-      if (!orderItems.length) orderItems = order.order_items || order.items || []
+      if (!orderItems.length) {
+        orderItems = order.order_items || order.items || []
+        if (!orderItems.length && order.id) {
+          const cached = (cacheManager.getAllOrders?.() || []).find(o => o.id === order.id)
+          orderItems = cached?.order_items || cached?.items || []
+        }
+      }
 
       const orderData = {
         orderNumber: order.order_number,
@@ -897,11 +932,17 @@ export default function NewOrderPage() {
       if (!printer) { toast.error('No printer configured. Please configure a printer in settings.'); return }
 
       let orderItems = []
-      if (order.id && navigator.onLine) {
+      if (order.id && cacheManager.checkOnlineStatus()) {
         const { data } = await supabase.from('order_items').select('*').eq('order_id', order.id)
         orderItems = data || []
       }
-      if (!orderItems.length) orderItems = order.order_items || order.items || []
+      if (!orderItems.length) {
+        orderItems = order.order_items || order.items || []
+        if (!orderItems.length && order.id) {
+          const cached = (cacheManager.getAllOrders?.() || []).find(o => o.id === order.id)
+          orderItems = cached?.order_items || cached?.items || []
+        }
+      }
 
       const productCategoryMap = {}
       cacheManager.cache?.products?.forEach(p => { productCategoryMap[p.id] = p.category_id })
@@ -1028,7 +1069,7 @@ export default function NewOrderPage() {
         }
 
         if (orderTypeId && user?.id) {
-          if (navigator.onLine) {
+          if (cacheManager.checkOnlineStatus()) {
             console.log('🌐 [NewOrder] ONLINE - Calling deduct_inventory_for_order')
             try {
               const { data: deductionResult, error: deductError } = await supabase.rpc(
@@ -1164,7 +1205,7 @@ export default function NewOrderPage() {
           created_at: new Date().toISOString()
         }))
 
-        if (navigator.onLine) {
+        if (cacheManager.checkOnlineStatus()) {
           const { error: updateError } = await supabase
             .from('orders')
             .update({ payment_method: 'Split', payment_status: 'Paid', amount_paid: totalPaid, updated_at: new Date().toISOString() })
@@ -1208,7 +1249,7 @@ export default function NewOrderPage() {
       const isUnpaid = paymentData.paymentMethod === 'Unpaid'
       const shouldComplete = paymentData.completeOrder !== false
 
-      if (navigator.onLine) {
+      if (cacheManager.checkOnlineStatus()) {
         // Update payment fields + order_status in ONE atomic write
         const cashierData = authManager.getCashier()
         const { error } = await supabase
@@ -1580,6 +1621,7 @@ export default function NewOrderPage() {
         isReopenedOrder={isReopenedOrder}
         onInstructionsChange={(val) => setOrderInstructions(val)}
         onUpdateItemInstruction={updateItemInstruction}
+        onUpdateItemDiscount={updateItemDiscount}
         inlineCustomer={true}
         onCustomerChange={(c) => setCustomer(c)}
         orderData={orderExtras[activeOrderType] || {}}

@@ -324,17 +324,20 @@ export default function TakeawayPage() {
     setProductVariants(variants)
 
     if (!variants || variants.length === 0) {
+      const basePrice = parseFloat(product.base_price)
+      const discount = parseFloat(product.discount_percentage) || 0
+      const finalPrice = basePrice * (1 - discount / 100)
       const cartItem = {
         id: `${product.id}-base-${Date.now()}`,
         productId: product.id,
         variantId: null,
         productName: product.name,
         variantName: null,
-        basePrice: parseFloat(product.base_price),
+        basePrice: basePrice,
         variantPrice: 0,
-        finalPrice: parseFloat(product.base_price),
+        finalPrice: finalPrice,
         quantity: 1,
-        totalPrice: parseFloat(product.base_price),
+        totalPrice: finalPrice,
         image: product.image_url
       }
       handleAddToCart(cartItem)
@@ -424,11 +427,35 @@ export default function TakeawayPage() {
       return
     }
 
-    setCart(prevCart => prevCart.map(item =>
-      item.id === itemId
-        ? { ...item, quantity: newQuantity, totalPrice: item.finalPrice * newQuantity }
-        : item
-    ))
+    setCart(prevCart => prevCart.map(item => {
+      if (item.id !== itemId) return item
+      const gross = item.finalPrice * newQuantity
+      const discountAmount = item.itemDiscountType === 'percentage' && item.itemDiscountValue
+        ? (gross * item.itemDiscountValue) / 100
+        : item.itemDiscountType === 'fixed'
+          ? Math.min(item.itemDiscountValue || 0, gross)
+          : 0
+      return { ...item, quantity: newQuantity, totalPrice: gross - discountAmount, itemDiscountAmount: discountAmount }
+    }))
+  }
+
+  const updateItemDiscount = (itemId, discountType, discountValue) => {
+    setCart(prev => prev.map(item => {
+      if (item.id !== itemId) return item
+      const gross = item.finalPrice * item.quantity
+      const discountAmount = discountType === 'percentage'
+        ? (gross * discountValue) / 100
+        : discountType === 'fixed'
+          ? Math.min(discountValue, gross)
+          : 0
+      return {
+        ...item,
+        itemDiscountType: discountType,
+        itemDiscountValue: discountValue,
+        itemDiscountAmount: discountAmount,
+        totalPrice: gross - discountAmount,
+      }
+    }))
   }
 
   const removeCartItem = (itemId) => {
@@ -599,7 +626,7 @@ export default function TakeawayPage() {
 
         // Call the reliable deduction function (ONLINE ONLY)
         if (orderTypeId && user?.id) {
-          if (navigator.onLine) {
+          if (cacheManager.checkOnlineStatus()) {
             console.log('🌐 [Takeaway] ONLINE - Calling deduct_inventory_for_order with:', {
               order_id: order.id,
               user_id: user.id,
@@ -809,7 +836,7 @@ export default function TakeawayPage() {
         }))
 
         // CRITICAL FIX: Check if online or offline
-        if (navigator.onLine) {
+        if (cacheManager.checkOnlineStatus()) {
           console.log('🌐 [Takeaway Split Payment] ONLINE - Updating order and inserting transactions to database')
 
           // Update order with split payment
@@ -891,7 +918,7 @@ export default function TakeawayPage() {
       const isUnpaid = paymentData.paymentMethod === 'Unpaid'
       const shouldComplete = paymentData.completeOrder !== false
 
-      if (navigator.onLine) {
+      if (cacheManager.checkOnlineStatus()) {
         console.log('🌐 [Takeaway Payment] ONLINE - Updating order in database')
 
         // Update order with payment details + order_status in ONE atomic write
@@ -954,7 +981,7 @@ export default function TakeawayPage() {
       )
 
       // CRITICAL FIX: Handle customer ledger entry for Account payment (ONLINE ONLY)
-      if (navigator.onLine && paymentData.paymentMethod === 'Account' && order.customer_id) {
+      if (cacheManager.checkOnlineStatus() && paymentData.paymentMethod === 'Account' && order.customer_id) {
         try {
           console.log('💳 [Takeaway Payment] Processing customer ledger for Account payment')
 
@@ -1081,7 +1108,7 @@ export default function TakeawayPage() {
       let loyaltyDiscountAmount = 0
       let loyaltyPointsRedeemed = 0
 
-      if (navigator.onLine) {
+      if (cacheManager.checkOnlineStatus()) {
         try {
           const { data: redemption, error: redemptionError } = await supabase
             .from('loyalty_redemptions')
@@ -1130,7 +1157,7 @@ export default function TakeawayPage() {
 
       if (dealIds.length > 0) {
         try {
-          if (navigator.onLine) {
+          if (cacheManager.checkOnlineStatus()) {
             const { data: deals, error: dealsError } = await supabase
               .from('deals')
               .select('*')
@@ -1292,7 +1319,7 @@ export default function TakeawayPage() {
       let loyaltyPointsRedeemed = 0
 
       // Check if we're online or offline
-      if (navigator.onLine) {
+      if (cacheManager.checkOnlineStatus()) {
         // Online: Try to fetch from database
         try {
           const { data: redemption, error: redemptionError } = await supabase
@@ -1342,7 +1369,7 @@ export default function TakeawayPage() {
 
       if (dealIds.length > 0) {
         try {
-          if (navigator.onLine) {
+          if (cacheManager.checkOnlineStatus()) {
             const { data: deals, error: dealsError } = await supabase
               .from('deals')
               .select('*')
@@ -1671,7 +1698,7 @@ export default function TakeawayPage() {
         console.log('🔍 [handlePrintOrder] No loyalty data passed, attempting to fetch')
 
         // Try online fetch first
-        if (navigator.onLine) {
+        if (cacheManager.checkOnlineStatus()) {
           try {
             const { data: redemption, error: redemptionError } = await supabase
               .from('loyalty_redemptions')
@@ -1847,7 +1874,7 @@ export default function TakeawayPage() {
 
       // Always fetch fresh order items from Supabase when online (ensures item_instructions is included)
       let orderItems = []
-      if (order.id && navigator.onLine) {
+      if (order.id && cacheManager.checkOnlineStatus()) {
         const { data: items, error } = await supabase
           .from('order_items')
           .select('*')
@@ -2288,6 +2315,7 @@ export default function TakeawayPage() {
         orderType="takeaway"
         isReopenedOrder={isReopenedOrder}
         onUpdateItemInstruction={updateItemInstruction}
+        onUpdateItemDiscount={updateItemDiscount}
         inlineCustomer={true}
         onCustomerChange={setCustomer}
         orderData={orderData}

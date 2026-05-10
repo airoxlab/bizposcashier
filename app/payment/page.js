@@ -132,26 +132,87 @@ useEffect(() => {
     console.log('✅ [Payment Page] User ID set in printerManager, customerLedgerManager, cacheManager:', userData.id)
   }
 
-  // Fetch payment accounts — admin sees company accounts, cashier sees their own accounts
+  // Payment accounts cache helpers — keyed by userId + cashierId context so
+  // switching between drawer-on/off or different cashiers never serves stale data.
+  const _paKey = 'pos_payment_accounts'
+  const _readPaymentCache = (userId, cashierId) => {
+    try {
+      const raw = localStorage.getItem(_paKey)
+      if (!raw) return null
+      const { accounts, ctx } = JSON.parse(raw)
+      if (ctx?.userId === userId && ctx?.cashierId === (cashierId || null)) return accounts
+    } catch {}
+    return null
+  }
+  const _writePaymentCache = (accounts, userId, cashierId) => {
+    try {
+      localStorage.setItem(_paKey, JSON.stringify({
+        accounts,
+        ctx: { userId, cashierId: cashierId || null }
+      }))
+    } catch {}
+  }
+
+  // Determine drawer setting: prefer live value from auth, fall back to last
+  // cached value written by the periodic cacheManager sync.
+  const _resolveDrawerEnabled = (currentUser) => {
+    if (currentUser.use_cashier_drawer !== undefined) return !!currentUser.use_cashier_drawer
+    try {
+      const raw = localStorage.getItem('pos_cashier_drawer_enabled')
+      return raw ? JSON.parse(raw) : false
+    } catch { return false }
+  }
+
+  // Seed state immediately from cache so offline users see accounts right away.
+  const _seedCashier = authManager.getCashier()
+  const _seedUser   = authManager.getCurrentUser()
+  if (_seedUser?.id) {
+    const _drawerSeed = _resolveDrawerEnabled(_seedUser)
+    const _cashierIdSeed = _drawerSeed && _seedCashier?.id ? _seedCashier.id : null
+    const _cached = _readPaymentCache(_seedUser.id, _cashierIdSeed)
+    if (_cached?.length > 0) {
+      setCashierPaymentAccounts(_cached)
+      console.log('📦 [Payment Page] Seeded', _cached.length, 'payment accounts from pos_payment_accounts cache')
+    } else {
+      // Fallback: use accounts fetched at login time by cacheManager.fetchAllData()
+      const _cmAccounts = cacheManager.cache.paymentAccounts || []
+      if (_cmAccounts.length > 0) {
+        // Filter: drawer ON → cashier accounts; drawer OFF → admin (no cashier_id)
+        const filtered = _drawerSeed && _seedCashier?.id
+          ? _cmAccounts.filter(a => a.cashier_id === _seedCashier.id)
+          : _cmAccounts.filter(a => !a.cashier_id)
+        const toSeed = filtered.length > 0 ? filtered : _cmAccounts
+        setCashierPaymentAccounts(toSeed)
+        console.log('📦 [Payment Page] Seeded', toSeed.length, 'payment accounts from cacheManager.cache')
+      }
+    }
+  }
+
+  // Fetch fresh from Supabase; update cache on success, keep cached data on failure.
   const fetchPaymentAccounts = async () => {
     const cashier = authManager.getCashier()
     const currentUser = authManager.getCurrentUser()
     if (!currentUser?.id) return
 
-    if (cashier?.id) {
-      // Cashier: fetch their own accounts
+    // Skip DB call when offline — seed already populated state from cache
+    if (!cacheManager.checkOnlineStatus()) return
+
+    const drawerEnabled = _resolveDrawerEnabled(currentUser)
+    const cashierId = drawerEnabled && cashier?.id ? cashier.id : null
+
+    let fetched = null
+    if (drawerEnabled && cashier?.id) {
+      // Cashier drawer ON: cashier sees their own till accounts
       const { data } = await supabase
         .from('payment_accounts')
         .select('*')
         .eq('cashier_id', cashier.id)
         .eq('is_active', true)
         .order('sort_order')
-      if (data && data.length > 0) {
-        setCashierPaymentAccounts(data)
-        console.log('✅ [Payment Page] Fetched cashier accounts:', data.length)
-      }
+      fetched = data
+      if (fetched?.length > 0) console.log('✅ [Payment Page] Fetched cashier accounts:', fetched.length)
     } else {
-      // Admin: fetch company-level accounts (cashier_id IS NULL)
+      // Cashier drawer OFF or admin logged in: always show admin/company accounts
       const { data } = await supabase
         .from('payment_accounts')
         .select('*')
@@ -159,11 +220,16 @@ useEffect(() => {
         .is('cashier_id', null)
         .eq('is_active', true)
         .order('sort_order')
-      if (data && data.length > 0) {
-        setCashierPaymentAccounts(data)
-        console.log('✅ [Payment Page] Fetched admin/company accounts:', data.length)
-      }
+      fetched = data
+      if (fetched?.length > 0) console.log('✅ [Payment Page] Fetched admin/company accounts:', fetched.length)
     }
+
+    if (fetched?.length > 0) {
+      setCashierPaymentAccounts(fetched)
+      _writePaymentCache(fetched, currentUser.id, cashierId)
+    }
+    // If fetch returned nothing (offline / error), the cache seed above already
+    // populated state — no further action needed.
   }
   fetchPaymentAccounts()
 
@@ -682,7 +748,9 @@ const processOrder = async () => {
           total_price: item.totalPrice,
           is_deal: true,
           deal_products: JSON.stringify(item.dealProducts),
-          item_instructions: item.itemInstructions || null
+          item_instructions: item.itemInstructions || null,
+          item_discount_type: item.itemDiscountType || null,
+          item_discount_amount: item.itemDiscountAmount || 0,
         }
       } else {
         // Handle regular product items
@@ -697,7 +765,9 @@ const processOrder = async () => {
           quantity: item.quantity,
           total_price: item.totalPrice,
           is_deal: false,
-          item_instructions: item.itemInstructions || null
+          item_instructions: item.itemInstructions || null,
+          item_discount_type: item.itemDiscountType || null,
+          item_discount_amount: item.itemDiscountAmount || 0,
         }
       }
     })
@@ -790,6 +860,8 @@ const processOrder = async () => {
         deal_id: i.deal_id ?? null,
         deal_products: i.deal_products ? (typeof i.deal_products === 'string' ? i.deal_products : JSON.stringify(i.deal_products)) : null,
         item_instructions: i.item_instructions ?? null,
+        item_discount_type: i.item_discount_type ?? null,
+        item_discount_amount: i.item_discount_amount ?? 0,
         user_id: i.user_id ?? currentUser?.id ?? null,
       }))
 
@@ -1350,6 +1422,11 @@ const processOrder = async () => {
         ? userProfile.show_business_name_on_receipt
         : (user?.show_business_name_on_receipt !== undefined ? user.show_business_name_on_receipt : true)
 
+      // Properly handle show_powered_by_airoxlab boolean
+      const showPoweredBy = userProfile?.show_powered_by_airoxlab !== undefined
+        ? userProfile.show_powered_by_airoxlab
+        : (user?.show_powered_by_airoxlab !== undefined ? user.show_powered_by_airoxlab : true)
+
       console.log('Retrieved localStorage data for thermal print:', {
         userProfile,
         user,
@@ -1385,11 +1462,12 @@ const processOrder = async () => {
         console.log('Error parsing final_order_data:', e)
       }
 
-      // Merge data with proper priorities
+      // Merge data with proper priorities — always read from cache, never hardcode store data
       return {
-        store_name: userProfile?.store_name || user?.store_name || 'GEN Z CAFE',
-        store_address: userProfile?.store_address || user?.store_address || 'Gulshan e Madina, Jhang Road, Bhakkar',
-        phone: userProfile?.phone || user?.phone || '0310-1731573',
+        store_name: userProfile?.store_name || user?.store_name || '',
+        store_address: userProfile?.store_address || user?.store_address || '',
+        phone: userProfile?.phone || user?.phone || '',
+        phone_secondary: userProfile?.phone_secondary || user?.phone_secondary || '',
         email: userProfile?.email || user?.email || '',
         customer_name: cashierId ? null : (cashierName || user?.customer_name || ''),
         // Use local base64/cached logo first, fallback to URL
@@ -1401,25 +1479,30 @@ const processOrder = async () => {
         show_footer_section: showFooter,
         show_logo_on_receipt: showLogo,
         show_business_name_on_receipt: showBusinessName,
-        // Add cashier/admin name for receipt printing
+        show_powered_by_airoxlab: showPoweredBy,
         cashier_name: cashierId ? cashierName : null,
       }
     } catch (error) {
       console.error('Error getting user profile data:', error)
-      // Return fallback data
+      // Fallback: read directly from cache rather than using hardcoded values
+      const cachedProfile = (() => {
+        try { return JSON.parse(localStorage.getItem('user_profile') || localStorage.getItem('user') || '{}') } catch { return {} }
+      })()
       return {
-        store_name: 'GEN Z CAFE',
-        store_address: 'Gulshan e Madina, Jhang Road, Bhakkar',
-        phone: '0310-1731573',
-        email: '',
+        store_name: cachedProfile.store_name || '',
+        store_address: cachedProfile.store_address || '',
+        phone: cachedProfile.phone || '',
+        phone_secondary: cachedProfile.phone_secondary || '',
+        email: cachedProfile.email || '',
         customer_name: '',
-        store_logo: null,
-        qr_code: null,
-        hashtag1: '',
-        hashtag2: '',
-        show_footer_section: true,
-        show_logo_on_receipt: true,
-        show_business_name_on_receipt: true
+        store_logo: localStorage.getItem('store_logo_local') || cachedProfile.store_logo || null,
+        qr_code: localStorage.getItem('qr_code_local') || cachedProfile.qr_code || null,
+        hashtag1: cachedProfile.hashtag1 || '',
+        hashtag2: cachedProfile.hashtag2 || '',
+        show_footer_section: cachedProfile.show_footer_section !== false,
+        show_logo_on_receipt: cachedProfile.show_logo_on_receipt !== false,
+        show_business_name_on_receipt: cachedProfile.show_business_name_on_receipt !== false,
+        show_powered_by_airoxlab: cachedProfile.show_powered_by_airoxlab !== false,
       }
     }
   }

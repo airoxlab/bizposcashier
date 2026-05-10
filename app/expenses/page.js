@@ -29,11 +29,22 @@ import {
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
 import { authManager } from '../../lib/authManager'
+import { cacheManager } from '../../lib/cacheManager'
 import Modal from '../../components/ui/Modal'
 import PinPad from '../../components/ui/PinPad'
 import ConfirmModal from '../../components/ui/ConfirmModal'
 import NotificationSystem, { notify } from '../../components/ui/NotificationSystem'
 import themeManager from '../../lib/themeManager'
+
+// ─── Offline cache keys ────────────────────────────────────────────────────────
+const EXPENSE_CACHE = {
+  all:           'pos_expenses_all',
+  categories:    'pos_expense_categories',
+  subcategories: 'pos_expense_subcategories',
+  accounts:      'pos_payment_accounts',
+  pin:           'pos_expense_pin',
+  pending:       'pending_expenses',
+}
 
 // ─── Date preset helpers ───────────────────────────────────────────────────────
 function getDateRangeFromPreset(preset) {
@@ -146,10 +157,37 @@ export default function ExpensesPage() {
     'petty cash': 'Petty Cash',
   }
 
+  // Offline
+  const [isOnline, setIsOnline] = useState(() => typeof window !== 'undefined' ? cacheManager.checkOnlineStatus() : true)
+  const [pendingCount, setPendingCount] = useState(0)
+
   // Theme
   const themeClasses = themeManager.getClasses()
   const componentStyles = themeManager.getComponentStyles()
   const isDark = themeManager.isDark()
+
+  // ─── Offline helpers ───────────────────────────────────────────────────────
+  const countPending = () => {
+    try {
+      const p = JSON.parse(localStorage.getItem(EXPENSE_CACHE.pending) || '[]')
+      setPendingCount(p.length)
+    } catch { setPendingCount(0) }
+  }
+
+  const filterCachedExpenses = (all) => {
+    const cashierId = authManager.getCashier()?.id
+    let list = all
+    if (cashierId) list = list.filter(e => e.cashier_id === cashierId)
+    if (dateFrom) list = list.filter(e => e.expense_date >= dateFrom)
+    if (dateTo) list = list.filter(e => e.expense_date <= dateTo)
+    if (categoryFilter !== 'All') list = list.filter(e => e.category_id === categoryFilter)
+    if (subcategoryFilter !== 'All') list = list.filter(e => e.subcategory_id === subcategoryFilter)
+    if (paymentFilter !== 'All') list = list.filter(e => e.payment_method === paymentFilter)
+    return list.sort((a, b) => {
+      if (a.expense_date !== b.expense_date) return b.expense_date.localeCompare(a.expense_date)
+      return (b.expense_time || '').localeCompare(a.expense_time || '')
+    })
+  }
 
   // ─── Init ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -173,6 +211,15 @@ export default function ExpensesPage() {
     if (isAuthenticated) fetchData()
   }, [isAuthenticated, dateFrom, dateTo, categoryFilter, subcategoryFilter, paymentFilter])
 
+  useEffect(() => {
+    countPending()
+    const handleOnline = () => { setIsOnline(true); syncPendingExpenses() }
+    const handleOffline = () => setIsOnline(false)
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => { window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline) }
+  }, [])
+
   // ─── Date preset handler ───────────────────────────────────────────────────
   const handleDatePresetChange = (preset) => {
     setDatePreset(preset)
@@ -185,8 +232,17 @@ export default function ExpensesPage() {
 
   // ─── PIN verification ──────────────────────────────────────────────────────
   const verifyPin = async () => {
-    if (pin.length !== 6) {
-      setPinError('PIN must be 6 digits')
+    if (pin.length !== 6) { setPinError('PIN must be 6 digits'); return }
+    if (!cacheManager.checkOnlineStatus()) {
+      try {
+        const cached = JSON.parse(localStorage.getItem(EXPENSE_CACHE.pin) || 'null')
+        if (cached?.userId === user?.id && cached?.pin === pin) {
+          setIsAuthenticated(true); setPin('')
+        } else {
+          setPinError(cached ? 'Invalid PIN.' : 'Connect to internet to verify PIN for the first time.')
+          setPin('')
+        }
+      } catch { setPinError('PIN verification unavailable offline.') }
       return
     }
     setPinLoading(true)
@@ -199,18 +255,15 @@ export default function ExpensesPage() {
         .single()
       if (error) throw error
       if (data.expense_pin === pin) {
-        setIsAuthenticated(true)
-        setPin('')
+        localStorage.setItem(EXPENSE_CACHE.pin, JSON.stringify({ userId: user.id, pin: data.expense_pin }))
+        setIsAuthenticated(true); setPin('')
       } else {
-        setPinError('Invalid PIN. Please try again.')
-        setPin('')
+        setPinError('Invalid PIN. Please try again.'); setPin('')
       }
     } catch (error) {
       console.error('Error verifying PIN:', error)
       setPinError('Error verifying PIN. Please try again.')
-    } finally {
-      setPinLoading(false)
-    }
+    } finally { setPinLoading(false) }
   }
 
   // ─── Fetch data ────────────────────────────────────────────────────────────
@@ -218,6 +271,21 @@ export default function ExpensesPage() {
     setLoading(true)
     try {
       if (!user?.id) { setLoading(false); return }
+
+      if (!cacheManager.checkOnlineStatus()) {
+        try {
+          const all = JSON.parse(localStorage.getItem(EXPENSE_CACHE.all) || '[]')
+          const cats = JSON.parse(localStorage.getItem(EXPENSE_CACHE.categories) || '[]')
+          const subcats = JSON.parse(localStorage.getItem(EXPENSE_CACHE.subcategories) || '[]')
+          const accts = JSON.parse(localStorage.getItem(EXPENSE_CACHE.accounts) || '[]')
+          setExpenses(filterCachedExpenses(all))
+          setCategories(cats)
+          setSubcategories(subcats)
+          setPaymentAccounts(accts)
+        } catch {}
+        setLoading(false)
+        return
+      }
 
       const [expensesResult, categoriesResult, subcategoriesResult] = await Promise.all([
         (async () => {
@@ -257,6 +325,11 @@ export default function ExpensesPage() {
       setExpenses(sorted)
       setCategories(categoriesResult.data || [])
       setSubcategories(subcategoriesResult.data || [])
+
+      // Cache for offline use
+      localStorage.setItem(EXPENSE_CACHE.all, JSON.stringify(sorted))
+      localStorage.setItem(EXPENSE_CACHE.categories, JSON.stringify(categoriesResult.data || []))
+      localStorage.setItem(EXPENSE_CACHE.subcategories, JSON.stringify(subcategoriesResult.data || []))
 
       fetchPaymentAccounts()
     } catch (error) {
@@ -330,19 +403,27 @@ export default function ExpensesPage() {
     }
   }
 
+  const resolveDrawerEnabled = () => {
+    const u = authManager.getCurrentUser()
+    if (u?.use_cashier_drawer !== undefined) return !!u.use_cashier_drawer
+    try { return JSON.parse(localStorage.getItem('pos_cashier_drawer_enabled') || 'false') } catch { return false }
+  }
+
   const fetchPaymentAccounts = async () => {
     try {
       if (!user?.id) return
-      const cashierId = authManager.getCashier()?.id
-      if (cashierId) {
+      const cashier = authManager.getCashier()
+      const drawerEnabled = resolveDrawerEnabled()
+      if (drawerEnabled && cashier?.id) {
         const { data: cashierAccounts, error } = await supabase
           .from('payment_accounts')
           .select('*')
-          .eq('cashier_id', cashierId)
+          .eq('cashier_id', cashier.id)
           .eq('is_active', true)
           .order('sort_order', { ascending: true })
         if (!error && cashierAccounts && cashierAccounts.length > 0) {
           setPaymentAccounts(cashierAccounts)
+          localStorage.setItem(EXPENSE_CACHE.accounts, JSON.stringify(cashierAccounts))
           return
         }
       }
@@ -364,8 +445,10 @@ export default function ExpensesPage() {
           .eq('is_active', true)
           .order('sort_order', { ascending: true })
         setPaymentAccounts(newAccounts || [])
+        localStorage.setItem(EXPENSE_CACHE.accounts, JSON.stringify(newAccounts || []))
       } else {
         setPaymentAccounts(data)
+        localStorage.setItem(EXPENSE_CACHE.accounts, JSON.stringify(data))
       }
     } catch (error) {
       console.error('Error fetching payment accounts:', error)
@@ -402,6 +485,37 @@ export default function ExpensesPage() {
         expense_date: expenseForm.expenseDate,
         expense_time: new Date().toTimeString().split(' ')[0]
       }
+
+      if (!cacheManager.checkOnlineStatus()) {
+        const pendingRaw = localStorage.getItem(EXPENSE_CACHE.pending)
+        const pending = pendingRaw ? JSON.parse(pendingRaw) : []
+        const tempId = `offline_${Date.now()}`
+        const offlineExpense = {
+          ...expenseData,
+          id: editingExpense ? editingExpense.id : tempId,
+          category: categories.find(c => c.id === expenseForm.categoryId) || null,
+          subcategory: subcategories.find(s => s.id === expenseForm.subcategoryId) || null,
+          _isOffline: true,
+          _isTemp: !editingExpense,
+        }
+        const filtered = pending.filter(op => !(op.type !== 'delete' && op.id === (editingExpense?.id || tempId)))
+        filtered.push({ type: editingExpense ? 'update' : 'insert', id: offlineExpense.id, data: expenseData })
+        localStorage.setItem(EXPENSE_CACHE.pending, JSON.stringify(filtered))
+        const allCached = JSON.parse(localStorage.getItem(EXPENSE_CACHE.all) || '[]')
+        if (editingExpense) {
+          const idx = allCached.findIndex(e => e.id === editingExpense.id)
+          if (idx >= 0) allCached[idx] = offlineExpense; else allCached.unshift(offlineExpense)
+        } else {
+          allCached.unshift(offlineExpense)
+        }
+        localStorage.setItem(EXPENSE_CACHE.all, JSON.stringify(allCached))
+        setExpenses(filterCachedExpenses(allCached))
+        setShowAddExpense(false); setEditingExpense(null); resetExpenseForm()
+        countPending()
+        notify.success(`Expense ${editingExpense ? 'updated' : 'saved'} offline — will sync when connected.`)
+        return
+      }
+
       if (editingExpense) {
         const { error } = await supabase.from('expenses').update(expenseData).eq('id', editingExpense.id)
         if (error) throw error
@@ -426,6 +540,21 @@ export default function ExpensesPage() {
   }
 
   const confirmDeleteExpense = async () => {
+    if (!cacheManager.checkOnlineStatus()) {
+      const expenseId = confirmDelete.expenseId
+      const isTemp = String(expenseId).startsWith('offline_')
+      const pending = JSON.parse(localStorage.getItem(EXPENSE_CACHE.pending) || '[]')
+      const filtered = pending.filter(op => op.id !== expenseId)
+      if (!isTemp) filtered.push({ type: 'delete', id: expenseId })
+      localStorage.setItem(EXPENSE_CACHE.pending, JSON.stringify(filtered))
+      const allCached = JSON.parse(localStorage.getItem(EXPENSE_CACHE.all) || '[]').filter(e => e.id !== expenseId)
+      localStorage.setItem(EXPENSE_CACHE.all, JSON.stringify(allCached))
+      setExpenses(prev => prev.filter(e => e.id !== expenseId))
+      setConfirmDelete({ show: false, expenseId: null }); setSelectedExpense(null)
+      countPending()
+      notify.success('Expense deleted offline — will sync when connected.')
+      return
+    }
     setIsDeleting(true)
     try {
       const { error } = await supabase.from('expenses').delete().eq('id', confirmDelete.expenseId)
@@ -440,6 +569,42 @@ export default function ExpensesPage() {
     } finally {
       setIsDeleting(false)
     }
+  }
+
+  const syncPendingExpenses = async () => {
+    if (!user?.id) return
+    const pendingRaw = localStorage.getItem(EXPENSE_CACHE.pending)
+    if (!pendingRaw) return
+    let pending
+    try { pending = JSON.parse(pendingRaw) } catch { return }
+    if (!pending.length) return
+
+    const failed = []
+    for (const op of pending) {
+      try {
+        if (op.type === 'insert') {
+          const { error } = await supabase.from('expenses').insert(op.data)
+          if (error) throw error
+        } else if (op.type === 'update') {
+          const { error } = await supabase.from('expenses').update(op.data).eq('id', op.id)
+          if (error) throw error
+        } else if (op.type === 'delete') {
+          const { error } = await supabase.from('expenses').delete().eq('id', op.id)
+          if (error) throw error
+        }
+      } catch (e) { failed.push(op) }
+    }
+
+    if (failed.length === 0) {
+      localStorage.removeItem(EXPENSE_CACHE.pending)
+      setPendingCount(0)
+      notify.success(`Synced ${pending.length} expense${pending.length > 1 ? 's' : ''} successfully.`)
+    } else {
+      localStorage.setItem(EXPENSE_CACHE.pending, JSON.stringify(failed))
+      setPendingCount(failed.length)
+      notify.warning(`${pending.length - failed.length} synced, ${failed.length} failed.`)
+    }
+    if (isAuthenticated) fetchData()
   }
 
   const resetExpenseForm = () => {
@@ -472,6 +637,7 @@ export default function ExpensesPage() {
 
   // ─── Category CRUD ─────────────────────────────────────────────────────────
   const handleSaveCategory = async () => {
+    if (!cacheManager.checkOnlineStatus()) { notify.warning('Category management requires internet connection.'); return }
     if (isSavingCategory) return
     try {
       if (!categoryForm.name) { notify.warning('Category name is required'); return }
@@ -722,6 +888,18 @@ export default function ExpensesPage() {
               />
             </div>
           </div>
+
+          {/* Offline / pending sync banner */}
+          {(!isOnline || pendingCount > 0) && (
+            <div className={`px-2 py-1.5 flex items-center justify-between text-xs ${!isOnline ? 'bg-amber-500/10 border-b border-amber-500/20' : 'bg-blue-500/10 border-b border-blue-500/20'}`}>
+              <span className={!isOnline ? 'text-amber-600 dark:text-amber-400' : 'text-blue-600 dark:text-blue-400'}>
+                {!isOnline ? 'Offline — showing cached data' : `${pendingCount} expense${pendingCount > 1 ? 's' : ''} pending sync`}
+              </span>
+              {isOnline && pendingCount > 0 && (
+                <button onClick={syncPendingExpenses} className="text-blue-600 dark:text-blue-400 font-semibold hover:underline">Sync now</button>
+              )}
+            </div>
+          )}
 
           {/* Filter row */}
           <div className={`p-2 space-y-1.5 ${isDark ? 'bg-gray-700/80' : 'bg-gray-50/80'} ${themeClasses.border} border-b`}>

@@ -20,13 +20,21 @@ export default function RecordPaymentModal({ customer, unpaidOrders, customerSum
   const [paymentMethods, setPaymentMethods] = useState(['Cash', 'EasyPaisa', 'JazzCash', 'Bank', 'Card']);
 
   useEffect(() => {
+    if (!userId) return
     const cashier = authManager.getCashier()
-    if (cashier?.id) {
+    const currentUser = authManager.getCurrentUser()
+
+    const drawerEnabled = currentUser?.use_cashier_drawer === true ||
+      (() => { try { return JSON.parse(localStorage.getItem('pos_cashier_drawer_enabled') || 'false') } catch { return false } })()
+
+    if (drawerEnabled && cashier?.id) {
       supabase.from('payment_accounts').select('name, payment_method_key')
-        .eq('cashier_id', cashier.id).eq('is_active', true).order('sort_order')
-        .then(({ data }) => {
-          if (data?.length > 0) setPaymentMethods(data.map(a => a.name))
-        })
+        .eq('user_id', userId).eq('cashier_id', cashier.id).eq('is_active', true).order('sort_order')
+        .then(({ data }) => { if (data?.length > 0) setPaymentMethods(data.map(a => a.name)) })
+    } else {
+      supabase.from('payment_accounts').select('name, payment_method_key')
+        .eq('user_id', userId).is('cashier_id', null).eq('is_active', true).order('sort_order')
+        .then(({ data }) => { if (data?.length > 0) setPaymentMethods(data.map(a => a.name)) })
     }
   }, []);
 

@@ -403,17 +403,20 @@ export default function WalkInPage() {
 
     // If no variants, add to cart directly
     if (!variants || variants.length === 0) {
+      const basePrice = parseFloat(product.base_price)
+      const discount = parseFloat(product.discount_percentage) || 0
+      const finalPrice = basePrice * (1 - discount / 100)
       const cartItem = {
         id: `${product.id}-base-${Date.now()}`,
         productId: product.id,
         variantId: null,
         productName: product.name,
         variantName: null,
-        basePrice: parseFloat(product.base_price),
+        basePrice: basePrice,
         variantPrice: 0,
-        finalPrice: parseFloat(product.base_price),
+        finalPrice: finalPrice,
         quantity: 1,
-        totalPrice: parseFloat(product.base_price),
+        totalPrice: finalPrice,
         image: product.image_url
       }
       handleAddToCart(cartItem)
@@ -710,11 +713,35 @@ export default function WalkInPage() {
       return
     }
 
-    setCart(prevCart => prevCart.map(item =>
-      item.id === itemId
-        ? { ...item, quantity: newQuantity, totalPrice: item.finalPrice * newQuantity }
-        : item
-    ))
+    setCart(prevCart => prevCart.map(item => {
+      if (item.id !== itemId) return item
+      const gross = item.finalPrice * newQuantity
+      const discountAmount = item.itemDiscountType === 'percentage' && item.itemDiscountValue
+        ? (gross * item.itemDiscountValue) / 100
+        : item.itemDiscountType === 'fixed'
+          ? Math.min(item.itemDiscountValue || 0, gross)
+          : 0
+      return { ...item, quantity: newQuantity, totalPrice: gross - discountAmount, itemDiscountAmount: discountAmount }
+    }))
+  }
+
+  const updateItemDiscount = (itemId, discountType, discountValue) => {
+    setCart(prev => prev.map(item => {
+      if (item.id !== itemId) return item
+      const gross = item.finalPrice * item.quantity
+      const discountAmount = discountType === 'percentage'
+        ? (gross * discountValue) / 100
+        : discountType === 'fixed'
+          ? Math.min(discountValue, gross)
+          : 0
+      return {
+        ...item,
+        itemDiscountType: discountType,
+        itemDiscountValue: discountValue,
+        itemDiscountAmount: discountAmount,
+        totalPrice: gross - discountAmount,
+      }
+    }))
   }
 
   const removeCartItem = (itemId) => {
@@ -906,7 +933,7 @@ export default function WalkInPage() {
 
         // Call the reliable deduction function (ONLINE ONLY)
         if (orderTypeId && user?.id) {
-          if (navigator.onLine) {
+          if (cacheManager.checkOnlineStatus()) {
             console.log('🌐 [Walkin] ONLINE - Calling deduct_inventory_for_order with:', {
               order_id: order.id,
               user_id: user.id,
@@ -1105,7 +1132,7 @@ export default function WalkInPage() {
         }))
 
         // CRITICAL FIX: Check if online or offline
-        if (navigator.onLine) {
+        if (cacheManager.checkOnlineStatus()) {
           console.log('🌐 [Split Payment] ONLINE - Updating order and inserting transactions to database')
 
           // Update order with split payment
@@ -1163,7 +1190,7 @@ export default function WalkInPage() {
 
         if (dealIds.length > 0) {
           try {
-            if (navigator.onLine) {
+            if (cacheManager.checkOnlineStatus()) {
               const { data: deals, error: dealsError } = await supabase
                 .from('deals')
                 .select('*')
@@ -1272,7 +1299,7 @@ export default function WalkInPage() {
         let splitLoyaltyDiscountAmount = 0
         let splitLoyaltyPointsRedeemed = 0
 
-        if (navigator.onLine) {
+        if (cacheManager.checkOnlineStatus()) {
           try {
             const { data: redemption } = await supabase
               .from('loyalty_redemptions')
@@ -1366,7 +1393,7 @@ export default function WalkInPage() {
       // Determine if this payment should also mark the order as Completed
       const shouldComplete = paymentData.completeOrder !== false
 
-      if (navigator.onLine) {
+      if (cacheManager.checkOnlineStatus()) {
         // Online: Update database directly — include order_status in the SAME write
         // to avoid race conditions where payment is saved but status stays Pending
         const cashierData = authManager.getCashier()
@@ -1439,7 +1466,7 @@ export default function WalkInPage() {
       }
 
       // CRITICAL FIX: Handle customer ledger entry for Account payment (ONLINE ONLY)
-      if (navigator.onLine && paymentData.paymentMethod === 'Account' && order.customer_id) {
+      if (cacheManager.checkOnlineStatus() && paymentData.paymentMethod === 'Account' && order.customer_id) {
         try {
           console.log('💳 [Walkin Payment] Processing customer ledger for Account payment')
 
@@ -1566,7 +1593,7 @@ export default function WalkInPage() {
       let loyaltyDiscountAmount = 0
       let loyaltyPointsRedeemed = 0
 
-      if (navigator.onLine) {
+      if (cacheManager.checkOnlineStatus()) {
         try {
           const { data: redemption } = await supabase
             .from('loyalty_redemptions')
@@ -1611,7 +1638,7 @@ export default function WalkInPage() {
 
       if (dealIds.length > 0) {
         try {
-          if (navigator.onLine) {
+          if (cacheManager.checkOnlineStatus()) {
             const { data: deals, error: dealsError } = await supabase
               .from('deals')
               .select('*')
@@ -1771,7 +1798,7 @@ export default function WalkInPage() {
           if (cachedTransactions && cachedTransactions.length > 0) {
             orderData.paymentTransactions = cachedTransactions
             console.log('✅ Using cached payment transactions for modal:', cachedTransactions)
-          } else if (navigator.onLine) {
+          } else if (cacheManager.checkOnlineStatus()) {
             // Fetch from database if online and not cached
             const { data: transactions, error: txError } = await supabase
               .from('order_payment_transactions')
@@ -1860,7 +1887,7 @@ export default function WalkInPage() {
       let loyaltyPointsRedeemed = 0
 
       // Check if we're online or offline
-      if (navigator.onLine) {
+      if (cacheManager.checkOnlineStatus()) {
         // Online: Try to fetch from database
         try {
           const { data: redemption } = await supabase
@@ -1906,7 +1933,7 @@ export default function WalkInPage() {
 
       if (dealIds.length > 0) {
         try {
-          if (navigator.onLine) {
+          if (cacheManager.checkOnlineStatus()) {
             const { data: deals, error: dealsError } = await supabase
               .from('deals')
               .select('*')
@@ -2027,7 +2054,7 @@ export default function WalkInPage() {
           if (cachedTransactions && cachedTransactions.length > 0) {
             orderData.paymentTransactions = cachedTransactions
             console.log('✅ Using cached payment transactions for already-paid modal:', cachedTransactions)
-          } else if (navigator.onLine) {
+          } else if (cacheManager.checkOnlineStatus()) {
             // Fetch from database if online and not cached
             const { data: transactions, error: txError } = await supabase
               .from('order_payment_transactions')
@@ -2108,7 +2135,7 @@ export default function WalkInPage() {
         console.log('🔍 [handlePrintOrder] No loyalty data passed, attempting to fetch for order:', order.order_number)
 
         // Try online fetch first
-        if (navigator.onLine) {
+        if (cacheManager.checkOnlineStatus()) {
           try {
             const { data: redemption, error: redemptionError } = await supabase
               .from('loyalty_redemptions')
@@ -2163,7 +2190,7 @@ export default function WalkInPage() {
 
       if (dealIds.length > 0) {
         try {
-          if (navigator.onLine) {
+          if (cacheManager.checkOnlineStatus()) {
             // Online: Fetch from database
             const { data: deals, error: dealsError } = await supabase
               .from('deals')
@@ -2299,7 +2326,7 @@ export default function WalkInPage() {
           if (cachedTransactions && cachedTransactions.length > 0) {
             orderData.paymentTransactions = cachedTransactions
             console.log('✅ Using cached payment transactions:', cachedTransactions)
-          } else if (navigator.onLine) {
+          } else if (cacheManager.checkOnlineStatus()) {
             // Fetch from database if online and not cached
             const { data: transactions, error: txError } = await supabase
               .from('order_payment_transactions')
@@ -2387,7 +2414,7 @@ export default function WalkInPage() {
 
       // Always fetch fresh order items from Supabase when online (ensures item_instructions is included)
       let orderItems = []
-      if (order.id && navigator.onLine) {
+      if (order.id && cacheManager.checkOnlineStatus()) {
         const { data } = await supabase
           .from('order_items')
           .select('*')
@@ -2918,6 +2945,7 @@ export default function WalkInPage() {
         onChangeTable={() => setCurrentView('tables')}
         onInstructionsChange={setOrderInstructions}
         onUpdateItemInstruction={updateItemInstruction}
+        onUpdateItemDiscount={updateItemDiscount}
         inlineCustomer={true}
         onCustomerChange={setCustomer}
         orderData={orderData}

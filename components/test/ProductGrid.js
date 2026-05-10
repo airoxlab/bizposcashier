@@ -272,8 +272,21 @@ const ProductGrid = forwardRef(({
                           </span>
                         </div>
                       )}
-                      <div className="absolute top-2 left-2 bg-green-600 text-white px-2 py-1 rounded-full text-xs font-bold shadow-lg">
-                        Rs {product.base_price}
+                      <div className="absolute top-2 left-2 flex flex-col items-start gap-0.5">
+                        {product.discount_percentage > 0 ? (
+                          <>
+                            <div className="bg-green-600 text-white px-2 py-0.5 rounded-full text-xs font-bold shadow-lg">
+                              Rs {Math.round(product.base_price * (1 - product.discount_percentage / 100))}
+                            </div>
+                            <div className="bg-black/55 text-white/80 px-2 py-0.5 rounded-full text-[9px] font-semibold line-through shadow">
+                              Rs {product.base_price}
+                            </div>
+                          </>
+                        ) : (
+                          <div className="bg-green-600 text-white px-2 py-1 rounded-full text-xs font-bold shadow-lg">
+                            Rs {product.base_price}
+                          </div>
+                        )}
                       </div>
                       <div className={`absolute bottom-2 right-2 w-8 h-8 ${classes.card} rounded-full flex items-center justify-center shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200`}>
                         <Plus className="w-4 h-4 text-green-600" />
@@ -398,8 +411,21 @@ const ProductGrid = forwardRef(({
                             </div>
                           )}
 
-                          <div className="absolute top-2 left-2 bg-green-600 text-white px-2 py-1 rounded-full text-xs font-bold shadow-lg">
-                            Rs {product.base_price}
+                          <div className="absolute top-2 left-2 flex flex-col items-start gap-0.5">
+                            {product.discount_percentage > 0 ? (
+                              <>
+                                <div className="bg-green-600 text-white px-2 py-0.5 rounded-full text-xs font-bold shadow-lg">
+                                  Rs {Math.round(product.base_price * (1 - product.discount_percentage / 100))}
+                                </div>
+                                <div className="bg-black/55 text-white/80 px-2 py-0.5 rounded-full text-[9px] font-semibold line-through shadow">
+                                  Rs {product.base_price}
+                                </div>
+                              </>
+                            ) : (
+                              <div className="bg-green-600 text-white px-2 py-1 rounded-full text-xs font-bold shadow-lg">
+                                Rs {product.base_price}
+                              </div>
+                            )}
                           </div>
 
                           <div className={`absolute bottom-2 right-2 w-8 h-8 ${classes.card} rounded-full flex items-center justify-center shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200`}>

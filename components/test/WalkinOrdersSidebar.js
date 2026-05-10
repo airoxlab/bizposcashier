@@ -11,29 +11,65 @@ import dailySerialManager from '../../lib/utils/dailySerialManager'
 import { getBusinessDate } from '../../lib/utils/businessDayUtils'
 
 // ── Static constants (outside component so they are never re-created) ──────────
-const METHODS = [
-  { id: 'cash',          name: 'Cash',          label: 'Cash',          icon: DollarSign,  color: 'emerald' },
-  { id: 'easypaisa',     name: 'EasyPaisa',     label: 'EasyPaisa',     icon: Smartphone,  color: 'green'   },
-  { id: 'jazzcash',      name: 'JazzCash',      label: 'JazzCash',      icon: Smartphone,  color: 'orange'  },
-  { id: 'bank',          name: 'Bank',          label: 'Bank',          icon: Building2,   color: 'blue'    },
-  { id: 'account',       name: 'Account',       label: 'Account',       icon: CreditCard,  color: 'purple'  },
-  { id: 'unpaid',        name: 'Unpaid',        label: 'Unpaid',        icon: Clock,       color: 'gray'    },
-  { id: 'complimentary', name: 'Complimentary', label: 'Complimentary', icon: Gift,        color: 'pink'    },
+// Special methods that always appear regardless of payment_accounts setup
+const SPECIAL_METHODS = [
+  { id: 'account',       name: 'Account',       label: 'Account',       icon: CreditCard, color: 'purple' },
+  { id: 'unpaid',        name: 'Unpaid',        label: 'Unpaid',        icon: Clock,      color: 'gray'   },
+  { id: 'complimentary', name: 'Complimentary', label: 'Complimentary', icon: Gift,       color: 'pink'   },
 ]
+
+// Icon + color mapping by payment_method_key for dynamic accounts
+const ACCOUNT_KEY_UI = {
+  cash:      { icon: DollarSign, color: 'emerald' },
+  easypaisa: { icon: Smartphone, color: 'green'   },
+  jazzcash:  { icon: Smartphone, color: 'orange'  },
+  bank:      { icon: Building2,  color: 'blue'    },
+}
+const DEFAULT_ACCOUNT_UI = { icon: Wallet, color: 'blue' }
 
 // ── Quick-Pay modal — isolated so selecting a method / typing cash
 //    only re-renders this component, not the entire sidebar + order list ───────
 const QuickPayModal = memo(function QuickPayModal({ order, isDark, onClose, onComplete }) {
-  const [selectedMethod, setSelectedMethod] = useState('Cash')
+  const [selectedMethod, setSelectedMethod] = useState(null)
+  const [selectedKey, setSelectedKey] = useState(null)
   const [cashInput, setCashInput] = useState('')
+  const [dynamicAccounts, setDynamicAccounts] = useState([])
 
-  // Reset to cash whenever the modal is opened for a new order
+  // Reset input whenever the modal opens for a new order
   useEffect(() => {
-    if (order) {
-      setSelectedMethod('Cash')
-      setCashInput('')
-    }
+    if (order) setCashInput('')
   }, [order?.id])
+
+  // Fetch payment accounts respecting the cashier drawer toggle
+  useEffect(() => {
+    const currentUser = authManager.getCurrentUser()
+    const cashier = authManager.getCashier()
+    const userId = currentUser?.id
+    if (!userId) return
+
+    const drawerEnabled = currentUser?.use_cashier_drawer === true ||
+      (() => { try { return JSON.parse(localStorage.getItem('pos_cashier_drawer_enabled') || 'false') } catch { return false } })()
+
+    let query = supabase.from('payment_accounts')
+      .select('id, name, payment_method_key')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+      .order('sort_order')
+
+    if (drawerEnabled && cashier?.id) {
+      query = query.eq('cashier_id', cashier.id)
+    } else {
+      query = query.is('cashier_id', null)
+    }
+
+    query.then(({ data }) => {
+      if (data?.length > 0) {
+        setDynamicAccounts(data)
+        setSelectedMethod(data[0].name)
+        setSelectedKey(data[0].payment_method_key?.toLowerCase() || '')
+      }
+    })
+  }, [])
 
   const colorMap = useMemo(() => ({
     emerald: { bg: isDark ? 'bg-emerald-900/40 border-emerald-700' : 'bg-emerald-50 border-emerald-300', text: isDark ? 'text-emerald-300' : 'text-emerald-700', icon: isDark ? 'text-emerald-400' : 'text-emerald-600', sel: 'bg-emerald-600 border-emerald-500 text-white' },
@@ -50,7 +86,7 @@ const QuickPayModal = memo(function QuickPayModal({ order, isDark, onClose, onCo
   const qpTotal          = parseFloat(order.total_amount) || 0
   const qpCashIn         = parseFloat(cashInput) || 0
   const qpChange         = Math.max(0, qpCashIn - qpTotal)
-  const qpIsCash         = selectedMethod === 'Cash'
+  const qpIsCash         = selectedKey === 'cash'
   const qpAlreadyPaid    = order.payment_status?.toLowerCase() === 'paid'
   const qpQuickAmounts   = [
     Math.ceil(qpTotal),
@@ -89,14 +125,33 @@ const QuickPayModal = memo(function QuickPayModal({ order, isDark, onClose, onCo
             <>
               <p className={`text-xs font-semibold uppercase tracking-wider mb-3 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Select Payment Method</p>
               <div className="grid grid-cols-4 gap-3 mb-5">
-                {METHODS.map(m => {
+                {/* Dynamic accounts from payment_accounts (drawer-aware) */}
+                {dynamicAccounts.map(acct => {
+                  const key = acct.payment_method_key?.toLowerCase() || ''
+                  const ui = ACCOUNT_KEY_UI[key] || DEFAULT_ACCOUNT_UI
+                  const c = colorMap[ui.color]
+                  const isSelected = selectedMethod === acct.name
+                  const IconComp = ui.icon
+                  return (
+                    <button
+                      key={acct.id}
+                      onClick={() => { setSelectedMethod(acct.name); setSelectedKey(key); if (key !== 'cash') setCashInput('') }}
+                      className={`flex flex-col items-center gap-2 p-3 rounded-xl border transition-all ${isSelected ? c.sel : `${c.bg} ${c.text}`} hover:opacity-90`}
+                    >
+                      <IconComp className={`w-6 h-6 ${isSelected ? 'text-white' : c.icon}`} />
+                      <span className="text-xs font-medium leading-tight text-center">{acct.name}</span>
+                    </button>
+                  )
+                })}
+                {/* Special methods — always present */}
+                {SPECIAL_METHODS.map(m => {
                   const c = colorMap[m.color]
                   const isSelected = selectedMethod === m.name
                   const IconComp = m.icon
                   return (
                     <button
                       key={m.id}
-                      onClick={() => { setSelectedMethod(m.name); if (m.id !== 'cash') setCashInput('') }}
+                      onClick={() => { setSelectedMethod(m.name); setSelectedKey(m.id); setCashInput('') }}
                       className={`flex flex-col items-center gap-2 p-3 rounded-xl border transition-all ${isSelected ? c.sel : `${c.bg} ${c.text}`} hover:opacity-90`}
                     >
                       <IconComp className={`w-6 h-6 ${isSelected ? 'text-white' : c.icon}`} />
@@ -412,7 +467,9 @@ export default function WalkinOrdersSidebar({
               is_deal,
               deal_id,
               deal_products,
-              item_instructions
+              item_instructions,
+              item_discount_type,
+              item_discount_amount
             )
           `)
           .eq('user_id', user.id)

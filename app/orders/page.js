@@ -393,6 +393,22 @@ export default function OrdersPage() {
         return;
       }
 
+      // Offline: build lists from cache
+      if (!cacheManager.checkOnlineStatus()) {
+        const cachedCashiers = cacheManager.cache.cashiers || []
+        const cachedDeliveryBoys = cacheManager.cache.delivery_boys || []
+        const currentUser = authManager.getCurrentUser()
+
+        const allCashiers = []
+        if (currentUser) {
+          allCashiers.push({ id: `user_${currentUser.id}`, name: currentUser.customer_name || 'Admin', type: 'user' })
+        }
+        cachedCashiers.forEach(c => allCashiers.push({ id: `cashier_${c.id}`, name: c.name, type: 'cashier', originalId: c.id }))
+        setCashiersList(allCashiers)
+        setDeliveryBoysList(cachedDeliveryBoys.map(b => ({ id: b.id, name: b.name })))
+        return
+      }
+
       console.log("📋 Fetching cashiers and delivery boys for user:", userId);
 
       // Fetch cashiers from cashiers table
@@ -465,6 +481,15 @@ export default function OrdersPage() {
       setDeliveryBoysList(deliveryBoysData || []);
     } catch (error) {
       console.error("❌ Error fetching filter lists:", error);
+      // Fallback to cache on any error
+      const cachedCashiers = cacheManager.cache.cashiers || []
+      const cachedDeliveryBoys = cacheManager.cache.delivery_boys || []
+      const currentUser = authManager.getCurrentUser()
+      const allCashiers = []
+      if (currentUser) allCashiers.push({ id: `user_${currentUser.id}`, name: currentUser.customer_name || 'Admin', type: 'user' })
+      cachedCashiers.forEach(c => allCashiers.push({ id: `cashier_${c.id}`, name: c.name, type: 'cashier', originalId: c.id }))
+      setCashiersList(allCashiers)
+      setDeliveryBoysList(cachedDeliveryBoys.map(b => ({ id: b.id, name: b.name })))
     }
   };
 
@@ -491,7 +516,7 @@ export default function OrdersPage() {
       let rawOrders = [];
 
       // Check if we're online or offline
-      const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+      const isOnline = cacheManager.checkOnlineStatus();
 
       if (isOnline) {
         try {
@@ -737,7 +762,7 @@ export default function OrdersPage() {
       }
 
       // If offline, can't fetch - show empty or what we have
-      if (!navigator.onLine) {
+      if (!cacheManager.checkOnlineStatus()) {
         console.log("📴 Offline: Cannot fetch order items from database");
         if (selectedOrderRef.current?.id === orderId) setOrderItems([]);
         return;
@@ -768,7 +793,7 @@ export default function OrdersPage() {
   const fetchOrderHistory = async (orderId) => {
     try {
       // Check if we're offline
-      if (!navigator.onLine) {
+      if (!cacheManager.checkOnlineStatus()) {
         console.log("📴 Offline: Skipping order history fetch");
         setOrderHistory([]);
         return;
@@ -785,7 +810,7 @@ export default function OrdersPage() {
   const fetchOrderLoyaltyPoints = async (orderId) => {
     try {
       // Check if we're offline
-      if (!navigator.onLine) {
+      if (!cacheManager.checkOnlineStatus()) {
         console.log("📴 Offline: Skipping loyalty points fetch");
         setOrderLoyaltyPoints([]);
         return;
@@ -815,7 +840,7 @@ export default function OrdersPage() {
   const fetchLoyaltyRedemption = async (orderNumber) => {
     try {
       // Check if we're offline
-      if (!navigator.onLine) {
+      if (!cacheManager.checkOnlineStatus()) {
         console.log("📴 Offline: Checking cache for loyalty redemption");
 
         // Try to get loyalty redemption from localStorage/cache
@@ -879,7 +904,7 @@ export default function OrdersPage() {
       }
 
       // If not in cache and online, fetch from database
-      if (navigator.onLine) {
+      if (cacheManager.checkOnlineStatus()) {
         const { data, error } = await supabase
           .from("order_payment_transactions")
           .select("*")
@@ -934,7 +959,7 @@ export default function OrdersPage() {
       if (!selectedOrder) return;
 
       // Check network status
-      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      if (!cacheManager.checkOnlineStatus()) {
         notify.error('No internet connection - cannot process payment');
         return;
       }
@@ -1369,7 +1394,7 @@ export default function OrdersPage() {
       // ================================================================
       // REVERSE CUSTOMER LEDGER WHEN ACCOUNT ORDER IS CANCELLED
       // ================================================================
-      if (newStatus === 'Cancelled' && navigator.onLine &&
+      if (newStatus === 'Cancelled' && cacheManager.checkOnlineStatus() &&
           selectedOrder?.payment_method === 'Account' && selectedOrder?.customer_id) {
         try {
           console.log('💳 [Orders] Reversing customer ledger for cancelled Account order')
@@ -1413,6 +1438,23 @@ export default function OrdersPage() {
         } catch (ledgerError) {
           console.error('❌ [Orders] Failed to reverse customer ledger:', ledgerError)
           notify.error('Order cancelled but failed to reverse customer account. Please adjust manually.')
+        }
+      } else if (newStatus === 'Cancelled' && !cacheManager.checkOnlineStatus() &&
+          selectedOrder?.payment_method === 'Account' && selectedOrder?.customer_id) {
+        // Only queue a credit reversal if the order was already synced to DB (has a real UUID).
+        // If the order was created offline and never synced, there is no debit to reverse.
+        const isRealUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orderId)
+        const orderTotal = parseFloat(selectedOrder.total_amount || selectedOrder.amount_paid || 0)
+        if (isRealUUID && orderTotal > 0) {
+          cacheManager.addPendingLedgerEntry({
+            type: 'credit',
+            customer_id: selectedOrder.customer_id,
+            amount: orderTotal,
+            order_id: orderId,
+            description: `Order cancelled - ${selectedOrder.order_number || 'N/A'}${cancelReason ? ` (${cancelReason})` : ''}`,
+            notes: 'Order cancellation - account credit reversal (queued offline)'
+          })
+          notify.info(`Order cancelled. Rs ${orderTotal} account credit will sync when online.`)
         }
       }
       // ================================================================
@@ -1510,15 +1552,22 @@ export default function OrdersPage() {
     // Always use fresh items — never read from orderItems state which may hold
     // the previous order's items during the async fetchOrderDetails gap.
     let reopenItems = order.order_items || order.items || [];
-    if (!reopenItems.length && order.id && navigator.onLine) {
-      const { data } = await supabase
-        .from("order_items")
-        .select("*")
-        .eq("order_id", order.id);
-      reopenItems = data || [];
+    if (!reopenItems.length && order.id) {
+      if (cacheManager.checkOnlineStatus()) {
+        const { data } = await supabase
+          .from("order_items")
+          .select("*")
+          .eq("order_id", order.id);
+        reopenItems = data || [];
+      } else {
+        // Try finding items from a cached order that has them populated
+        const cachedOrder = cacheManager.getOrders?.()?.find?.(o => o.id === order.id)
+        reopenItems = cachedOrder?.order_items || cachedOrder?.items || []
+      }
     }
     if (!reopenItems.length) {
       console.error("❌ [handleReopenOrder] No order items available to reopen");
+      notify.error("Cannot reopen: order items not cached. Please go online first.")
       return;
     }
 
@@ -1711,11 +1760,19 @@ export default function OrdersPage() {
       // Always fetch fresh items — never use orderItems state which may be stale
       // from a previous order if the user switched orders quickly.
       let printItems = [];
-      if (printOrder.id && navigator.onLine) {
+      if (printOrder.id && cacheManager.checkOnlineStatus()) {
         const { data } = await supabase.from("order_items").select("*").eq("order_id", printOrder.id).order("created_at");
         printItems = data || [];
       }
-      if (!printItems.length) printItems = printOrder.order_items || printOrder.items || [];
+      if (!printItems.length) {
+        printItems = printOrder.order_items || printOrder.items || []
+        // Also try finding the order in cacheManager which may have items hydrated
+        if (!printItems.length && printOrder.id) {
+          const cachedOrders = cacheManager.getAllOrders?.() || []
+          const cached = cachedOrders.find(o => o.id === printOrder.id)
+          printItems = cached?.order_items || cached?.items || []
+        }
+      }
 
       printerManager.setUserId(user.id);
       const printer = await printerManager.getPrinterForPrinting();
@@ -1892,11 +1949,18 @@ export default function OrdersPage() {
 
       // Always fetch fresh items — never use orderItems state which may be stale.
       let printItems = [];
-      if (printOrder.id && navigator.onLine) {
+      if (printOrder.id && cacheManager.checkOnlineStatus()) {
         const { data } = await supabase.from("order_items").select("*").eq("order_id", printOrder.id);
         printItems = data || [];
       }
-      if (!printItems.length) printItems = printOrder.order_items || printOrder.items || [];
+      if (!printItems.length) {
+        printItems = printOrder.order_items || printOrder.items || []
+        if (!printItems.length && printOrder.id) {
+          const cachedOrders = cacheManager.getAllOrders?.() || []
+          const cached = cachedOrders.find(o => o.id === printOrder.id)
+          printItems = cached?.order_items || cached?.items || []
+        }
+      }
 
       // Get printer config
       printerManager.setUserId(user.id);

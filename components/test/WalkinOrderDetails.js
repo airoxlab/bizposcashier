@@ -666,7 +666,14 @@ export default function WalkinOrderDetails({
         dealName: item.is_deal ? item.product_name : null,
         dealProducts: item.is_deal && item.deal_products ?
           (typeof item.deal_products === 'string' ? JSON.parse(item.deal_products) : item.deal_products) : null,
-        itemInstructions: item.item_instructions || null
+        itemInstructions: item.item_instructions || null,
+        itemDiscountType: item.item_discount_type || null,
+        itemDiscountValue: item.item_discount_type === 'percentage'
+          ? (item.item_discount_amount && item.final_price && item.quantity
+              ? (item.item_discount_amount / (item.final_price * item.quantity)) * 100
+              : 0)
+          : (item.item_discount_amount || 0),
+        itemDiscountAmount: item.item_discount_amount || 0,
       })),
       customer: order.customers,
       orderInstructions: order.order_instructions || '',
@@ -1187,6 +1194,13 @@ export default function WalkinOrderDetails({
                           <div className={`text-[10px] ${classes.textSecondary} ${item.is_deal && dealProducts.length > 0 ? 'mt-0.5' : ''}`}>
                             Qty: {item.quantity} × Rs {item.final_price} each
                           </div>
+                          {item.item_discount_amount > 0 && (
+                            <div className={`text-[10px] font-medium ${isDark ? 'text-green-400' : 'text-green-600'}`}>
+                              Disc: -{item.item_discount_type === 'percentage'
+                                ? `${((item.item_discount_amount / (item.final_price * item.quantity)) * 100).toFixed(0)}%`
+                                : `Rs ${item.item_discount_amount.toFixed(0)}`}
+                            </div>
+                          )}
                         </div>
                         <div className={`font-bold ${classes.textPrimary} text-xs`}>
                           Rs {item.total_price?.toFixed(2) || (item.quantity * item.final_price).toFixed(2)}

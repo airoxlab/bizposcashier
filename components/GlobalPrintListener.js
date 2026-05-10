@@ -3,54 +3,39 @@
 import { useEffect } from 'react'
 import { networkPrintListener } from '../lib/networkPrintListener'
 import { authManager } from '../lib/authManager'
+import { profileManager } from '../lib/profileManager'
 
-/**
- * Global Print Listener Component
- * Runs on all pages to listen for network print jobs if this is a print server
- */
 export default function GlobalPrintListener() {
   useEffect(() => {
-    const initializePrintListener = async () => {
+    const initialize = async () => {
       try {
-        // Check if user is logged in
-        if (!authManager.isLoggedIn()) {
-          return
-        }
+        if (!authManager.isLoggedIn()) return
 
         const userData = authManager.getCurrentUser()
-        if (!userData?.id) {
-          return
-        }
+        if (!userData?.id) return
 
-        // Set user ID in listener
+        // Refresh profile from DB into cache on every app load so receipts
+        // always reflect the latest settings without the user visiting Settings.
+        profileManager.fetchProfileFromDatabase().catch(() => {})
+
+        // Wire up network print server if this terminal is configured as one
         networkPrintListener.setUserId(userData.id)
-
-        // Check if this terminal is configured as a print server
-        const isServerStr = localStorage.getItem('is_print_server')
-        const isServer = isServerStr === 'true'
-
+        const isServer = localStorage.getItem('is_print_server') === 'true'
         if (isServer) {
-          console.log('🌐 Global Print Listener: Starting on all pages (Server Mode ON)')
           networkPrintListener.setIsServer(true)
           await networkPrintListener.startListening()
-        } else {
-          console.log('📴 Global Print Listener: Not a server (Server Mode OFF)')
         }
       } catch (error) {
-        console.error('❌ Error initializing global print listener:', error)
+        console.error('❌ Error initializing global listener:', error)
       }
     }
 
-    // Initialize listener when component mounts
-    initializePrintListener()
+    initialize()
 
-    // Cleanup on unmount
     return () => {
-      // Don't stop listening on page navigation - keep it running globally
-      console.log('🔄 Page changed, but keeping print listener active')
+      // Keep print listener alive across page navigations
     }
   }, [])
 
-  // This component renders nothing - it's just for side effects
   return null
 }

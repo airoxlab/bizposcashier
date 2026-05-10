@@ -74,7 +74,7 @@ const CASHIER_PLANS = {
   business: {
     name: 'Business',
     routes: new Set([
-      '/petty-cash', '/purchase-orders', '/suppliers',
+      '/purchase-orders', '/suppliers',
       '/ledgers', '/my-till', '/web-orders',
     ]),
   },
@@ -234,9 +234,23 @@ export default function Dashboard() {
     fetchActiveOrders()
     const ordersRefreshTimer = setInterval(fetchActiveOrders, 30000)
 
+    // Poll network status every 3s so the online/offline indicator stays accurate
+    const networkTimer = setInterval(() => {
+      setCacheStatus(prev => ({ ...prev, networkStatus: cacheManager.getNetworkStatus() }))
+    }, 3000)
+
+    // Also update immediately on browser online/offline events
+    const onOnline = () => setCacheStatus(prev => ({ ...prev, networkStatus: cacheManager.getNetworkStatus() }))
+    const onOffline = () => setCacheStatus(prev => ({ ...prev, networkStatus: cacheManager.getNetworkStatus() }))
+    window.addEventListener('online', onOnline)
+    window.addEventListener('offline', onOffline)
+
     return () => {
       clearInterval(timer)
       clearInterval(ordersRefreshTimer)
+      clearInterval(networkTimer)
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('offline', onOffline)
       webOrderNotificationManager.stopListening()
       // Don't stop networkPrintListener here - it should persist across pages
       // It will be stopped on logout (authManager) or when "I am Server" is toggled OFF (printer page)
@@ -340,6 +354,26 @@ export default function Dashboard() {
       const userData = authManager.getCurrentUser()
       if (!userData?.id) return
       const today = new Date().toISOString().split('T')[0]
+
+      if (!cacheManager.checkOnlineStatus()) {
+        const cached = cacheManager.cache.orders || []
+        const todayUnpaid = cached
+          .filter(o =>
+            o.order_date === today &&
+            o.payment_status !== 'Paid' &&
+            (o.order_source === 'POS' || o.is_approved === true)
+          )
+          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+          .slice(0, 8)
+          .map(o => {
+            const customerMap = cacheManager.cache.customers
+            const c = customerMap ? Array.from(customerMap.values()).find(c => c.id === o.customer_id) : null
+            return { ...o, customers: c ? { full_name: c.full_name } : null }
+          })
+        setActiveOrders(todayUnpaid)
+        return
+      }
+
       const { data, error } = await supabase
         .from('orders')
         .select('id, order_number, order_type, order_status, payment_status, total_amount, created_at, customers(full_name)')
@@ -521,14 +555,7 @@ export default function Dashboard() {
       route: '/ledgers',
       permissionKey: 'SUPPLIER_LEDGER'
     },
-    {
-      id: 'petty-cash',
-      title: 'Petty Cash',
-      icon: Wallet,
-      gradient: 'from-indigo-500 to-purple-600',
-      route: '/petty-cash',
-      permissionKey: 'PETTY_CASH_USE'
-    }
+
   ]
 
   // Helper to check if user has permission for a card
@@ -638,10 +665,10 @@ export default function Dashboard() {
                     {user.store_name}
                   </p>
                   {/* WhatsApp Status Badge */}
-                  <button
-                    onClick={() => router.push('/settings/whatsapp')}
-                    title={waStatus === 'connected' ? 'WhatsApp Connected' : waStatus === 'connecting' ? 'WhatsApp Connecting...' : 'WhatsApp Disconnected — Click to connect'}
-                    className={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-xs font-medium transition-all ${
+                  <div
+                    title={waStatus === 'connected' ? 'WhatsApp Connected' : waStatus === 'connecting' || waStatus === 'qr_ready' ? 'WhatsApp Connecting...' : 'WhatsApp Disconnected'}
+                    style={{ cursor: 'not-allowed' }}
+                    className={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-xs font-medium select-none ${
                       waStatus === 'connected'
                         ? isDark ? 'bg-green-500/15 border-green-500/30 text-green-400' : 'bg-green-50 border-green-200 text-green-700'
                         : waStatus === 'connecting' || waStatus === 'qr_ready'
@@ -657,7 +684,7 @@ export default function Dashboard() {
                     <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" className="flex-shrink-0">
                       <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347zM12 0C5.373 0 0 5.373 0 12c0 2.135.561 4.14 1.541 5.874L0 24l6.336-1.521A11.94 11.94 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.8 9.8 0 01-5.015-1.374l-.36-.214-3.762.903.964-3.674-.234-.375A9.778 9.778 0 012.182 12C2.182 6.57 6.57 2.182 12 2.182S21.818 6.57 21.818 12 17.43 21.818 12 21.818z"/>
                     </svg>
-                  </button>
+                  </div>
                 </div>
 
                   {/* Plan Badge */}

@@ -186,6 +186,7 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
   const storeName = (userProfile?.store_name || 'POS SYSTEM').toUpperCase();
   const storeAddress = userProfile?.store_address || '';
   const storePhone = userProfile?.phone || '';
+  const storePhoneSecondary = userProfile?.phone_secondary || '';
 
   // Check if business name should be shown (default true)
   const showBusinessNameOnReceipt = userProfile?.show_business_name_on_receipt !== false;
@@ -217,9 +218,12 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
     commands.push(CMD.ALIGN_CENTER);
     commands.push(text(storeAddress + '\n'));
   }
-  if (storePhone) {
+  if (storePhone || storePhoneSecondary) {
+    const phoneLine = storePhone && storePhoneSecondary
+      ? `Ph: ${storePhone}, ${storePhoneSecondary}`
+      : `Ph: ${storePhone || storePhoneSecondary}`;
     commands.push(CMD.ALIGN_CENTER);
-    commands.push(text(`Ph: ${storePhone}\n`));
+    commands.push(text(phoneLine + '\n'));
   }
 
   // ========================================
@@ -501,8 +505,10 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
   // POWERED BY & CUT
   // ========================================
   commands.push(CMD.FEED);
-  commands.push(CMD.ALIGN_CENTER);
-  commands.push(text('Powered by airoxlab.com\n'));
+  if (userProfile?.show_powered_by_airoxlab !== false) {
+    commands.push(CMD.ALIGN_CENTER);
+    commands.push(text('Powered by airoxlab.com\n'));
+  }
 
   commands.push(CMD.FEED);
   commands.push(CMD.CUT);

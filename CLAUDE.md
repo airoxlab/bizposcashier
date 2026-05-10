@@ -40,8 +40,7 @@ bizposcashier/
 │   ├── reports/            # Sales reports & analytics
 │   ├── expenses/           # Expense tracking
 │   ├── riders/             # Delivery rider management
-│   ├── petty-cash/         # Petty cash management
-│   ├── offline-orders/     # Offline order queue
+││   ├── offline-orders/     # Offline order queue
 │   ├── marketing/          # Marketing module
 │   ├── printer/            # Printer configuration
 │   └── settings/           # App settings
@@ -72,8 +71,7 @@ bizposcashier/
 │   ├── customerLedgerManager.js # Customer credit accounts
 │   ├── ledgerManager.js        # Ledger operations
 │   ├── paymentTransactionManager.js # Split payment tracking
-│   ├── pettyCashManager.js     # Petty cash records
-│   ├── profileManager.js       # Business profile
+││   ├── profileManager.js       # Business profile
 │   ├── themeManager.js         # Dark/light theme (cookie + localStorage)
 │   ├── webOrderNotification.js # Web order alerts
 │   ├── whatsappAutoSend.js     # Auto WhatsApp receipt sending

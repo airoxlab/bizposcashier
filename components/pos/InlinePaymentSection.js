@@ -53,9 +53,20 @@ export default function InlinePaymentSection({
 
   useEffect(() => {
     const cashier = authManager.getCashier()
-    if (cashier?.id) {
+    const currentUser = authManager.getCurrentUser()
+    const userId = currentUser?.id
+    if (!userId) return
+
+    const drawerEnabled = currentUser?.use_cashier_drawer === true ||
+      (() => { try { return JSON.parse(localStorage.getItem('pos_cashier_drawer_enabled') || 'false') } catch { return false } })()
+
+    if (drawerEnabled && cashier?.id) {
       supabase.from('payment_accounts').select('*')
-        .eq('cashier_id', cashier.id).eq('is_active', true).order('sort_order')
+        .eq('user_id', userId).eq('cashier_id', cashier.id).eq('is_active', true).order('sort_order')
+        .then(({ data }) => { if (data?.length > 0) setCashierAccounts(data) })
+    } else {
+      supabase.from('payment_accounts').select('*')
+        .eq('user_id', userId).is('cashier_id', null).eq('is_active', true).order('sort_order')
         .then(({ data }) => { if (data?.length > 0) setCashierAccounts(data) })
     }
   }, [])

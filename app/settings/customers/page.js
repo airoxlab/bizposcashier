@@ -1,17 +1,80 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Users, Search, Plus, RefreshCw, X, Check,
   Edit2, MapPin, Trash2, Home, Building2,
+  Upload, FileText, AlertCircle, CheckCircle2, Download,
 } from 'lucide-react'
+import * as XLSX from 'xlsx'
 import themeManager from '../../../lib/themeManager'
 import { authManager } from '../../../lib/authManager'
 import { supabase } from '../../../lib/supabaseClient'
 import { notify } from '../../../components/ui/NotificationSystem'
 
 const blankForm = { full_name: '', phone: '', email: '', addressline: '', credit_limit: 0 }
+
+const CSV_COLUMNS = ['full_name', 'phone', 'email', 'addressline', 'credit_limit']
+const CSV_LABELS  = ['Full Name', 'Phone', 'Email', 'Address', 'Credit Limit']
+
+function parseCsv(text) {
+  const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n').filter(l => l.trim())
+  return lines.map(line => {
+    const cols = []
+    let cur = '', inQ = false
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i]
+      if (ch === '"') { inQ = !inQ }
+      else if (ch === ',' && !inQ) { cols.push(cur.trim()); cur = '' }
+      else { cur += ch }
+    }
+    cols.push(cur.trim())
+    return cols
+  })
+}
+
+function parseXlsx(buffer) {
+  const wb = XLSX.read(buffer, { type: 'array' })
+  const ws = wb.Sheets[wb.SheetNames[0]]
+  return XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+    .map(row => row.map(cell => String(cell ?? '').trim()))
+    .filter(row => row.some(c => c !== ''))
+}
+
+function validateCsvRows(rows) {
+  if (rows.length === 0) return { headerError: 'File is empty.', parsed: [] }
+
+  const header = rows[0].map(h => h.toLowerCase().trim())
+  const expected = CSV_COLUMNS.map(c => c.toLowerCase())
+  if (header.join(',') !== expected.join(',')) {
+    return {
+      headerError: `Incorrect column order. Expected: ${CSV_LABELS.join(', ')}. Got: ${rows[0].join(', ')}`,
+      parsed: [],
+    }
+  }
+
+  const parsed = []
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i]
+    const errors = []
+    const [full_name = '', phone = '', email = '', addressline = '', credit_limit_raw = ''] = row
+
+    if (!full_name.trim() && !phone.trim()) errors.push('Full Name or Phone is required')
+    if (credit_limit_raw.trim() && isNaN(parseFloat(credit_limit_raw))) errors.push('Credit Limit must be a number')
+
+    parsed.push({
+      rowNum: i + 1,
+      full_name: full_name.trim(),
+      phone: phone.trim(),
+      email: email.trim() || null,
+      addressline: addressline.trim() || null,
+      credit_limit: credit_limit_raw.trim() ? parseFloat(credit_limit_raw) || 0 : 0,
+      errors,
+    })
+  }
+  return { headerError: null, parsed }
+}
 
 export function CustomersPanel() {
   const classes = themeManager.getClasses()
@@ -29,6 +92,13 @@ export function CustomersPanel() {
   const [addressesLoading, setAddressesLoading] = useState(false)
   const [newAddressForm, setNewAddressForm] = useState({ address_line: '', label: 'Home', is_default: false })
   const [addingAddress, setAddingAddress] = useState(false)
+
+  const [showCsvModal, setShowCsvModal] = useState(false)
+  const [csvHeaderError, setCsvHeaderError] = useState(null)
+  const [csvRows, setCsvRows] = useState([])
+  const [csvImporting, setCsvImporting] = useState(false)
+  const [csvDone, setCsvDone] = useState(null)
+  const csvFileRef = useRef(null)
   const loadCustomers = async () => {
     setCustomersLoading(true)
     try {
@@ -170,6 +240,64 @@ export function CustomersPanel() {
 
   const closeForm = () => { setShowAddCustomer(false); setEditingCustomer(null); setCustomerForm(blankForm) }
 
+  const openCsvModal = () => {
+    setCsvHeaderError(null); setCsvRows([]); setCsvDone(null)
+    setShowCsvModal(true)
+  }
+
+  const handleCsvFile = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const isXlsx = file.name.toLowerCase().endsWith('.xlsx') || file.name.toLowerCase().endsWith('.xls')
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const rows = isXlsx ? parseXlsx(ev.target.result) : parseCsv(ev.target.result)
+      const { headerError, parsed } = validateCsvRows(rows)
+      setCsvHeaderError(headerError)
+      setCsvRows(parsed)
+      setCsvDone(null)
+    }
+    if (isXlsx) reader.readAsArrayBuffer(file)
+    else reader.readAsText(file)
+    e.target.value = ''
+  }
+
+  const handleImportCsv = async () => {
+    const valid = csvRows.filter(r => r.errors.length === 0)
+    if (valid.length === 0) { notify.error('No valid rows to import'); return }
+    setCsvImporting(true)
+    try {
+      const user = authManager.getCurrentUser()
+      const payload = valid.map(r => ({
+        full_name: r.full_name || null,
+        phone: r.phone || null,
+        email: r.email || null,
+        addressline: r.addressline || null,
+        credit_limit: r.credit_limit,
+        user_id: user.id,
+        login_type: 'software',
+      }))
+      const { error } = await supabase.from('customers').insert(payload)
+      if (error) throw error
+      setCsvDone({ imported: valid.length, skipped: csvRows.length - valid.length })
+      notify.success(`${valid.length} customer${valid.length !== 1 ? 's' : ''} imported`)
+      loadCustomers()
+    } catch (err) {
+      notify.error(err.message || 'Import failed')
+    } finally {
+      setCsvImporting(false)
+    }
+  }
+
+  const downloadTemplate = () => {
+    const header = CSV_COLUMNS.join(',')
+    const example = 'Ahmed Ali,03001234567,ahmed@email.com,House 5 Block B,0'
+    const blob = new Blob([header + '\n' + example], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = 'customers_template.csv'; a.click()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <motion.div
       key="customers"
@@ -192,6 +320,12 @@ export function CustomersPanel() {
               className={`text-xs bg-transparent outline-none w-44 ${isDark ? 'text-white placeholder-gray-500' : 'text-gray-800 placeholder-gray-400'}`}
             />
           </div>
+          <button
+            onClick={openCsvModal}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold ${isDark ? 'bg-gray-800 border-gray-700 text-gray-200 hover:bg-gray-700' : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-50'}`}
+          >
+            <Upload className="w-3.5 h-3.5" /> Import CSV
+          </button>
           <button
             onClick={() => { setEditingCustomer(null); setCustomerForm(blankForm); setShowAddCustomer(true) }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white text-xs font-semibold"
@@ -369,6 +503,161 @@ export function CustomersPanel() {
                   {addingAddress ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
                   Add Address
                 </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* CSV Import modal */}
+      <AnimatePresence>
+        {showCsvModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+            onClick={e => { if (e.target === e.currentTarget) setShowCsvModal(false) }}
+          >
+            <motion.div
+              initial={{ scale: 0.95, y: 10 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.95, y: 10 }}
+              className={`w-full max-w-2xl rounded-2xl shadow-2xl p-5 ${isDark ? 'bg-gray-800' : 'bg-white'}`}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-purple-500" />
+                  <h3 className={`font-bold text-sm ${classes.textPrimary}`}>Import Customers from CSV / Excel</h3>
+                </div>
+                <button onClick={() => setShowCsvModal(false)} className={isDark ? 'text-gray-400 hover:text-white' : 'text-gray-400 hover:text-gray-600'}>
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Guide */}
+              <div className={`rounded-xl p-3 mb-4 ${isDark ? 'bg-gray-700/60' : 'bg-purple-50'}`}>
+                <p className={`text-xs font-semibold mb-2 ${isDark ? 'text-purple-300' : 'text-purple-700'}`}>Required CSV Column Order</p>
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {CSV_LABELS.map((lbl, i) => (
+                    <span key={lbl} className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border ${isDark ? 'bg-gray-600 border-gray-500 text-gray-200' : 'bg-white border-purple-200 text-purple-700'}`}>
+                      <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold ${isDark ? 'bg-purple-600 text-white' : 'bg-purple-600 text-white'}`}>{i + 1}</span>
+                      {lbl}
+                      {(lbl === 'Full Name' || lbl === 'Phone') && <span className="text-red-400">*</span>}
+                    </span>
+                  ))}
+                </div>
+                <p className={`text-[10px] ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
+                  * At least one of Full Name or Phone is required per row. Email, Address, Credit Limit are optional.
+                  The first row must be the header exactly as shown. For Excel files, data must be on the first sheet.
+                </p>
+                <button
+                  onClick={downloadTemplate}
+                  className={`mt-2 flex items-center gap-1 text-[10px] font-semibold ${isDark ? 'text-purple-400 hover:text-purple-300' : 'text-purple-600 hover:text-purple-800'}`}
+                >
+                  <Download className="w-3 h-3" /> Download template CSV
+                </button>
+              </div>
+
+              {/* Upload */}
+              <input ref={csvFileRef} type="file" accept=".csv,.xlsx,.xls,text/csv" className="hidden" onChange={handleCsvFile} />
+              <button
+                onClick={() => csvFileRef.current?.click()}
+                className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl border-2 border-dashed text-xs font-semibold mb-4 transition-colors ${isDark ? 'border-gray-600 text-gray-300 hover:border-purple-500 hover:text-purple-300' : 'border-gray-300 text-gray-500 hover:border-purple-400 hover:text-purple-600'}`}
+              >
+                <Upload className="w-4 h-4" />
+                {csvRows.length > 0 || csvHeaderError ? 'Choose a different file' : 'Choose CSV or Excel file (.csv, .xlsx)'}
+              </button>
+
+              {/* Header error */}
+              {csvHeaderError && (
+                <div className="flex items-start gap-2 mb-4 p-3 rounded-xl bg-red-50 border border-red-200">
+                  <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+                  <p className="text-xs text-red-700">{csvHeaderError}</p>
+                </div>
+              )}
+
+              {/* Preview table */}
+              {csvRows.length > 0 && !csvHeaderError && (
+                <div className="mb-4">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <p className={`text-xs font-semibold ${classes.textPrimary}`}>
+                      Preview — {csvRows.length} row{csvRows.length !== 1 ? 's' : ''} &nbsp;
+                      <span className="text-green-600">{csvRows.filter(r => r.errors.length === 0).length} valid</span>
+                      {csvRows.some(r => r.errors.length > 0) && (
+                        <span className="text-red-500"> · {csvRows.filter(r => r.errors.length > 0).length} with errors (will be skipped)</span>
+                      )}
+                    </p>
+                  </div>
+                  <div className={`rounded-xl border overflow-hidden max-h-48 overflow-y-auto ${isDark ? 'border-gray-700' : 'border-gray-200'}`}>
+                    <table className="w-full text-[10px]">
+                      <thead>
+                        <tr className={`${isDark ? 'bg-gray-700' : 'bg-gray-50'}`}>
+                          <th className={`px-2 py-1.5 text-left font-semibold ${classes.textSecondary}`}>#</th>
+                          {CSV_LABELS.map(lbl => (
+                            <th key={lbl} className={`px-2 py-1.5 text-left font-semibold ${classes.textSecondary}`}>{lbl}</th>
+                          ))}
+                          <th className={`px-2 py-1.5 text-left font-semibold ${classes.textSecondary}`}>Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {csvRows.map(row => {
+                          const hasErr = row.errors.length > 0
+                          return (
+                            <tr key={row.rowNum} className={`border-t ${isDark ? 'border-gray-700/50' : 'border-gray-100'} ${hasErr ? isDark ? 'bg-red-900/10' : 'bg-red-50/60' : ''}`}>
+                              <td className={`px-2 py-1.5 ${classes.textSecondary}`}>{row.rowNum}</td>
+                              <td className={`px-2 py-1.5 ${classes.textPrimary}`}>{row.full_name || '—'}</td>
+                              <td className={`px-2 py-1.5 ${classes.textSecondary}`}>{row.phone || '—'}</td>
+                              <td className={`px-2 py-1.5 ${classes.textSecondary}`}>{row.email || '—'}</td>
+                              <td className={`px-2 py-1.5 ${classes.textSecondary} max-w-[120px]`}>
+                                <span className="truncate block">{row.addressline || '—'}</span>
+                              </td>
+                              <td className={`px-2 py-1.5 ${classes.textSecondary}`}>{row.credit_limit}</td>
+                              <td className="px-2 py-1.5">
+                                {hasErr
+                                  ? <span className="flex items-center gap-1 text-red-500"><AlertCircle className="w-3 h-3" />{row.errors[0]}</span>
+                                  : <span className="flex items-center gap-1 text-green-600"><CheckCircle2 className="w-3 h-3" />OK</span>
+                                }
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Done banner */}
+              {csvDone && (
+                <div className={`flex items-center gap-2 mb-4 p-3 rounded-xl ${isDark ? 'bg-green-900/30 border border-green-700' : 'bg-green-50 border border-green-200'}`}>
+                  <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" />
+                  <p className={`text-xs font-medium ${isDark ? 'text-green-300' : 'text-green-700'}`}>
+                    {csvDone.imported} customer{csvDone.imported !== 1 ? 's' : ''} imported successfully
+                    {csvDone.skipped > 0 && ` · ${csvDone.skipped} row${csvDone.skipped !== 1 ? 's' : ''} skipped due to errors`}.
+                  </p>
+                </div>
+              )}
+
+              {/* Actions */}
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setShowCsvModal(false)}
+                  className={`px-3 py-1.5 text-xs rounded-lg border ${isDark ? 'bg-gray-700 border-gray-600 text-gray-300' : 'bg-gray-100 border-gray-200 text-gray-600'}`}
+                >
+                  {csvDone ? 'Close' : 'Cancel'}
+                </button>
+                {csvRows.filter(r => r.errors.length === 0).length > 0 && !csvDone && (
+                  <button
+                    onClick={handleImportCsv}
+                    disabled={csvImporting}
+                    className="px-4 py-1.5 text-xs font-semibold rounded-lg bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white flex items-center gap-1.5"
+                  >
+                    {csvImporting ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Upload className="w-3 h-3" />}
+                    Import {csvRows.filter(r => r.errors.length === 0).length} Customer{csvRows.filter(r => r.errors.length === 0).length !== 1 ? 's' : ''}
+                  </button>
+                )}
               </div>
             </motion.div>
           </motion.div>

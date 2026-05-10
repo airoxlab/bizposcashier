@@ -1,7 +1,7 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { CheckCircle, Star, Phone, MessageSquare, TrendingUp, Users } from 'lucide-react'
+import { CheckCircle, TrendingUp, Users } from 'lucide-react'
 import themeManager from '../../../lib/themeManager'
 import { planManager } from '../../../lib/planManager'
 
@@ -186,22 +186,6 @@ export function PlanPanel() {
         </div>
       </div>
 
-      {/* Contact CTA */}
-      <div className={`rounded-xl border p-5 text-center ${isDark ? 'bg-gray-800 border-gray-700' : 'bg-gradient-to-br from-purple-50 to-blue-50 border-purple-200'}`}>
-        <Star className={`w-8 h-8 mx-auto mb-2 ${isDark ? 'text-purple-400' : 'text-purple-500'}`} />
-        <p className={`font-semibold mb-1 ${isDark ? 'text-white' : 'text-gray-900'}`}>Want to upgrade?</p>
-        <p className={`text-xs mb-3 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>Contact our support team to upgrade your plan or add extra cashier accounts.</p>
-        <div className="flex items-center justify-center gap-2 text-xs">
-          <div className={`flex items-center gap-1 px-3 py-1.5 rounded-lg ${isDark ? 'bg-gray-700' : 'bg-white'} border ${isDark ? 'border-gray-600' : 'border-gray-200'}`}>
-            <Phone className="w-3 h-3 text-purple-500" />
-            <span className={isDark ? 'text-gray-300' : 'text-gray-700'}>Call Support</span>
-          </div>
-          <div className={`flex items-center gap-1 px-3 py-1.5 rounded-lg ${isDark ? 'bg-gray-700' : 'bg-white'} border ${isDark ? 'border-gray-600' : 'border-gray-200'}`}>
-            <MessageSquare className="w-3 h-3 text-green-500" />
-            <span className={isDark ? 'text-gray-300' : 'text-gray-700'}>WhatsApp</span>
-          </div>
-        </div>
-      </div>
     </motion.div>
   )
 }

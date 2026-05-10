@@ -64,13 +64,14 @@ export default function VariantSelectionScreen({
     let finalPrice
     let variantPrice = 0
     let basePrice = parseFloat(product.base_price)
+    const discount = parseFloat(product.discount_percentage) || 0
 
     if (variant) {
-      finalPrice = parseFloat(variant.price)
-      variantPrice = finalPrice
+      variantPrice = parseFloat(variant.price) * (1 - discount / 100)
+      finalPrice = variantPrice
       basePrice = 0
     } else {
-      finalPrice = basePrice
+      finalPrice = basePrice * (1 - discount / 100)
     }
 
     const cartItem = {
@@ -84,7 +85,10 @@ export default function VariantSelectionScreen({
       finalPrice: finalPrice,
       quantity: quantity,
       totalPrice: finalPrice * quantity,
-      image: product.image_url
+      image: product.image_url,
+      itemDiscountType: null,
+      itemDiscountValue: 0,
+      itemDiscountAmount: 0,
     }
 
     onAddToCart(cartItem)
@@ -127,13 +131,14 @@ export default function VariantSelectionScreen({
     let finalPrice
     let variantPrice = 0
     let basePrice = parseFloat(product.base_price)
+    const discount = parseFloat(product.discount_percentage) || 0
 
     if (selectedVariant) {
-      finalPrice = parseFloat(selectedVariant.price)
-      variantPrice = finalPrice
+      variantPrice = parseFloat(selectedVariant.price) * (1 - discount / 100)
+      finalPrice = variantPrice
       basePrice = 0
     } else {
-      finalPrice = basePrice
+      finalPrice = basePrice * (1 - discount / 100)
     }
 
     const cartItem = {
@@ -147,7 +152,10 @@ export default function VariantSelectionScreen({
       finalPrice: finalPrice,
       quantity: quantity,
       totalPrice: finalPrice * quantity,
-      image: product.image_url
+      image: product.image_url,
+      itemDiscountType: null,
+      itemDiscountValue: 0,
+      itemDiscountAmount: 0,
     }
 
     onAddToCart(cartItem)

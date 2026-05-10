@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { User, ShoppingCart, Plus, Minus, Trash2, WifiOff, Gift, X, Sun, Moon, Wifi, Table2, FileText, MessageSquare, ChevronDown, ChevronUp, BarChart2, UserCheck } from 'lucide-react'
+import { User, ShoppingCart, Plus, Minus, Trash2, WifiOff, Gift, X, Sun, Moon, Wifi, Table2, FileText, MessageSquare, ChevronDown, ChevronUp, BarChart2, UserCheck, Percent } from 'lucide-react'
 import LoyaltyPointsDisplay from '@/components/pos/LoyaltyPointsDisplay'
 import { notify } from '../ui/NotificationSystem'
 import InlineCustomerPanel from '../pos/InlineCustomerPanel'
@@ -37,7 +37,8 @@ export default function CartSidebar({
   orderTakers = [],
   selectedOrderTaker,
   onOrderTakerChange,
-  requireOrderTaker = false
+  requireOrderTaker = false,
+  onUpdateItemDiscount,
 }) {
   const [showInstructionPanel, setShowInstructionPanel] = useState(false)
   const [draftInstruction, setDraftInstruction] = useState('')
@@ -66,6 +67,8 @@ export default function CartSidebar({
     if (!customer) setCustMode('idle')
   }, [customer])
   const [draftItemInstructions, setDraftItemInstructions] = useState({})
+  const [expandedDiscountId, setExpandedDiscountId] = useState(null)
+  const [draftDiscounts, setDraftDiscounts] = useState({})
   const getOrderTypeTitle = () => {
     switch(orderType) {
       case 'walkin': return 'POS Walk-in'
@@ -594,6 +597,7 @@ export default function CartSidebar({
                           const opening = expandedItemId !== item.id
                           setExpandedItemId(opening ? item.id : null)
                           if (opening) {
+                            setExpandedDiscountId(null)
                             setDraftItemInstructions(prev => ({ ...prev, [item.id]: item.itemInstructions || '' }))
                           }
                         }}
@@ -606,12 +610,43 @@ export default function CartSidebar({
                       >
                         <MessageSquare className="w-3.5 h-3.5" />
                       </button>
+                      {onUpdateItemDiscount && (
+                        <button
+                          onClick={() => {
+                            const opening = expandedDiscountId !== item.id
+                            setExpandedDiscountId(opening ? item.id : null)
+                            if (opening) {
+                              setExpandedItemId(null)
+                              setDraftDiscounts(prev => ({
+                                ...prev,
+                                [item.id]: {
+                                  type: item.itemDiscountType || 'percentage',
+                                  value: item.itemDiscountValue || 0,
+                                }
+                              }))
+                            }
+                          }}
+                          className={`w-6 h-6 rounded flex items-center justify-center transition-all ${
+                            item.itemDiscountAmount > 0
+                              ? isDark ? 'bg-green-600 text-white' : 'bg-green-500 text-white'
+                              : isDark ? 'bg-green-500/20 text-green-400 hover:bg-green-500 hover:text-white' : 'bg-green-50 text-green-500 hover:bg-green-500 hover:text-white'
+                          }`}
+                          title="Item discount"
+                        >
+                          <Percent className="w-3 h-3" />
+                        </button>
+                      )}
                     </div>
 
                     <div className="text-right">
                       <div className={`text-[10px] ${classes.textSecondary}`}>
                         Rs {item.finalPrice || 0} × {item.quantity}
                       </div>
+                      {item.itemDiscountAmount > 0 && (
+                        <div className={`text-[10px] font-medium ${isDark ? 'text-green-400' : 'text-green-600'}`}>
+                          -{item.itemDiscountType === 'percentage' ? `${item.itemDiscountValue}%` : `Rs ${item.itemDiscountAmount.toFixed(0)}`}
+                        </div>
+                      )}
                       <div className={`font-bold ${classes.textPrimary} text-xs`}>
                         Rs {(item.totalPrice || 0).toFixed(2)}
                       </div>
@@ -658,6 +693,82 @@ export default function CartSidebar({
                               className="flex-[2] py-1 text-[11px] font-bold rounded bg-amber-500 hover:bg-amber-600 text-white transition-colors"
                             >
                               Save
+                            </button>
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  {/* Inline item discount panel */}
+                  <AnimatePresence>
+                    {expandedDiscountId === item.id && onUpdateItemDiscount && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.18 }}
+                        className="overflow-hidden"
+                      >
+                        <div className="mt-1.5 pt-1.5 border-t border-dashed border-green-400/40 space-y-1.5">
+                          <div className="flex gap-1">
+                            <button
+                              onClick={() => setDraftDiscounts(prev => ({ ...prev, [item.id]: { ...prev[item.id], type: 'percentage' } }))}
+                              className={`flex-1 py-1 text-[11px] font-bold rounded border transition-colors ${
+                                (draftDiscounts[item.id]?.type ?? 'percentage') === 'percentage'
+                                  ? 'bg-green-500 border-green-500 text-white'
+                                  : isDark ? 'bg-gray-700 border-gray-600 text-gray-300' : 'bg-white border-gray-300 text-gray-600'
+                              }`}
+                            >
+                              %
+                            </button>
+                            <button
+                              onClick={() => setDraftDiscounts(prev => ({ ...prev, [item.id]: { ...prev[item.id], type: 'fixed' } }))}
+                              className={`flex-1 py-1 text-[11px] font-bold rounded border transition-colors ${
+                                draftDiscounts[item.id]?.type === 'fixed'
+                                  ? 'bg-green-500 border-green-500 text-white'
+                                  : isDark ? 'bg-gray-700 border-gray-600 text-gray-300' : 'bg-white border-gray-300 text-gray-600'
+                              }`}
+                            >
+                              Rs
+                            </button>
+                            <input
+                              autoFocus
+                              type="number"
+                              min="0"
+                              value={draftDiscounts[item.id]?.value ?? 0}
+                              onChange={e => setDraftDiscounts(prev => ({ ...prev, [item.id]: { ...prev[item.id], value: parseFloat(e.target.value) || 0 } }))}
+                              onFocus={e => e.target.select()}
+                              className={`flex-[2] px-2 py-1 text-[11px] rounded border focus:outline-none focus:ring-1 focus:ring-green-400 text-center ${
+                                isDark
+                                  ? 'bg-gray-700 border-gray-600 text-white'
+                                  : 'bg-green-50 border-green-200 text-gray-800'
+                              }`}
+                            />
+                          </div>
+                          <div className="flex gap-1">
+                            <button
+                              onClick={() => {
+                                if (item.itemDiscountAmount > 0) {
+                                  onUpdateItemDiscount(item.id, null, 0)
+                                }
+                                setExpandedDiscountId(null)
+                              }}
+                              className={`flex-1 py-1 text-[11px] font-medium rounded transition-colors ${
+                                isDark ? 'bg-gray-700 hover:bg-gray-600 text-gray-300' : 'bg-gray-100 hover:bg-gray-200 text-gray-600'
+                              }`}
+                            >
+                              {item.itemDiscountAmount > 0 ? 'Remove' : 'Cancel'}
+                            </button>
+                            <button
+                              onClick={() => {
+                                const d = draftDiscounts[item.id]
+                                onUpdateItemDiscount(item.id, d?.type || 'percentage', d?.value || 0)
+                                setExpandedDiscountId(null)
+                              }}
+                              className="flex-[2] py-1 text-[11px] font-bold rounded bg-green-500 hover:bg-green-600 text-white transition-colors"
+                            >
+                              Apply
                             </button>
                           </div>
                         </div>

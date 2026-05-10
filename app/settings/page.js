@@ -5,11 +5,12 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowLeft, Settings, User, Users, Palette, Download,
   Smartphone, Monitor, HardDrive, MessageSquare, CreditCard,
-  Zap, Wifi, WifiOff,
+  Zap, Wifi, WifiOff, FlaskConical,
 } from 'lucide-react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import themeManager from '../../lib/themeManager'
 import { authManager } from '../../lib/authManager'
+import { cacheManager } from '../../lib/cacheManager'
 import ProtectedPage from '../../components/ProtectedPage'
 
 import { PersonalPanel } from './personal/page'
@@ -54,6 +55,9 @@ function SettingsContent() {
   const searchParams = useSearchParams()
   const [activeTab, setActiveTab] = useState(() => searchParams?.get('tab') || 'personal')
   const [isOnline, setIsOnline] = useState(typeof window !== 'undefined' ? navigator.onLine : true)
+  const [forceOffline, setForceOfflineState] = useState(() =>
+    typeof window !== 'undefined' ? cacheManager.getForceOffline() : false
+  )
 
   const classes = themeManager.getClasses()
   const isDark = themeManager.isDark()
@@ -73,6 +77,12 @@ function SettingsContent() {
       window.removeEventListener('offline', offline)
     }
   }, [router, searchParams])
+
+  const handleForceOfflineToggle = () => {
+    const next = !forceOffline
+    cacheManager.setForceOffline(next)
+    setForceOfflineState(next)
+  }
 
   const { title, sub } = PANEL_TITLES[activeTab] || PANEL_TITLES.personal
 
@@ -141,6 +151,44 @@ function SettingsContent() {
                 )
               })}
             </div>
+          </div>
+
+          {/* Offline Test Toggle */}
+          <div className={`p-2.5 ${classes.border} border-t`}>
+            <h3 className={`text-[10px] font-semibold ${classes.textSecondary} uppercase tracking-wider mb-2`}>Developer</h3>
+            <motion.button
+              whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
+              onClick={handleForceOfflineToggle}
+              className={`w-full p-2 rounded-lg border transition-all duration-300 ${
+                forceOffline
+                  ? 'bg-red-500/10 border-red-500/40 hover:bg-red-500/20'
+                  : isDark ? 'bg-gray-700/50 border-gray-600/40 hover:bg-gray-700' : 'bg-gray-50 border-gray-200 hover:bg-gray-100'
+              }`}
+            >
+              <div className="flex items-center">
+                <div className={`w-8 h-8 rounded-lg mr-2.5 flex items-center justify-center ${
+                  forceOffline ? 'bg-red-500/20' : isDark ? 'bg-gray-600/50' : 'bg-gray-200'
+                }`}>
+                  {forceOffline
+                    ? <WifiOff className="w-4 h-4 text-red-500" />
+                    : <FlaskConical className={`w-4 h-4 ${isDark ? 'text-gray-400' : 'text-gray-500'}`} />
+                  }
+                </div>
+                <div className="flex-1 min-w-0 text-left">
+                  <div className={`font-semibold text-xs ${forceOffline ? 'text-red-500' : classes.textPrimary}`}>
+                    {forceOffline ? 'Offline Mode ON' : 'Simulate Offline'}
+                  </div>
+                  <div className={`text-[10px] ${forceOffline ? 'text-red-400' : classes.textSecondary}`}>
+                    {forceOffline ? 'Tap to restore connection' : 'Test offline features'}
+                  </div>
+                </div>
+                <div className={`w-8 h-4 rounded-full transition-all duration-300 flex items-center ${
+                  forceOffline ? 'bg-red-500 justify-end' : isDark ? 'bg-gray-600 justify-start' : 'bg-gray-300 justify-start'
+                } px-0.5`}>
+                  <div className="w-3 h-3 bg-white rounded-full shadow" />
+                </div>
+              </div>
+            </motion.button>
           </div>
         </div>
 

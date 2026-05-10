@@ -25,6 +25,7 @@ import {
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
 import { authManager } from '../../lib/authManager'
+import { cacheManager } from '../../lib/cacheManager'
 import ProtectedPage from '../../components/ProtectedPage'
 import { notify } from '../../components/ui/NotificationSystem'
 import { themeManager } from '../../lib/themeManager'
@@ -58,8 +59,22 @@ function MyTillContent() {
   const [typeFilter, setTypeFilter] = useState('all')
   const [expandedEntry, setExpandedEntry] = useState(null)
 
+  const TILL_CACHE = {
+    accounts: (id) => `pos_till_accounts_${id}`,
+    ledger: (ids, date) => `pos_till_ledger_${ids.join('_')}_${date}`,
+  }
+  const [isOnline, setIsOnline] = useState(() => typeof window !== 'undefined' ? cacheManager.checkOnlineStatus() : true)
+
   useEffect(() => {
     initializePage()
+  }, [])
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true)
+    const handleOffline = () => setIsOnline(false)
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    return () => { window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline) }
   }, [])
 
   const initializePage = async () => {
@@ -76,10 +91,13 @@ function MyTillContent() {
       setUser(currentUser)
       setCashier(currentCashier)
 
-      if (currentCashier?.id) {
+      const drawerEnabled = currentUser?.use_cashier_drawer === true ||
+        (() => { try { return JSON.parse(localStorage.getItem('pos_cashier_drawer_enabled') || 'false') } catch { return false } })()
+
+      if (drawerEnabled && currentCashier?.id) {
         await fetchAccounts(currentUser.id, currentCashier.id)
       } else {
-        // Admin viewing their own accounts (cashier_id IS NULL)
+        // Drawer disabled or admin — always show admin accounts
         await fetchAdminAccounts(currentUser.id)
       }
     } catch (err) {
@@ -91,6 +109,11 @@ function MyTillContent() {
   }
 
   const fetchAccounts = async (userId, cashierId) => {
+    const cacheKey = TILL_CACHE.accounts(`cashier_${cashierId}`)
+    if (!cacheManager.checkOnlineStatus()) {
+      try { const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null'); if (cached) setAccounts(cached) } catch {}
+      return
+    }
     try {
       const { data, error } = await supabase
         .from('payment_accounts')
@@ -101,13 +124,20 @@ function MyTillContent() {
         .order('sort_order')
       if (error) throw error
       setAccounts(data || [])
+      localStorage.setItem(cacheKey, JSON.stringify(data || []))
     } catch (err) {
       console.error('Fetch accounts error:', err)
+      try { const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null'); if (cached) setAccounts(cached) } catch {}
       notify.error('Failed to load accounts')
     }
   }
 
   const fetchAdminAccounts = async (userId) => {
+    const cacheKey = TILL_CACHE.accounts(`admin_${userId}`)
+    if (!cacheManager.checkOnlineStatus()) {
+      try { const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null'); if (cached) setAccounts(cached) } catch {}
+      return
+    }
     try {
       const { data, error } = await supabase
         .from('payment_accounts')
@@ -118,18 +148,26 @@ function MyTillContent() {
         .order('sort_order')
       if (error) throw error
       setAccounts(data || [])
+      localStorage.setItem(cacheKey, JSON.stringify(data || []))
     } catch (err) {
       console.error('Fetch admin accounts error:', err)
+      try { const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null'); if (cached) setAccounts(cached) } catch {}
     }
   }
 
   const fetchLedger = useCallback(async () => {
     if (!accounts.length) return
     setLedgerLoading(true)
-    try {
-      let accountIds = accounts.map(a => a.id)
-      if (selectedAccountId !== 'all') accountIds = [selectedAccountId]
+    let accountIds = accounts.map(a => a.id)
+    if (selectedAccountId !== 'all') accountIds = [selectedAccountId]
+    const cacheKey = TILL_CACHE.ledger(accountIds, selectedDate)
 
+    if (!cacheManager.checkOnlineStatus()) {
+      try { const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null'); if (cached) setLedgerEntries(cached) } catch {}
+      setLedgerLoading(false)
+      return
+    }
+    try {
       let query = supabase
         .from('payment_account_ledger')
         .select('*, payment_accounts(id, name, icon, color)')
@@ -142,12 +180,12 @@ function MyTillContent() {
       const { data, error } = await query
       if (error) throw error
       setLedgerEntries(data || [])
+      localStorage.setItem(cacheKey, JSON.stringify(data || []))
     } catch (err) {
       console.error('Fetch ledger error:', err)
+      try { const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null'); if (cached) setLedgerEntries(cached) } catch {}
       notify.error('Failed to load ledger')
-    } finally {
-      setLedgerLoading(false)
-    }
+    } finally { setLedgerLoading(false) }
   }, [accounts, selectedAccountId, selectedDate, typeFilter])
 
   const today = new Date().toISOString().split('T')[0]
@@ -200,7 +238,12 @@ function MyTillContent() {
         </button>
         <Wallet className="w-5 h-5 text-indigo-500" />
         <div className="flex-1">
-          <h1 className={`text-base font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>My Till</h1>
+          <div className="flex items-center gap-2">
+            <h1 className={`text-base font-bold ${isDark ? 'text-white' : 'text-gray-900'}`}>My Till</h1>
+            {!isOnline && (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-500">Offline</span>
+            )}
+          </div>
           {cashier && (
             <p className={`text-xs flex items-center gap-1 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
               <User className="w-3 h-3" />{cashier.name || 'Cashier'}

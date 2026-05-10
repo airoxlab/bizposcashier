@@ -36,10 +36,14 @@ export default function PaymentModal({
 
   useEffect(() => {
     const cashier = authManager.getCashier()
-    const userId = authManager.getCurrentUser()?.id
+    const currentUser = authManager.getCurrentUser()
+    const userId = currentUser?.id
     if (!userId) { setAccountsLoading(false); return }
 
-    if (cashier?.id) {
+    const drawerEnabled = currentUser?.use_cashier_drawer === true ||
+      (() => { try { return JSON.parse(localStorage.getItem('pos_cashier_drawer_enabled') || 'false') } catch { return false } })()
+
+    if (drawerEnabled && cashier?.id) {
       supabase.from('payment_accounts').select('*')
         .eq('user_id', userId)
         .eq('cashier_id', cashier.id)
