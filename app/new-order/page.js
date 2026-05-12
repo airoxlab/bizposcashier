@@ -889,8 +889,8 @@ export default function NewOrderPage() {
         serviceChargeType: parseFloat(order.service_charge_percentage || 0) > 0 ? 'percentage' : 'fixed',
         serviceChargeValue: parseFloat(order.service_charge_percentage || 0),
         cart: orderItems.map(item => item.is_deal
-          ? { isDeal: true, dealId: item.deal_id, dealName: item.product_name, dealProducts: (() => { try { return typeof item.deal_products === 'string' ? JSON.parse(item.deal_products) : (item.deal_products || []) } catch(e) { return [] } })(), quantity: item.quantity, totalPrice: item.total_price, itemInstructions: item.item_instructions || null }
-          : { isDeal: false, productName: item.product_name, variantName: item.variant_name, quantity: item.quantity, totalPrice: item.total_price, itemInstructions: item.item_instructions || null }
+          ? { isDeal: true, dealId: item.deal_id, dealName: item.product_name, dealProducts: (() => { try { return typeof item.deal_products === 'string' ? JSON.parse(item.deal_products) : (item.deal_products || []) } catch(e) { return [] } })(), quantity: item.quantity, totalPrice: item.total_price, finalPrice: item.final_price, itemDiscountType: item.item_discount_type || null, itemDiscountAmount: parseFloat(item.item_discount_amount) || 0, itemInstructions: item.item_instructions || null }
+          : { isDeal: false, productName: item.product_name, variantName: item.variant_name, quantity: item.quantity, totalPrice: item.total_price, finalPrice: item.final_price, itemDiscountType: item.item_discount_type || null, itemDiscountAmount: parseFloat(item.item_discount_amount) || 0, itemInstructions: item.item_instructions || null }
         ),
         paymentMethod: order.payment_method || 'Unpaid',
         order_taker_name: order.order_takers?.name ||
@@ -912,6 +912,10 @@ export default function NewOrderPage() {
         show_footer_section: userProfileRaw?.show_footer_section !== false,
         show_logo_on_receipt: userProfileRaw?.show_logo_on_receipt !== false,
         show_business_name_on_receipt: userProfileRaw?.show_business_name_on_receipt !== false,
+        show_powered_by_airoxlab: userProfileRaw?.show_powered_by_airoxlab !== false,
+        phone_secondary: userProfileRaw?.phone_secondary || '',
+        receipt_review_message: userProfileRaw?.receipt_review_message || '',
+        receipt_footer_message: userProfileRaw?.receipt_footer_message || '',
         cashier_name: order.cashier_id ? cashierName : null,
         customer_name: !order.cashier_id ? cashierName : null,
       }
@@ -1419,6 +1423,10 @@ export default function NewOrderPage() {
         show_footer_section: userProfileRaw?.show_footer_section !== false,
         show_logo_on_receipt: userProfileRaw?.show_logo_on_receipt !== false,
         show_business_name_on_receipt: userProfileRaw?.show_business_name_on_receipt !== false,
+        show_powered_by_airoxlab: userProfileRaw?.show_powered_by_airoxlab !== false,
+        phone_secondary: userProfileRaw?.phone_secondary || '',
+        receipt_review_message: userProfileRaw?.receipt_review_message || '',
+        receipt_footer_message: userProfileRaw?.receipt_footer_message || '',
         cashier_name: order?.cashier_id ? cashierName : null,
         customer_name: !order?.cashier_id ? cashierName : null,
       }

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ArrowLeft, Search, Filter, Loader2, X, TrendingDown, TrendingUp, Clock } from 'lucide-react'
+import { ArrowLeft, Search, Loader2, TrendingDown, TrendingUp } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
 import { authManager } from '../../lib/authManager'
@@ -134,22 +134,6 @@ export default function LedgersPage() {
 
   return (
     <ProtectedPage permissionKey="SUPPLIER_LEDGER" pageName="Supplier Ledger">
-      {/* Coming Soon Overlay */}
-      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center" style={{ background: 'rgba(0,0,0,0.92)', backdropFilter: 'blur(4px)' }}>
-        <div className="text-center px-6">
-          <div className="w-20 h-20 rounded-2xl bg-white/10 flex items-center justify-center mx-auto mb-5">
-            <Clock className="w-10 h-10 text-white/70" />
-          </div>
-          <h1 className="text-4xl font-bold text-white mb-3">Coming Soon</h1>
-          <p className="text-white/60 text-base max-w-xs mx-auto">This feature is under development and will be available in the next version.</p>
-          <button
-            onClick={() => router.push('/dashboard')}
-            className="mt-8 px-8 py-3 bg-white/20 hover:bg-white/30 text-white rounded-xl font-semibold transition-all"
-          >
-            ← Back to Dashboard
-          </button>
-        </div>
-      </div>
       <NotificationSystem />
       <div className={`h-screen flex ${themeClasses.background} overflow-hidden text-sm`}>
         {/* LEFT PANEL */}

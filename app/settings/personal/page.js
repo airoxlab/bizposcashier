@@ -66,8 +66,9 @@ export function PersonalPanel() {
       store_address: '', store_logo: '', qr_code: '',
       invoice_status: 'unpaid', hashtag1: '', hashtag2: '',
       show_footer_section: true, show_logo_on_receipt: true,
-      show_business_name_on_receipt: true, show_dispatch_button: true,
+      show_business_name_on_receipt: true, show_powered_by_airoxlab: true, show_dispatch_button: true,
       business_start_time: '10:00', business_end_time: '03:00',
+      receipt_review_message: '', receipt_footer_message: '',
     }
   })
 
@@ -89,7 +90,7 @@ export function PersonalPanel() {
       if (!userEmail) return
       const { data, error } = await supabase
         .from('users')
-        .select('customer_name, email, store_name, phone, store_address, store_logo, qr_code, invoice_status, hashtag1, hashtag2, show_footer_section, show_logo_on_receipt, show_business_name_on_receipt, show_dispatch_button, business_start_time, business_end_time')
+        .select('customer_name, email, store_name, phone, phone_secondary, store_address, store_logo, qr_code, invoice_status, hashtag1, hashtag2, show_footer_section, show_logo_on_receipt, show_business_name_on_receipt, show_powered_by_airoxlab, show_dispatch_button, business_start_time, business_end_time, receipt_review_message, receipt_footer_message')
         .eq('email', userEmail)
         .single()
       if (error) {
@@ -102,6 +103,7 @@ export function PersonalPanel() {
           email: data.email || '',
           store_name: data.store_name || '',
           phone: data.phone || '',
+          phone_secondary: data.phone_secondary || '',
           store_address: data.store_address || '',
           store_logo: data.store_logo || '',
           qr_code: data.qr_code || '',
@@ -111,9 +113,12 @@ export function PersonalPanel() {
           show_footer_section: data.show_footer_section !== false,
           show_logo_on_receipt: data.show_logo_on_receipt !== false,
           show_business_name_on_receipt: data.show_business_name_on_receipt !== false,
+          show_powered_by_airoxlab: data.show_powered_by_airoxlab !== false,
           show_dispatch_button: data.show_dispatch_button !== false,
           business_start_time: data.business_start_time || '10:00',
           business_end_time: data.business_end_time || '03:00',
+          receipt_review_message: data.receipt_review_message || '',
+          receipt_footer_message: data.receipt_footer_message || '',
         }
         setPersonalInfo(profile)
         setLogoPreview(profile.store_logo || '')
@@ -459,6 +464,16 @@ export function PersonalPanel() {
                 </div>
                 <p className={`text-xs ${classes.textSecondary} mt-1.5`}>Any format accepted</p>
               </div>
+              {/* Secondary Phone */}
+              <div>
+                <label className={`block text-sm font-semibold ${classes.textPrimary} mb-2`}>Secondary Phone</label>
+                <div className="relative">
+                  <Phone className={`absolute left-4 top-3.5 w-5 h-5 ${classes.textSecondary}`} />
+                  <input type="tel" value={personalInfo.phone_secondary || ''} onChange={e => handlePersonalInfoChange('phone_secondary', e.target.value)} placeholder="Enter secondary phone (optional)"
+                    className={`w-full pl-12 pr-4 py-3.5 ${classes.card} ${classes.border} border rounded-xl ${classes.textPrimary} focus:border-purple-500 focus:ring-2 focus:ring-purple-200 transition-all focus:outline-none`} />
+                </div>
+                <p className={`text-xs ${classes.textSecondary} mt-1.5`}>Shown on receipt next to primary phone</p>
+              </div>
               {/* Invoice Status — read-only */}
               <div>
                 <label className={`block text-sm font-semibold ${classes.textPrimary} mb-2`}>Invoice Status</label>
@@ -524,19 +539,46 @@ export function PersonalPanel() {
                 <p className={`text-xs ${classes.textSecondary} mt-1.5`}>e.g., #Lahore</p>
               </div>
             </div>
+            <div className="mt-4 space-y-3">
+              <div>
+                <label className={`block text-sm font-semibold ${classes.textPrimary} mb-2`}>Review Message <span className={`font-normal text-xs ${classes.textSecondary}`}>(shown in footer)</span></label>
+                <input type="text" value={personalInfo.receipt_review_message || ''}
+                  onChange={e => setPersonalInfo({ ...personalInfo, receipt_review_message: e.target.value })}
+                  className={`w-full px-4 py-3.5 ${classes.card} ${classes.border} border rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 ${classes.textPrimary} focus:outline-none`}
+                  placeholder="e.g. Your feedback = our glow up" maxLength="100" />
+                <p className={`text-xs ${classes.textSecondary} mt-1.5`}>Leave blank to hide the review line</p>
+              </div>
+              <div>
+                <label className={`block text-sm font-semibold ${classes.textPrimary} mb-2`}>Footer Thank-you Message <span className={`font-normal text-xs ${classes.textSecondary}`}>(before powered-by line)</span></label>
+                <input type="text" value={personalInfo.receipt_footer_message || ''}
+                  onChange={e => setPersonalInfo({ ...personalInfo, receipt_footer_message: e.target.value })}
+                  className={`w-full px-4 py-3.5 ${classes.card} ${classes.border} border rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent transition-all duration-200 ${classes.textPrimary} focus:outline-none`}
+                  placeholder="e.g. Thanks for visiting! See you soon!" maxLength="100" />
+                <p className={`text-xs ${classes.textSecondary} mt-1.5`}>Leave blank to hide this message</p>
+              </div>
+            </div>
             <ModernToggle
               checked={personalInfo.show_footer_section}
               onChange={() => setPersonalInfo({ ...personalInfo, show_footer_section: !personalInfo.show_footer_section })}
               label="Show Footer Section"
               description="Include QR code, review message, and hashtags on receipts"
             />
+            <ModernToggle
+              checked={personalInfo.show_powered_by_airoxlab !== false}
+              onChange={() => setPersonalInfo({ ...personalInfo, show_powered_by_airoxlab: !personalInfo.show_powered_by_airoxlab })}
+              label="Show Powered by airoxlab.com"
+              description="Display branding line at the bottom of every receipt"
+            />
             <div className={`mt-4 ${isDark ? 'bg-gray-800' : 'bg-blue-50'} rounded-xl p-5 border-2 border-dashed ${isDark ? 'border-gray-700' : 'border-blue-200'}`}>
               <p className={`text-xs font-bold ${classes.textPrimary} mb-3`}>Receipt Footer Preview:</p>
               {personalInfo.show_footer_section ? (
                 <div className={`text-xs ${classes.textSecondary} space-y-1 text-center`}>
                   <p>[QR CODE]</p>
-                  <p className="mt-2">Drop a review &amp; flex on us!</p>
-                  <p>Your feedback = our glow up</p>
+                  {personalInfo.receipt_review_message ? (
+                    <p className="mt-2">{personalInfo.receipt_review_message}</p>
+                  ) : (
+                    <p className="mt-2 text-gray-400 italic">(review message hidden)</p>
+                  )}
                   {(personalInfo.hashtag1 || personalInfo.hashtag2) ? (
                     <p className="font-semibold text-purple-600 dark:text-purple-400 mt-1">
                       {[personalInfo.hashtag1, personalInfo.hashtag2].filter(Boolean).join(' ')}
@@ -544,13 +586,17 @@ export function PersonalPanel() {
                   ) : (
                     <p className="font-medium text-gray-400 italic mt-1">(Enter hashtags above)</p>
                   )}
-                  <p className="mt-2">Powered by airoxlab.com</p>
                 </div>
               ) : (
                 <div className={`text-xs ${classes.textSecondary} text-center`}>
-                  <p>Powered by airoxlab.com</p>
                   <p className="text-xs text-gray-500 mt-1">(QR code and review section hidden)</p>
                 </div>
+              )}
+              {personalInfo.receipt_footer_message && (
+                <p className={`text-xs ${classes.textSecondary} text-center mt-2`}>{personalInfo.receipt_footer_message}</p>
+              )}
+              {personalInfo.show_powered_by_airoxlab !== false && (
+                <p className={`text-xs ${classes.textSecondary} text-center mt-1`}>Powered by airoxlab.com</p>
               )}
             </div>
           </div>

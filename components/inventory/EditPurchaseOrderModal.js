@@ -62,7 +62,7 @@ export default function EditPurchaseOrderModal({ isOpen, onClose, purchaseOrder,
       const [suppliersRes, inventoryRes, unitsRes] = await Promise.all([
         supabase.from('suppliers').select('*').eq('user_id', userId).order('name'),
         supabase.from('inventory_items').select('id, name, sku, unit_id, supplier_id, units(id, name, abbreviation)').eq('user_id', userId).order('name'),
-        supabase.from('units').select('*').order('name')
+        supabase.from('units').select('*').eq('user_id', userId).order('name')
       ])
 
       setItems(itemsData?.map(item => ({ ...item, _isExisting: true })) || [])

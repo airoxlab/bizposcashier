@@ -720,13 +720,43 @@ const processOrder = async () => {
     }
   }
 
+  // After RPC creates order items, update item_discount_type/amount since RPCs don't save those fields
+  const persistItemDiscounts = async (orderId, items) => {
+    const discounted = items.filter(i => (i.item_discount_amount || 0) > 0)
+    if (!discounted.length) return
+    try {
+      const { data: dbItems } = await supabase
+        .from('order_items')
+        .select('id, product_id, variant_id, deal_id, final_price, quantity')
+        .eq('order_id', orderId)
+        .order('created_at')
+      if (!dbItems?.length) return
+      const updates = dbItems.map((dbItem, idx) => {
+        const match = discounted.find(i =>
+          (dbItem.deal_id ? i.deal_id === dbItem.deal_id : i.product_id === dbItem.product_id && (i.variant_id || null) === (dbItem.variant_id || null)) &&
+          Math.abs((i.item_discount_amount || 0) - Math.max(0, parseFloat(dbItem.final_price) * dbItem.quantity - (discounted[idx]?.item_discount_amount || 0))) < 0.01
+        ) || discounted.find(i =>
+          dbItem.deal_id ? i.deal_id === dbItem.deal_id : i.product_id === dbItem.product_id && (i.variant_id || null) === (dbItem.variant_id || null)
+        )
+        if (!match) return null
+        return supabase.from('order_items').update({
+          item_discount_type: match.item_discount_type || null,
+          item_discount_amount: match.item_discount_amount || 0,
+        }).eq('id', dbItem.id)
+      }).filter(Boolean)
+      await Promise.all(updates)
+    } catch (e) {
+      console.warn('⚠️ Failed to persist item discounts:', e.message)
+    }
+  }
+
   setIsProcessing(true)
 
   try {
     const currentUser = authManager.getCurrentUser()
     const currentSession = authManager.getCurrentSession()
     const cashier = authManager.getCashier()
-    
+
     // Prepare order items
     const orderItems = orderData.cart.map(item => {
       // DEBUG: Log cart item before processing
@@ -1032,6 +1062,9 @@ const processOrder = async () => {
       if (savedSerial) newDailySerial = parseInt(savedSerial) || null
       setDailySerial(newDailySerial)
 
+      // Persist item discount type/amount (RPC doesn't save these fields)
+      await persistItemDiscounts(orderData.existingOrderId, orderItems)
+
       console.log(`✅ Order ${orderData.existingOrderNumber} modified successfully`)
 
     } else {
@@ -1086,6 +1119,9 @@ const processOrder = async () => {
       setOrderNumber(newOrderNumber)
       setDailySerial(newDailySerial)
       setIsOfflineOrder(order._isOffline)
+
+      // Persist item discount type/amount (RPC doesn't save these fields)
+      if (order.id && !order._isOffline) await persistItemDiscounts(order.id, orderItems)
 
       console.log(`✅ Order ${newOrderNumber} placed successfully`)
       console.log(`💰 Delivery charges: Rs ${orderData.deliveryCharges || 0}`)
@@ -2911,11 +2947,24 @@ if (orderComplete) {
                     <p className={`text-[10px] ${classes.textSecondary}`}>
                       {item.quantity} × Rs {item.finalPrice.toFixed(0)}
                     </p>
+                    {item.itemDiscountAmount > 0 && (
+                      <p className={`text-[10px] ${isDark ? 'text-green-400' : 'text-green-600'}`}>
+                        {item.itemDiscountType === 'percentage'
+                          ? `-${item.itemDiscountValue}% · -Rs ${item.itemDiscountAmount.toFixed(0)}`
+                          : `-Rs ${item.itemDiscountAmount.toFixed(0)}`
+                        }
+                      </p>
+                    )}
                   </div>
                   <div className="text-right ml-2">
                     <p className={`text-xs font-semibold ${classes.textPrimary}`}>
                       Rs {item.totalPrice.toFixed(0)}
                     </p>
+                    {item.itemDiscountAmount > 0 && (
+                      <p className={`text-[10px] line-through ${classes.textSecondary}`}>
+                        Rs {(item.finalPrice * item.quantity).toFixed(0)}
+                      </p>
+                    )}
                   </div>
                 </div>
               ))}

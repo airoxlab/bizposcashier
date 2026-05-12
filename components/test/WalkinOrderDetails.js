@@ -117,8 +117,8 @@ export default function WalkinOrderDetails({
         order_taker_name: order.order_takers?.name ||
           (order.order_taker_id ? (cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null) : null),
         cart: items.map(item => item.is_deal
-          ? { isDeal: true, dealId: item.deal_id, dealName: item.product_name, dealProducts: (() => { try { return typeof item.deal_products === 'string' ? JSON.parse(item.deal_products) : (item.deal_products || []) } catch(e) { return [] } })(), quantity: item.quantity, totalPrice: item.total_price, itemInstructions: item.item_instructions || null }
-          : { isDeal: false, productName: item.product_name, variantName: item.variant_name, quantity: item.quantity, totalPrice: item.total_price, itemInstructions: item.item_instructions || null }
+          ? { isDeal: true, dealId: item.deal_id, dealName: item.product_name, dealProducts: (() => { try { return typeof item.deal_products === 'string' ? JSON.parse(item.deal_products) : (item.deal_products || []) } catch(e) { return [] } })(), quantity: item.quantity, totalPrice: item.total_price, finalPrice: item.final_price, itemDiscountType: item.item_discount_type || null, itemDiscountAmount: parseFloat(item.item_discount_amount) || 0, itemInstructions: item.item_instructions || null }
+          : { isDeal: false, productName: item.product_name, variantName: item.variant_name, quantity: item.quantity, totalPrice: item.total_price, finalPrice: item.final_price, itemDiscountType: item.item_discount_type || null, itemDiscountAmount: parseFloat(item.item_discount_amount) || 0, itemInstructions: item.item_instructions || null }
         ),
       }
 
@@ -135,6 +135,10 @@ export default function WalkinOrderDetails({
         show_footer_section: userProfileRaw?.show_footer_section !== false,
         show_logo_on_receipt: userProfileRaw?.show_logo_on_receipt !== false,
         show_business_name_on_receipt: userProfileRaw?.show_business_name_on_receipt !== false,
+        show_powered_by_airoxlab: userProfileRaw?.show_powered_by_airoxlab !== false,
+        phone_secondary: userProfileRaw?.phone_secondary || '',
+        receipt_review_message: userProfileRaw?.receipt_review_message || '',
+        receipt_footer_message: userProfileRaw?.receipt_footer_message || '',
         cashier_name: order.cashier_id ? cashierName : null,
         customer_name: !order.cashier_id ? cashierName : null,
       }
@@ -1194,16 +1198,41 @@ export default function WalkinOrderDetails({
                           <div className={`text-[10px] ${classes.textSecondary} ${item.is_deal && dealProducts.length > 0 ? 'mt-0.5' : ''}`}>
                             Qty: {item.quantity} × Rs {item.final_price} each
                           </div>
-                          {item.item_discount_amount > 0 && (
-                            <div className={`text-[10px] font-medium ${isDark ? 'text-green-400' : 'text-green-600'}`}>
-                              Disc: -{item.item_discount_type === 'percentage'
-                                ? `${((item.item_discount_amount / (item.final_price * item.quantity)) * 100).toFixed(0)}%`
-                                : `Rs ${item.item_discount_amount.toFixed(0)}`}
-                            </div>
-                          )}
+                          {(() => {
+                            const gross = parseFloat(item.final_price) * item.quantity
+                            const stored = parseFloat(item.item_discount_amount) || 0
+                            const effective = stored > 0 ? stored : Math.max(0, gross - parseFloat(item.total_price || 0))
+                            if (effective < 0.01) return null
+                            const pct = (effective / gross * 100).toFixed(0)
+                            let label
+                            if (item.item_discount_type === 'percentage') {
+                              label = `-${pct}% · -Rs ${effective.toFixed(0)}`
+                            } else if (item.item_discount_type === 'fixed') {
+                              label = `-Rs ${effective.toFixed(0)} (fixed)`
+                            } else {
+                              label = `-Rs ${effective.toFixed(0)} (${pct}%)`
+                            }
+                            return (
+                              <div className={`text-[10px] font-medium ${isDark ? 'text-green-400' : 'text-green-600'}`}>
+                                {label}
+                              </div>
+                            )
+                          })()}
                         </div>
-                        <div className={`font-bold ${classes.textPrimary} text-xs`}>
-                          Rs {item.total_price?.toFixed(2) || (item.quantity * item.final_price).toFixed(2)}
+                        <div className={`text-right`}>
+                          <div className={`font-bold ${classes.textPrimary} text-xs`}>
+                            Rs {item.total_price?.toFixed(2) || (item.quantity * item.final_price).toFixed(2)}
+                          </div>
+                          {(() => {
+                            const gross = parseFloat(item.final_price) * item.quantity
+                            const effective = Math.max(0, gross - parseFloat(item.total_price || 0))
+                            if (effective < 0.01) return null
+                            return (
+                              <div className={`text-[10px] line-through ${classes.textSecondary}`}>
+                                Rs {gross.toFixed(2)}
+                              </div>
+                            )
+                          })()}
                         </div>
                       </div>
                     </div>

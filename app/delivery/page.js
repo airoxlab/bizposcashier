@@ -1686,6 +1686,10 @@ export default function DeliveryPage() {
         show_footer_section: userProfileRaw?.show_footer_section !== false,
         show_logo_on_receipt: userProfileRaw?.show_logo_on_receipt !== false,
         show_business_name_on_receipt: userProfileRaw?.show_business_name_on_receipt !== false,
+        show_powered_by_airoxlab: userProfileRaw?.show_powered_by_airoxlab !== false,
+        phone_secondary: userProfileRaw?.phone_secondary || '',
+        receipt_review_message: userProfileRaw?.receipt_review_message || '',
+        receipt_footer_message: userProfileRaw?.receipt_footer_message || '',
         // Add cashier/admin name for receipt printing
         cashier_name: order?.cashier_id ? cashierName : null,
         customer_name: !order?.cashier_id ? cashierName : null,
@@ -1918,6 +1922,8 @@ export default function DeliveryPage() {
               quantity: item.quantity,
               totalPrice: item.total_price,
               finalPrice: item.final_price,
+              itemDiscountType: item.item_discount_type || null,
+              itemDiscountAmount: parseFloat(item.item_discount_amount) || 0,
             }
           }
           return {
@@ -1927,6 +1933,8 @@ export default function DeliveryPage() {
             quantity: item.quantity,
             totalPrice: item.total_price,
             finalPrice: item.final_price,
+            itemDiscountType: item.item_discount_type || null,
+            itemDiscountAmount: parseFloat(item.item_discount_amount) || 0,
           }
         }),
         paymentMethod: order.payment_method || 'Cash',
@@ -1966,6 +1974,10 @@ export default function DeliveryPage() {
         show_footer_section: userProfileRaw?.show_footer_section !== false,
         show_logo_on_receipt: userProfileRaw?.show_logo_on_receipt !== false,
         show_business_name_on_receipt: userProfileRaw?.show_business_name_on_receipt !== false,
+        show_powered_by_airoxlab: userProfileRaw?.show_powered_by_airoxlab !== false,
+        phone_secondary: userProfileRaw?.phone_secondary || userRaw?.phone_secondary || '',
+        receipt_review_message: userProfileRaw?.receipt_review_message || userRaw?.receipt_review_message || '',
+        receipt_footer_message: userProfileRaw?.receipt_footer_message || userRaw?.receipt_footer_message || '',
         // Add cashier/admin name for receipt printing
         cashier_name: order.cashier_id ? cashierName : null,
         customer_name: !order.cashier_id ? cashierName : null,

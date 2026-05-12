@@ -29,6 +29,7 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
   const [loading, setLoading] = useState(true)
   const [items, setItems] = useState([])
   const [supplier, setSupplier] = useState(null)
+  const [allSuppliers, setAllSuppliers] = useState([])
   const [receivedQty, setReceivedQty] = useState({})
   const [receivingMode, setReceivingMode] = useState(false)
   const [receiveSaving, setReceiveSaving] = useState(false)
@@ -37,15 +38,17 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
   const [showPaymentModal, setShowPaymentModal] = useState(false)
   const [statusChanging, setStatusChanging] = useState(false)
 
-  const user = authManager.getCurrentUser()
-  const isDark = themeManager.isDark()
+  const user    = authManager.getCurrentUser()
+  const cashier = authManager.getCashier()
+  const isAdmin = authManager.getRole() === 'admin'
+  const isDark  = themeManager.isDark()
   const themeClasses = themeManager.getClasses()
 
-  const isAdminOrHasPerm = (perm) => permissionManager.hasPermission(perm) || authManager.getRole() === 'admin'
-  const canDelete = isAdminOrHasPerm('PO_DELETE')
-  const canReceive = isAdminOrHasPerm('PO_RECEIVE')
-  const canEdit = isAdminOrHasPerm('PO_EDIT') && purchaseOrder?.status === 'draft'
-  const canPay = isAdminOrHasPerm('PO_PAYMENT') || isAdminOrHasPerm('PO_RECEIVE')
+  const isAdminOrHasPerm = (perm) => permissionManager.hasPermission(perm) || isAdmin
+  const canDelete      = isAdminOrHasPerm('PO_DELETE')
+  const canReceive     = isAdminOrHasPerm('PO_RECEIVE')
+  const canEdit        = isAdminOrHasPerm('PO_EDIT') && purchaseOrder?.status === 'draft'
+  const canPay         = isAdminOrHasPerm('PO_PAYMENT')
   const canChangeStatus = isAdminOrHasPerm('PO_EDIT')
 
   const canReceiveStock = canReceive &&
@@ -63,13 +66,27 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
       setLoading(true)
       const [itemsRes, supplierRes] = await Promise.all([
         supabase.from('purchase_order_items')
-          .select('*, inventory_items(id, name, sku), units:purchase_unit_id(id, abbreviation)')
+          .select('*, inventory_items(id, name, sku), units:purchase_unit_id(id, abbreviation), suppliers:supplier_id(id, name)')
           .eq('purchase_order_id', purchaseOrder.id),
-        supabase.from('suppliers').select('*').eq('id', purchaseOrder.supplier_id).single()
+        purchaseOrder.supplier_id
+          ? supabase.from('suppliers').select('id, name').eq('id', purchaseOrder.supplier_id).single()
+          : Promise.resolve({ data: null })
       ])
       const itemsData = itemsRes.data || []
       setItems(itemsData)
       setSupplier(supplierRes.data)
+
+      // Collect unique suppliers from per-item supplier_id plus PO header supplier
+      const seenIds = new Set()
+      const unique = []
+      if (supplierRes.data) { seenIds.add(supplierRes.data.id); unique.push(supplierRes.data) }
+      itemsData.forEach(i => {
+        if (i.suppliers?.id && !seenIds.has(i.suppliers.id)) {
+          seenIds.add(i.suppliers.id)
+          unique.push(i.suppliers)
+        }
+      })
+      setAllSuppliers(unique)
       // Default receive qty = full remaining
       const init = {}
       itemsData.forEach(i => {
@@ -96,6 +113,12 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
       })
       if (error) throw error
       notify.success(`Stock received — PO status: ${data.po_status}`)
+      // Track which cashier received the stock
+      if (!isAdmin && cashier?.id) {
+        await supabase.from('purchase_orders')
+          .update({ received_by_cashier_id: cashier.id })
+          .eq('id', purchaseOrder.id)
+      }
       setReceivingMode(false)
       onUpdated?.()
       loadDetails()
@@ -123,9 +146,14 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
   const handleStatusChange = async (newStatus) => {
     try {
       setStatusChanging(true)
+      const update = {
+        status: newStatus,
+        // Track which cashier changed the status
+        ...(!isAdmin && cashier?.id ? { updated_by_cashier_id: cashier.id } : {})
+      }
       const { error } = await supabase
         .from('purchase_orders')
-        .update({ status: newStatus })
+        .update(update)
         .eq('id', purchaseOrder.id)
       if (error) throw error
       const label = newStatus === 'sent' ? 'confirmed' : 'reverted to draft'
@@ -147,7 +175,7 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
       doc.setFontSize(10)
       doc.text(`PO #: ${purchaseOrder.po_number}`, 20, 35)
       doc.text(`Date: ${new Date(purchaseOrder.po_date).toLocaleDateString('en-PK')}`, 20, 42)
-      doc.text(`Status: ${STATUS_LABELS[purchaseOrder.status] || purchaseOrder.status.toUpperCase()}`, 20, 49)
+      doc.text(`Status: ${STATUS_LABELS[purchaseOrder.status] || (purchaseOrder.status ?? '').toUpperCase()}`, 20, 49)
       doc.text(`Supplier: ${supplier?.name || 'N/A'}`, 20, 56)
       autoTable(doc, {
         head: [['Item', 'Qty', 'Unit', 'Cost/Unit', 'Discount', 'Total']],
@@ -183,7 +211,7 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
           <div>
             <div className="flex items-center gap-2.5">
               <h2 className={`text-lg font-bold ${themeClasses.textPrimary}`}>PO #{purchaseOrder.po_number}</h2>
-              <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${statusCls}`}>{STATUS_LABELS[purchaseOrder.status] || purchaseOrder.status.toUpperCase()}</span>
+              <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${statusCls}`}>{STATUS_LABELS[purchaseOrder.status] || (purchaseOrder.status ?? '').toUpperCase()}</span>
               {purchaseOrder.payment_status && (
                 <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${
                   purchaseOrder.payment_status === 'paid'
@@ -273,8 +301,25 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
 
           {/* Info cards row */}
           <div className="grid grid-cols-4 gap-4">
+            <div className={`rounded-xl p-4 ${isDark ? 'bg-gray-800' : 'bg-white border border-gray-200'}`}>
+              <p className={`text-xs font-semibold mb-1 ${themeClasses.textSecondary}`}>
+                {allSuppliers.length > 1 ? 'Suppliers' : 'Supplier'}
+              </p>
+              {allSuppliers.length === 0 ? (
+                <p className={`font-bold text-sm ${themeClasses.textPrimary}`}>—</p>
+              ) : allSuppliers.length === 1 ? (
+                <p className={`font-bold text-sm ${themeClasses.textPrimary}`}>{allSuppliers[0].name}</p>
+              ) : (
+                <div className="flex flex-wrap gap-1 mt-0.5">
+                  {allSuppliers.map(s => (
+                    <span key={s.id} className={`text-xs font-semibold px-2 py-0.5 rounded-full ${isDark ? 'bg-gray-700 text-gray-200' : 'bg-gray-100 text-gray-700'}`}>
+                      {s.name}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
             {[
-              { label: 'Supplier', value: supplier?.name || '—' },
               { label: 'Date', value: new Date(purchaseOrder.po_date).toLocaleDateString('en-PK') },
               { label: 'Total Items', value: purchaseOrder.total_items || items.length },
               { label: 'Grand Total', value: `Rs. ${(purchaseOrder.grand_total || 0).toFixed(2)}` }
@@ -380,6 +425,7 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
                   <tr className={`text-xs font-semibold uppercase ${isDark ? 'bg-gray-800 text-gray-400' : 'bg-gray-50 text-gray-500'}`}>
                     <th className="text-left px-5 py-2.5">#</th>
                     <th className="text-left px-3 py-2.5">Item</th>
+                    <th className="text-left px-3 py-2.5">Supplier</th>
                     <th className="text-center px-3 py-2.5">Qty</th>
                     <th className="text-center px-3 py-2.5">Received</th>
                     <th className="text-right px-3 py-2.5">Cost/Unit</th>
@@ -389,7 +435,7 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
                 </thead>
                 <tbody className={`divide-y ${isDark ? 'divide-gray-700' : 'divide-gray-100'}`}>
                   {items.length === 0 ? (
-                    <tr><td colSpan={7} className={`py-10 text-center text-sm ${themeClasses.textSecondary}`}>No items found</td></tr>
+                    <tr><td colSpan={8} className={`py-10 text-center text-sm ${themeClasses.textSecondary}`}>No items found</td></tr>
                   ) : items.map((item, idx) => {
                     const fullyReceived = (item.received_quantity || 0) >= item.quantity
                     return (
@@ -404,6 +450,11 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
                               {item.expiry_date && <p className={`text-xs ${themeClasses.textSecondary}`}>Exp: {new Date(item.expiry_date).toLocaleDateString('en-PK')}</p>}
                             </div>
                           </div>
+                        </td>
+                        <td className={`px-3 py-3 text-sm ${themeClasses.textSecondary}`}>
+                          {item.suppliers?.name
+                            ? <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${isDark ? 'bg-gray-700 text-gray-300' : 'bg-gray-100 text-gray-600'}`}>{item.suppliers.name}</span>
+                            : <span className={`text-xs ${themeClasses.textSecondary}`}>—</span>}
                         </td>
                         <td className={`px-3 py-3 text-center ${themeClasses.textSecondary}`}>{item.quantity} {item.units?.abbreviation || ''}</td>
                         <td className="px-3 py-3 text-center">

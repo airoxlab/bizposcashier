@@ -13,136 +13,101 @@ export default function DealFlavorSelectionScreen({
   isDark
 }) {
   const [quantity, setQuantity] = useState(1)
+  // Keyed by `${productId}-${slotIndex}` for products that need per-slot selection,
+  // or `${productId}-0` for single-slot products. Uniform key format throughout.
   const [selectedFlavors, setSelectedFlavors] = useState({})
   const [selectedProducts, setSelectedProducts] = useState({})
   const [priceAdjustments, setPriceAdjustments] = useState({})
   const firstProductBtnRef = useRef(null)
 
-  // Auto-focus first product button on mount
   useEffect(() => {
     const t = setTimeout(() => firstProductBtnRef.current?.focus(), 150)
     return () => clearTimeout(t)
   }, [])
 
-  // Global keyboard shortcuts for deal screen
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        onBack()
-        return
-      }
-      if ((e.key === '+' || e.key === '=') && !e.ctrlKey && !e.altKey) {
-        e.preventDefault()
-        setQuantity(q => q + 1)
-        return
-      }
-      if (e.key === '-' && !e.ctrlKey && !e.altKey) {
-        e.preventDefault()
-        setQuantity(q => Math.max(1, q - 1))
-        return
-      }
-      if (e.key === 'Enter' && e.ctrlKey) {
-        e.preventDefault()
-        if (canAddToCart()) handleAddToCart()
-      }
+      if (e.key === 'Escape') { e.preventDefault(); onBack(); return }
+      if ((e.key === '+' || e.key === '=') && !e.ctrlKey && !e.altKey) { e.preventDefault(); setQuantity(q => q + 1); return }
+      if (e.key === '-' && !e.ctrlKey && !e.altKey) { e.preventDefault(); setQuantity(q => Math.max(1, q - 1)); return }
+      if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); if (canAddToCart()) handleAddToCart() }
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onBack])
 
-  // Helper function to get base price (minimum variant price)
   const getBasePrice = (product) => {
     if (!product.variants || product.variants.length === 0) return 0
-    const prices = product.variants.map(v => parseFloat(v.price) || 0)
-    return Math.min(...prices)
+    return Math.min(...product.variants.map(v => parseFloat(v.price) || 0))
   }
 
-  // Auto-select products without variants or with pre-assigned variants on mount
+  // Auto-select products without variants or with pre-assigned variants
   useEffect(() => {
     if (!dealProducts || dealProducts.length === 0) return
 
     const autoSelectedProducts = {}
+    const autoSelectedFlavors = {}
     const autoSelectedAdjustments = {}
 
     dealProducts.forEach(product => {
-      // Auto-select if:
-      // 1. Product has no variants (variants array is empty or null)
-      // 2. Product has a pre-assigned variant (variantName exists)
       const hasNoVariants = !product.variants || product.variants.length === 0
       const hasPreAssignedVariant = product.variantName
 
       if (hasNoVariants || hasPreAssignedVariant) {
         autoSelectedProducts[product.id] = true
 
-        // If product has a pre-assigned variant price, calculate adjustment
-        if (hasPreAssignedVariant && product.variantPrice && product.variants && product.variants.length > 0) {
-          // Calculate base price inline to avoid dependency
-          const prices = product.variants.map(v => parseFloat(v.price) || 0)
-          const basePrice = Math.min(...prices)
+        if (hasPreAssignedVariant && product.variantPrice && product.variants?.length > 0) {
+          const basePrice = Math.min(...product.variants.map(v => parseFloat(v.price) || 0))
           const selectedPrice = parseFloat(product.variantPrice) || 0
-          const priceDifference = selectedPrice - basePrice
-          const adjustment = priceDifference > 0 ? priceDifference : 0
-          autoSelectedAdjustments[product.id] = adjustment
+          const adjustment = Math.max(0, selectedPrice - basePrice)
+          // Pre-assigned variant: same flavor applied to all slots (all slots share one locked variant)
+          for (let i = 0; i < (product.quantity || 1); i++) {
+            const key = `${product.id}-${i}`
+            autoSelectedFlavors[key] = { name: product.variantName, price: product.variantPrice }
+            autoSelectedAdjustments[key] = adjustment
+          }
         }
       }
     })
 
     setSelectedProducts(autoSelectedProducts)
+    setSelectedFlavors(autoSelectedFlavors)
     setPriceAdjustments(autoSelectedAdjustments)
   }, [dealProducts])
 
-  const handleFlavorSelect = (productId, variant) => {
-    const updatedFlavors = {
-      ...selectedFlavors,
-      [productId]: variant
-    }
-    setSelectedFlavors(updatedFlavors)
+  const handleFlavorSelect = (productId, slotIndex, variant) => {
+    const key = `${productId}-${slotIndex}`
+    setSelectedFlavors(prev => ({ ...prev, [key]: variant }))
 
-    // Calculate price adjustment
     const product = dealProducts.find(dp => dp.id === productId)
-    if (product && product.variants && product.variants.length > 0) {
+    if (product?.variants?.length > 0) {
       const basePrice = getBasePrice(product)
       const selectedPrice = parseFloat(variant.price) || 0
-      const priceDifference = selectedPrice - basePrice
-
-      // Only add positive differences (more expensive variants)
-      const adjustment = priceDifference > 0 ? priceDifference : 0
-
-      const updatedAdjustments = {
-        ...priceAdjustments,
-        [productId]: adjustment
-      }
-      setPriceAdjustments(updatedAdjustments)
-
-      // Mark product as selected when variant is chosen
-      const updatedSelectedProducts = {
-        ...selectedProducts,
-        [productId]: true
-      }
-      setSelectedProducts(updatedSelectedProducts)
+      const adjustment = Math.max(0, selectedPrice - basePrice)
+      setPriceAdjustments(prev => ({ ...prev, [key]: adjustment }))
+      setSelectedProducts(prev => ({ ...prev, [productId]: true }))
     }
   }
 
   const handleProductToggle = (productId) => {
-    // Toggle selection state
     const isCurrentlySelected = selectedProducts[productId]
-    const updatedSelectedProducts = {
-      ...selectedProducts,
-      [productId]: !isCurrentlySelected
-    }
-    setSelectedProducts(updatedSelectedProducts)
+    setSelectedProducts(prev => ({ ...prev, [productId]: !isCurrentlySelected }))
 
-    // If deselecting, clear any variant selection for this product
     if (isCurrentlySelected) {
-      const updatedFlavors = { ...selectedFlavors }
-      delete updatedFlavors[productId]
-      setSelectedFlavors(updatedFlavors)
-
-      const updatedAdjustments = { ...priceAdjustments }
-      delete updatedAdjustments[productId]
-      setPriceAdjustments(updatedAdjustments)
+      // Clear all slot keys for this product
+      const product = dealProducts.find(dp => dp.id === productId)
+      const slotCount = product?.quantity || 1
+      setSelectedFlavors(prev => {
+        const next = { ...prev }
+        for (let i = 0; i < slotCount; i++) delete next[`${productId}-${i}`]
+        return next
+      })
+      setPriceAdjustments(prev => {
+        const next = { ...prev }
+        for (let i = 0; i < slotCount; i++) delete next[`${productId}-${i}`]
+        return next
+      })
     }
   }
 
@@ -150,47 +115,60 @@ export default function DealFlavorSelectionScreen({
     addToCartWithSelection(selectedProducts, selectedFlavors, priceAdjustments)
   }
 
-  // Check if all required selections are made
   const canAddToCart = () => {
-    // All deal products must be checked (products without variants are auto-selected)
     for (const product of dealProducts) {
-      // Every product must be selected
-      if (!selectedProducts[product.id]) {
-        return false
-      }
+      if (!selectedProducts[product.id]) return false
 
-      // If product has variants and no pre-assigned variant, user must select one
-      const hasVariants = product.variants && product.variants.length > 0
+      const hasVariants = product.variants?.length > 0
       const hasPreAssignedVariant = product.variantName
-      const needsVariantSelection = hasVariants && !hasPreAssignedVariant
+      if (!hasVariants || hasPreAssignedVariant) continue
 
-      if (needsVariantSelection && !selectedFlavors[product.id]) {
-        return false
+      // Every slot must have a flavor chosen
+      for (let i = 0; i < (product.quantity || 1); i++) {
+        if (!selectedFlavors[`${product.id}-${i}`]) return false
       }
     }
-
     return true
   }
 
   const addToCartWithSelection = (currentSelectedProducts, currentSelectedFlavors, currentPriceAdjustments = priceAdjustments) => {
     if (!deal) return
 
-    // Calculate total price adjustment
     const totalAdjustment = Object.values(currentPriceAdjustments).reduce((sum, adj) => sum + adj, 0)
     const baseDealPrice = parseFloat(deal.price)
     const adjustedDealPrice = baseDealPrice + totalAdjustment
 
-    // Filter to only include selected products
+    // Build dealProducts: expand per-slot for products where user chose variants independently
     const selectedDealProducts = dealProducts
       .filter(dp => currentSelectedProducts[dp.id])
-      .map(dp => ({
-        name: dp.productName || dp.name,
-        quantity: dp.quantity,
-        variant: currentSelectedFlavors[dp.id] ? currentSelectedFlavors[dp.id].name : (dp.variantName || null),
-        // Store price info for reference
-        variantPrice: currentSelectedFlavors[dp.id] ? parseFloat(currentSelectedFlavors[dp.id].price) : 0,
-        priceAdjustment: currentPriceAdjustments[dp.id] || 0
-      }))
+      .flatMap(dp => {
+        const hasVariants = dp.variants?.length > 0
+        const hasPreAssignedVariant = dp.variantName
+
+        if (!hasVariants || hasPreAssignedVariant) {
+          // No per-slot expansion — single entry retains original quantity
+          return [{
+            name: dp.productName || dp.name,
+            quantity: dp.quantity || 1,
+            variant: dp.variantName || null,
+            variantPrice: dp.variantPrice ? parseFloat(dp.variantPrice) : 0,
+            priceAdjustment: 0
+          }]
+        }
+
+        // Expand into one entry per slot so each slot's flavor is recorded
+        return Array.from({ length: dp.quantity || 1 }, (_, slotIndex) => {
+          const key = `${dp.id}-${slotIndex}`
+          const chosenVariant = currentSelectedFlavors[key]
+          return {
+            name: dp.productName || dp.name,
+            quantity: 1,
+            variant: chosenVariant ? chosenVariant.name : null,
+            variantPrice: chosenVariant ? parseFloat(chosenVariant.price) : 0,
+            priceAdjustment: currentPriceAdjustments[key] || 0
+          }
+        })
+      })
 
     if (selectedDealProducts.length === 0) return
 
@@ -200,25 +178,22 @@ export default function DealFlavorSelectionScreen({
       dealId: deal.id,
       dealName: deal.name,
       dealProducts: selectedDealProducts,
-      baseDealPrice: baseDealPrice,  // Original deal price
-      priceAdjustment: totalAdjustment, // Total adjustment
-      finalPrice: adjustedDealPrice, // Adjusted price
+      baseDealPrice: baseDealPrice,
+      priceAdjustment: totalAdjustment,
+      finalPrice: adjustedDealPrice,
       quantity: quantity,
       totalPrice: adjustedDealPrice * quantity,
       image: deal.image_url
     }
 
     onAddToCart(cartItem)
-
-    // Close the screen after adding to cart
     onBack()
   }
 
   const calculateTotalPrice = () => {
     const baseDealPrice = parseFloat(deal.price)
     const totalAdjustment = Object.values(priceAdjustments).reduce((sum, adj) => sum + adj, 0)
-    const adjustedDealPrice = baseDealPrice + totalAdjustment
-    return adjustedDealPrice * quantity
+    return (baseDealPrice + totalAdjustment) * quantity
   }
 
   const getAdjustedDealPrice = () => {
@@ -331,61 +306,66 @@ export default function DealFlavorSelectionScreen({
           </div>
         )}
 
-        {/* Variant Selection for each product */}
+        {/* Per-slot variant selection */}
         {dealProducts.map((product) => {
-          // Skip if product is not selected
           if (!selectedProducts[product.id]) return null
-
-          // Skip if product already has a specific variant assigned or has no variants to choose from
           if (product.variantName || !product.variants || product.variants.length === 0) return null
 
-          return (
-            <div
-              key={product.id}
-            >
-              <div className="flex items-center justify-between mb-2">
-                <h3 className={`text-base font-bold ${classes.textPrimary}`}>
-                  Select Variant for {product.productName || product.name}
-                </h3>
-                {!selectedFlavors[product.id] && selectedProducts[product.id] && (
-                  <span className={`${isDark ? 'bg-red-900/20 text-red-400' : 'bg-red-100 text-red-600'} text-xs font-semibold px-2 py-1 rounded-full`}>
-                    Required
-                  </span>
-                )}
-              </div>
+          const slotCount = product.quantity || 1
+          const hasMultipleSlots = slotCount > 1
 
-              <div className="flex flex-wrap gap-2">
-                {product.variants.map((variant) => {
-                  const isSelected = selectedFlavors[product.id]?.id === variant.id
+          return Array.from({ length: slotCount }, (_, slotIndex) => {
+            const slotKey = `${product.id}-${slotIndex}`
+            const slotLabel = hasMultipleSlots
+              ? `${product.productName || product.name} (${slotIndex + 1} of ${slotCount})`
+              : `${product.productName || product.name}`
 
-                  return (
-                    <motion.button
-                      key={variant.id}
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                      onClick={() => handleFlavorSelect(product.id, variant)}
-                      className={`px-4 py-2 rounded-lg border-2 transition-all duration-200 flex items-center space-x-2 ${
-                        isSelected
-                          ? `border-green-500 ${isDark ? 'bg-green-900/20' : 'bg-green-50'}`
-                          : `${classes.border} border-gray-200 hover:border-green-300 hover:${isDark ? 'bg-gray-700/50' : 'bg-gray-50'}`
-                      }`}
-                    >
-                      <div className={`font-semibold text-sm ${
-                        isSelected
-                          ? isDark ? 'text-green-300' : 'text-green-700'
-                          : classes.textPrimary
-                      }`}>
-                        {variant.name}
-                      </div>
-                      {isSelected && (
-                        <Check className="w-4 h-4 text-green-500" />
-                      )}
-                    </motion.button>
-                  )
-                })}
+            return (
+              <div key={slotKey}>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className={`text-base font-bold ${classes.textPrimary}`}>
+                    Select Variant for {slotLabel}
+                  </h3>
+                  {!selectedFlavors[slotKey] && (
+                    <span className={`${isDark ? 'bg-red-900/20 text-red-400' : 'bg-red-100 text-red-600'} text-xs font-semibold px-2 py-1 rounded-full`}>
+                      Required
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  {product.variants.map((variant) => {
+                    const isSelected = selectedFlavors[slotKey]?.id === variant.id
+
+                    return (
+                      <motion.button
+                        key={variant.id}
+                        whileHover={{ scale: 1.05 }}
+                        whileTap={{ scale: 0.95 }}
+                        onClick={() => handleFlavorSelect(product.id, slotIndex, variant)}
+                        className={`px-4 py-2 rounded-lg border-2 transition-all duration-200 flex items-center space-x-2 ${
+                          isSelected
+                            ? `border-green-500 ${isDark ? 'bg-green-900/20' : 'bg-green-50'}`
+                            : `${classes.border} border-gray-200 hover:border-green-300 hover:${isDark ? 'bg-gray-700/50' : 'bg-gray-50'}`
+                        }`}
+                      >
+                        <div className={`font-semibold text-sm ${
+                          isSelected
+                            ? isDark ? 'text-green-300' : 'text-green-700'
+                            : classes.textPrimary
+                        }`}>
+                          {variant.name}
+                        </div>
+                        {isSelected && (
+                          <Check className="w-4 h-4 text-green-500" />
+                        )}
+                      </motion.button>
+                    )
+                  })}
+                </div>
               </div>
-            </div>
-          )
+            )
+          })
         })}
 
         {/* Quantity Selector */}

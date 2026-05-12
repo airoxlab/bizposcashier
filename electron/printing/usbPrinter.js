@@ -366,8 +366,28 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
       } else {
         let itemName = `${item.quantity}x ${item.productName}`;
         if (item.variantName) itemName += ` (${item.variantName})`;
-        const price = `Rs ${item.totalPrice.toFixed(0)}`;
-        commands.push(leftRight(itemName, price));
+
+        const gross = parseFloat(item.finalPrice) * item.quantity;
+        const discAmt = parseFloat(item.itemDiscountAmount) > 0
+          ? parseFloat(item.itemDiscountAmount)
+          : Math.max(0, gross - parseFloat(item.totalPrice));
+        const hasDiscount = discAmt >= 0.01;
+
+        // Show original gross so the discount deduction line below makes math clear
+        commands.push(leftRight(itemName, `Rs ${(hasDiscount ? gross : item.totalPrice).toFixed(0)}`));
+
+        if (hasDiscount) {
+          const pct = (discAmt / gross * 100).toFixed(0);
+          let discLabel;
+          if (item.itemDiscountType === 'percentage') {
+            discLabel = `  Discount (${pct}%)`;
+          } else if (item.itemDiscountType === 'fixed') {
+            discLabel = `  Discount (Rs ${discAmt.toFixed(0)} off)`;
+          } else {
+            discLabel = `  Discount (${pct}%)`;
+          }
+          commands.push(leftRight(discLabel, `-Rs ${discAmt.toFixed(0)}`));
+        }
       }
     }
   }
@@ -485,10 +505,12 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
       }
     }
 
-    // Review message
-    commands.push(CMD.ALIGN_CENTER);
-    commands.push(text('Drop a review & flex on us!\n'));
-    commands.push(text('Your feedback = our glow up\n'));
+    // Review message (configurable via receipt_review_message; hidden if blank)
+    const reviewMsg = userProfile?.receipt_review_message;
+    if (reviewMsg) {
+      commands.push(CMD.ALIGN_CENTER);
+      commands.push(text(reviewMsg + '\n'));
+    }
 
     // Hashtags
     const hashtag1 = userProfile?.hashtag1 || '';
@@ -502,8 +524,14 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
   }
 
   // ========================================
-  // POWERED BY & CUT
+  // FOOTER THANK-YOU MESSAGE & POWERED BY
   // ========================================
+  const footerMsg = userProfile?.receipt_footer_message;
+  if (footerMsg) {
+    commands.push(CMD.ALIGN_CENTER);
+    commands.push(text(footerMsg + '\n'));
+  }
+
   commands.push(CMD.FEED);
   if (userProfile?.show_powered_by_airoxlab !== false) {
     commands.push(CMD.ALIGN_CENTER);
@@ -786,8 +814,10 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
   // ========================================
   // FOOTER & CUT
   // ========================================
-  commands.push(CMD.ALIGN_CENTER);
-  commands.push(text('Powered by airoxlab.com\n'));
+  if (userProfile?.show_powered_by_airoxlab !== false) {
+    commands.push(CMD.ALIGN_CENTER);
+    commands.push(text('Powered by airoxlab.com\n'));
+  }
 
   commands.push(CMD.FEED);
   commands.push(CMD.CUT);

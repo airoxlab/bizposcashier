@@ -55,8 +55,8 @@ export default function CreatePurchaseOrderModal({ isOpen, onClose, onCreated })
       const [suppliersRes, itemsRes, unitsRes, sectionsRes] = await Promise.all([
         supabase.from('suppliers').select('*').eq('user_id', userId).order('name'),
         supabase.from('inventory_items').select('id, name, sku, unit_id, supplier_id, units(id, name, abbreviation)').eq('user_id', userId).order('name'),
-        supabase.from('units').select('*').order('name'),
-        supabase.from('inventory_sections').select('*').order('sort_order')
+        supabase.from('units').select('*').eq('user_id', userId).order('name'),
+        supabase.from('inventory_sections').select('*').eq('user_id', userId).order('sort_order')
       ])
 
       if (suppliersRes.data) setSuppliers(suppliersRes.data)

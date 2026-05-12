@@ -1834,6 +1834,8 @@ export default function OrdersPage() {
               quantity: item.quantity,
               totalPrice: item.total_price,
               finalPrice: item.final_price,
+              itemDiscountType: item.item_discount_type || null,
+              itemDiscountAmount: parseFloat(item.item_discount_amount) || 0,
               itemInstructions: item.item_instructions || null,
             };
           }
@@ -1845,6 +1847,8 @@ export default function OrdersPage() {
             quantity: item.quantity,
             totalPrice: item.total_price,
             finalPrice: item.final_price,
+            itemDiscountType: item.item_discount_type || null,
+            itemDiscountAmount: parseFloat(item.item_discount_amount) || 0,
             itemInstructions: item.item_instructions || null,
           };
         }),
@@ -1899,6 +1903,10 @@ export default function OrdersPage() {
         show_footer_section: userProfileRaw?.show_footer_section === false || userProfileRaw?.show_footer_section === "false" ? false : true,
         show_logo_on_receipt: userProfileRaw?.show_logo_on_receipt === false || userProfileRaw?.show_logo_on_receipt === "false" ? false : true,
         show_business_name_on_receipt: userProfileRaw?.show_business_name_on_receipt === false || userProfileRaw?.show_business_name_on_receipt === "false" ? false : true,
+        show_powered_by_airoxlab: (userProfileRaw?.show_powered_by_airoxlab === false || userProfileRaw?.show_powered_by_airoxlab === "false") ? false : true,
+        phone_secondary: userProfileRaw?.phone_secondary || userRaw?.phone_secondary || '',
+        receipt_review_message: userProfileRaw?.receipt_review_message || userRaw?.receipt_review_message || '',
+        receipt_footer_message: userProfileRaw?.receipt_footer_message || userRaw?.receipt_footer_message || '',
         // Add cashier/admin name for receipt printing
         cashier_name: printOrder.cashier_id ? printOrder.cashiers?.name : null,
         customer_name: !printOrder.cashier_id ? printOrder.users?.customer_name : null,
@@ -3180,6 +3188,26 @@ export default function OrdersPage() {
                                   Qty: {item.quantity} × Rs {item.final_price}{" "}
                                   each
                                 </p>
+                                {(() => {
+                                  const gross = parseFloat(item.final_price) * item.quantity
+                                  const stored = parseFloat(item.item_discount_amount) || 0
+                                  const effective = stored > 0 ? stored : Math.max(0, gross - parseFloat(item.total_price))
+                                  if (effective < 0.01) return null
+                                  const pct = (effective / gross * 100).toFixed(0)
+                                  let label
+                                  if (item.item_discount_type === 'percentage') {
+                                    label = `-${pct}% · -Rs ${effective.toFixed(2)}`
+                                  } else if (item.item_discount_type === 'fixed') {
+                                    label = `-Rs ${effective.toFixed(2)} (fixed)`
+                                  } else {
+                                    label = `-Rs ${effective.toFixed(2)} (${pct}%)`
+                                  }
+                                  return (
+                                    <p className={`text-xs mt-0.5 ${isDark ? 'text-green-400' : 'text-green-600'}`}>
+                                      {label}
+                                    </p>
+                                  )
+                                })()}
                               </div>
                             </div>
                             <div className="text-right">
@@ -3188,6 +3216,16 @@ export default function OrdersPage() {
                               >
                                 Rs {item.total_price.toFixed(2)}
                               </p>
+                              {(() => {
+                                const gross = parseFloat(item.final_price) * item.quantity
+                                const effective = Math.max(0, gross - parseFloat(item.total_price))
+                                if (effective < 0.01) return null
+                                return (
+                                  <p className={`text-sm line-through ${themeClasses.textSecondary}`}>
+                                    Rs {gross.toFixed(2)}
+                                  </p>
+                                )
+                              })()}
                             </div>
                           </div>
                         </motion.div>
