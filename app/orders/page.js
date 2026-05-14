@@ -1888,6 +1888,18 @@ export default function OrdersPage() {
       console.log("  - userProfileRaw.show_logo_on_receipt:", userProfileRaw?.show_logo_on_receipt);
       console.log("  - userProfileRaw.show_footer_section:", userProfileRaw?.show_footer_section);
 
+      // Resolve a boolean receipt-display flag from either user_profile or user
+      // localStorage entries. Important: only one of the two may have the field
+      // depending on when each cache was last hydrated. Falling back through
+      // both matches the payment page's behavior so the same toggle takes effect
+      // regardless of which page triggers the print.
+      const resolveBool = (key, defaultVal = true) => {
+        const v = userProfileRaw?.[key] !== undefined ? userProfileRaw[key] : userRaw?.[key];
+        if (v === false || v === 'false') return false;
+        if (v === true || v === 'true') return true;
+        return defaultVal;
+      };
+
       const userProfile = {
         store_name: userProfileRaw?.store_name || userRaw?.store_name || "",
         store_address:
@@ -1899,11 +1911,10 @@ export default function OrdersPage() {
         qr_code: localQr || userProfileRaw?.qr_code || userRaw?.qr_code || null,
         hashtag1: userProfileRaw?.hashtag1 || userRaw?.hashtag1 || "",
         hashtag2: userProfileRaw?.hashtag2 || userRaw?.hashtag2 || "",
-        // Explicitly check for boolean false, handle string "false" too
-        show_footer_section: userProfileRaw?.show_footer_section === false || userProfileRaw?.show_footer_section === "false" ? false : true,
-        show_logo_on_receipt: userProfileRaw?.show_logo_on_receipt === false || userProfileRaw?.show_logo_on_receipt === "false" ? false : true,
-        show_business_name_on_receipt: userProfileRaw?.show_business_name_on_receipt === false || userProfileRaw?.show_business_name_on_receipt === "false" ? false : true,
-        show_powered_by_airoxlab: (userProfileRaw?.show_powered_by_airoxlab === false || userProfileRaw?.show_powered_by_airoxlab === "false") ? false : true,
+        show_footer_section: resolveBool('show_footer_section'),
+        show_logo_on_receipt: resolveBool('show_logo_on_receipt'),
+        show_business_name_on_receipt: resolveBool('show_business_name_on_receipt'),
+        show_powered_by_airoxlab: resolveBool('show_powered_by_airoxlab'),
         phone_secondary: userProfileRaw?.phone_secondary || userRaw?.phone_secondary || '',
         receipt_review_message: userProfileRaw?.receipt_review_message || userRaw?.receipt_review_message || '',
         receipt_footer_message: userProfileRaw?.receipt_footer_message || userRaw?.receipt_footer_message || '',

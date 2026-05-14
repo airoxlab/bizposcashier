@@ -10,7 +10,6 @@ import {
   Receipt,
   FileText,
   BarChart3,
-  Printer,
   Settings,
   Sun,
   Moon,
@@ -49,6 +48,7 @@ import { authManager } from '../../lib/authManager'
 import { webOrderNotificationManager } from '../../lib/webOrderNotification'
 import { networkPrintListener } from '../../lib/networkPrintListener'
 import ProtectedPage from '../../components/ProtectedPage'
+import PrinterStatusBadge from '../../components/PrinterStatusBadge'
 import CashierAnalytics from '../../components/pos/CashierAnalytics'
 import { usePermissions, permissionManager } from '../../lib/permissionManager'
 import { planManager } from '../../lib/planManager'
@@ -748,6 +748,7 @@ export default function Dashboard() {
                 {cacheStatus.networkStatus.isSyncing && (
                   <RefreshCw className="w-4 h-4 text-blue-500 animate-spin" />
                 )}
+
               </div>
 
               {/* Analytics Button */}
@@ -828,17 +829,13 @@ export default function Dashboard() {
                 </motion.button>
               </Tooltip>
 
-              {/* Printer Button */}
-              <Tooltip label="Printer">
-                <motion.button
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
-                  onClick={() => handleNavigation('/printer', 'PRINTERS')}
-                  className={`p-3 rounded-xl ${themeClasses.button} transition-all ${!permissions.hasPermission('PRINTERS') ? 'opacity-50 cursor-not-allowed' : ''}`}
-                >
-                  <Printer className={`w-5 h-5 ${themeClasses.textSecondary}`} />
-                </motion.button>
-              </Tooltip>
+              {/* Printer — click navigates to /printer, hover shows live status with Test/Print */}
+              <PrinterStatusBadge
+                onClick={() => handleNavigation('/printer', 'PRINTERS')}
+                disabled={!permissions.hasPermission('PRINTERS')}
+                buttonClassName={`relative p-3 rounded-xl ${themeClasses.button} transition-all ${!permissions.hasPermission('PRINTERS') ? 'opacity-50 cursor-not-allowed' : ''}`}
+                iconClassName={`w-5 h-5 ${themeClasses.textSecondary}`}
+              />
 
               {/* Plan Button */}
               <Tooltip label="Plan & Billing">

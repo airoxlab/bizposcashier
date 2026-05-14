@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowLeft, Plus, Search, Loader2, ShoppingCart,
-  ChevronDown, RotateCcw, Activity
+  ChevronDown, RotateCcw, Activity, ArrowUpDown, Filter
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
@@ -50,6 +50,10 @@ export default function PurchaseOrdersPage() {
   const [searchTerm, setSearchTerm]             = useState('')
   const [selectedStatus, setSelectedStatus]     = useState('all')
   const [statusDropdownId, setStatusDropdownId] = useState(null)
+  const [sortBy, setSortBy]                     = useState('date')  // 'date' | 'po_number' | 'amount'
+  const [sortOrder, setSortOrder]               = useState('desc')  // 'asc' | 'desc'
+  const [showSortMenu, setShowSortMenu]         = useState(false)
+  const [selectedPaymentStatus, setSelectedPaymentStatus] = useState('all')
 
   const themeClasses    = themeManager.getClasses()
   const isDark          = themeManager.isDark()
@@ -68,7 +72,7 @@ export default function PurchaseOrdersPage() {
       setLoading(true)
       const { data, error } = await supabase
         .from('purchase_orders')
-        .select('*, suppliers(id, name), purchase_order_items(id, quantity, received_quantity)')
+        .select('*, suppliers(id, name), purchase_order_items(id, quantity, received_quantity, suppliers:supplier_id(id, name))')
         .eq('user_id', userId)
         .order('po_date', { ascending: false })
       if (error) throw error
@@ -79,6 +83,8 @@ export default function PurchaseOrdersPage() {
 
   useEffect(() => {
     let list = purchaseOrders
+
+    // Search filter
     if (searchTerm.trim()) {
       const q = searchTerm.toLowerCase()
       list = list.filter(po =>
@@ -86,9 +92,44 @@ export default function PurchaseOrdersPage() {
         po.suppliers?.name?.toLowerCase().includes(q)
       )
     }
+
+    // Status filter
     if (selectedStatus !== 'all') list = list.filter(po => po.status === selectedStatus)
+
+    // Payment status filter
+    if (selectedPaymentStatus !== 'all') list = list.filter(po => po.payment_status === selectedPaymentStatus)
+
+    // Sorting
+    list.sort((a, b) => {
+      let aVal, bVal, result
+
+      if (sortBy === 'date') {
+        aVal = new Date(a.po_date).getTime()
+        bVal = new Date(b.po_date).getTime()
+        result = sortOrder === 'asc' ? aVal - bVal : bVal - aVal
+
+        // If dates are equal, sort by PO number descending (newest PO numbers first)
+        if (result === 0) {
+          const aPONum = parseInt(a.po_number?.replace(/\D/g, '') || 0)
+          const bPONum = parseInt(b.po_number?.replace(/\D/g, '') || 0)
+          return bPONum - aPONum
+        }
+        return result
+      } else if (sortBy === 'po_number') {
+        const aPONum = parseInt(a.po_number?.replace(/\D/g, '') || 0)
+        const bPONum = parseInt(b.po_number?.replace(/\D/g, '') || 0)
+        result = sortOrder === 'asc' ? aPONum - bPONum : bPONum - aPONum
+      } else if (sortBy === 'amount') {
+        aVal = parseFloat(a.grand_total || 0)
+        bVal = parseFloat(b.grand_total || 0)
+        result = sortOrder === 'asc' ? aVal - bVal : bVal - aVal
+      }
+
+      return result || 0
+    })
+
     setFilteredOrders(list)
-  }, [searchTerm, selectedStatus, purchaseOrders])
+  }, [searchTerm, selectedStatus, selectedPaymentStatus, purchaseOrders, sortBy, sortOrder])
 
   useEffect(() => {
     if (selectedPO) {
@@ -216,23 +257,101 @@ export default function PurchaseOrdersPage() {
                   </div>
                 </div>
 
-                {/* Status filters */}
-                <div className={`flex gap-1.5 px-3 py-2.5 flex-wrap flex-shrink-0 border-b ${isDark ? 'border-gray-700 bg-gray-800/50' : 'border-gray-100 bg-gray-50'}`}>
-                  {['all', 'draft', 'sent', 'received', 'partial', 'cancelled'].map(status => (
-                    <button
-                      key={status}
-                      onClick={() => setSelectedStatus(status)}
-                      className={`px-2.5 py-1 rounded-full text-xs font-semibold transition-all ${
-                        selectedStatus === status
-                          ? 'bg-teal-600 text-white shadow-sm'
-                          : isDark
-                            ? 'bg-gray-700 text-gray-400 hover:bg-gray-600'
-                            : 'bg-white text-gray-500 hover:bg-gray-100 border border-gray-200'
-                      }`}
-                    >
-                      {STATUS_LABELS[status] || status.charAt(0).toUpperCase() + status.slice(1)}
-                    </button>
-                  ))}
+                {/* Status & Payment filters + Sort */}
+                <div className={`flex flex-col gap-2 px-3 py-2.5 flex-shrink-0 border-b ${isDark ? 'border-gray-700 bg-gray-800/50' : 'border-gray-100 bg-gray-50'}`}>
+                  {/* PO Status filters */}
+                  <div className="flex gap-1.5 flex-wrap items-center">
+                    <span className={`text-xs font-semibold ${themeClasses.textSecondary}`}>Status:</span>
+                    {['all', 'draft', 'sent', 'received', 'partial', 'cancelled'].map(status => (
+                      <button
+                        key={status}
+                        onClick={() => setSelectedStatus(status)}
+                        className={`px-2.5 py-1 rounded-full text-xs font-semibold transition-all ${
+                          selectedStatus === status
+                            ? 'bg-teal-600 text-white shadow-sm'
+                            : isDark
+                              ? 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+                              : 'bg-white text-gray-500 hover:bg-gray-100 border border-gray-200'
+                        }`}
+                      >
+                        {STATUS_LABELS[status] || status.charAt(0).toUpperCase() + status.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Payment Status & Sort */}
+                  <div className="flex gap-2 flex-wrap items-center">
+                    <div className="flex gap-1.5 items-center">
+                      <span className={`text-xs font-semibold ${themeClasses.textSecondary}`}>Payment:</span>
+                      {['all', 'paid', 'partial', 'unpaid'].map(status => (
+                        <button
+                          key={status}
+                          onClick={() => setSelectedPaymentStatus(status)}
+                          className={`px-2.5 py-1 rounded-full text-xs font-semibold transition-all ${
+                            selectedPaymentStatus === status
+                              ? 'bg-blue-600 text-white shadow-sm'
+                              : isDark
+                                ? 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+                                : 'bg-white text-gray-500 hover:bg-gray-100 border border-gray-200'
+                          }`}
+                        >
+                          {status.charAt(0).toUpperCase() + status.slice(1)}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Sort Menu */}
+                    <div className="relative ml-auto">
+                      <button
+                        onClick={() => setShowSortMenu(!showSortMenu)}
+                        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold transition-all ${
+                          showSortMenu
+                            ? isDark ? 'bg-gray-600 text-white' : 'bg-gray-200 text-gray-700'
+                            : isDark ? 'bg-gray-700 text-gray-400 hover:bg-gray-600' : 'bg-white text-gray-500 hover:bg-gray-100 border border-gray-200'
+                        }`}
+                      >
+                        <ArrowUpDown className="w-3.5 h-3.5" />
+                        <span>Sort</span>
+                      </button>
+
+                      {showSortMenu && (
+                        <div className={`absolute top-full right-0 mt-1 z-20 rounded-lg shadow-lg border overflow-hidden min-w-[180px] ${
+                          isDark ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'
+                        }`}>
+                          {[
+                            { value: 'date', label: 'Date (Newest)' },
+                            { value: 'po_number', label: 'PO Number' },
+                            { value: 'amount', label: 'Amount' },
+                          ].map(opt => (
+                            <button
+                              key={opt.value}
+                              onClick={() => {
+                                if (sortBy === opt.value) {
+                                  setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')
+                                } else {
+                                  setSortBy(opt.value)
+                                  setSortOrder('desc')
+                                }
+                                setShowSortMenu(false)
+                              }}
+                              className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium text-left transition-colors ${
+                                sortBy === opt.value
+                                  ? isDark ? 'bg-teal-900/40 text-teal-300' : 'bg-teal-50 text-teal-700'
+                                  : isDark ? 'hover:bg-gray-700 text-gray-200' : 'hover:bg-gray-50 text-gray-700'
+                              }`}
+                            >
+                              <span>{opt.label}</span>
+                              {sortBy === opt.value && (
+                                <span className="text-xs">
+                                  {sortOrder === 'desc' ? '↓' : '↑'}
+                                </span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
                 {/* PO list */}
@@ -256,6 +375,17 @@ export default function PurchaseOrdersPage() {
                       const dropdownOpen = statusDropdownId === po.id
                       const canToggle    = canManageStatus && (po.status === 'draft' || po.status === 'sent')
 
+                      // Get supplier name: from main supplier or from items if items have suppliers
+                      let supplierName = po.suppliers?.name
+                      if (!supplierName && po.purchase_order_items?.length > 0) {
+                        const uniqueSuppliers = [...new Set(po.purchase_order_items.map(item => item.suppliers?.name).filter(Boolean))]
+                        if (uniqueSuppliers.length === 1) {
+                          supplierName = uniqueSuppliers[0]
+                        } else if (uniqueSuppliers.length > 1) {
+                          supplierName = `${uniqueSuppliers.length} Suppliers`
+                        }
+                      }
+
                       return (
                         <motion.div
                           key={po.id} whileHover={{ x: 2 }}
@@ -271,21 +401,22 @@ export default function PurchaseOrdersPage() {
                           >
                             <div className="flex items-center justify-between mb-1">
                               <span className={`font-semibold text-sm ${themeClasses.textPrimary}`}>{po.po_number}</span>
-                              {canToggle ? (
-                                <button
-                                  onClick={e => { e.stopPropagation(); setStatusDropdownId(dropdownOpen ? null : po.id) }}
-                                  className={`flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full hover:opacity-80 ${s.badge}`}
-                                >
-                                  {STATUS_LABELS[po.status] || po.status.toUpperCase()}
-                                  <ChevronDown className="w-2.5 h-2.5" />
-                                </button>
-                              ) : (
+                              <div className="flex gap-1 items-center">
                                 <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${s.badge}`}>
                                   {STATUS_LABELS[po.status] || po.status.toUpperCase()}
                                 </span>
-                              )}
+                                <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                                  po.payment_status === 'paid'
+                                    ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300'
+                                    : po.payment_status === 'partial'
+                                      ? 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-300'
+                                      : 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300'
+                                }`}>
+                                  {po.payment_status ? po.payment_status.charAt(0).toUpperCase() + po.payment_status.slice(1) : 'Unpaid'}
+                                </span>
+                              </div>
                             </div>
-                            <p className={`text-xs ${themeClasses.textSecondary} truncate`}>{po.suppliers?.name}</p>
+                            <p className={`text-xs ${themeClasses.textSecondary} truncate`}>{supplierName || '—'}</p>
                             <div className="flex items-center justify-between mt-1">
                               <span className={`text-xs ${themeClasses.textSecondary}`}>
                                 {new Date(po.po_date).toLocaleDateString('en-PK')}
@@ -295,33 +426,6 @@ export default function PurchaseOrdersPage() {
                               </span>
                             </div>
                           </button>
-
-                          {dropdownOpen && (
-                            <div className={`absolute right-4 top-8 z-20 rounded-xl shadow-xl border overflow-hidden min-w-[150px] ${isDark ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`}>
-                              <div className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider border-b ${isDark ? 'text-gray-500 border-gray-700' : 'text-gray-400 border-gray-100'}`}>
-                                Change Status
-                              </div>
-                              {[
-                                { value: 'draft', label: 'Draft',     cls: 'text-gray-500' },
-                                { value: 'sent',  label: 'Confirmed', cls: 'text-blue-600' },
-                              ].map(opt => (
-                                <button
-                                  key={opt.value}
-                                  onClick={e => { e.stopPropagation(); quickStatusChange(po, opt.value, e); setStatusDropdownId(null) }}
-                                  disabled={po.status === opt.value}
-                                  className={`w-full flex items-center gap-2 px-3 py-2 text-sm font-medium text-left transition-colors ${
-                                    po.status === opt.value
-                                      ? isDark ? 'bg-gray-700/50 text-gray-500 cursor-default' : 'bg-gray-50 text-gray-400 cursor-default'
-                                      : isDark ? `hover:bg-gray-700 ${opt.cls}` : `hover:bg-gray-50 ${opt.cls}`
-                                  }`}
-                                >
-                                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${po.status === opt.value ? 'bg-current' : 'border border-current'}`} />
-                                  {opt.label}
-                                  {po.status === opt.value && <span className="ml-auto text-[10px] opacity-60">current</span>}
-                                </button>
-                              ))}
-                            </div>
-                          )}
                         </motion.div>
                       )
                     })

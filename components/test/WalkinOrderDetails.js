@@ -68,6 +68,9 @@ export default function WalkinOrderDetails({
   const [selectedCancelReason, setSelectedCancelReason] = useState('')
   const [customCancelReason, setCustomCancelReason] = useState('')
   const [isConverting, setIsConverting] = useState(false)
+  // Loading state for the two print buttons — guards against rapid double-clicks
+  const [isPrintingReceipt, setIsPrintingReceipt] = useState(false)
+  const [isPrintingToken, setIsPrintingToken] = useState(false)
   const router = useRouter()
   const permissions = usePermissions()
   const contentRef = useRef(null)
@@ -76,6 +79,8 @@ export default function WalkinOrderDetails({
   const fetchOrderIdRef = useRef(null)
 
   const handlePrintReceipt = async () => {
+    if (isPrintingReceipt) return
+    setIsPrintingReceipt(true)
     try {
       const user = authManager.getCurrentUser()
       if (!user?.id) { toast.error('User not logged in'); return }
@@ -148,10 +153,14 @@ export default function WalkinOrderDetails({
     } catch (error) {
       console.error('Print error:', error)
       toast.error(`Print failed: ${error.message}`)
+    } finally {
+      setIsPrintingReceipt(false)
     }
   }
 
   const handlePrintToken = async () => {
+    if (isPrintingToken) return
+    setIsPrintingToken(true)
     try {
       const user = authManager.getCurrentUser()
       if (!user?.id) { toast.error('User not logged in'); return }
@@ -215,6 +224,8 @@ export default function WalkinOrderDetails({
     } catch (error) {
       console.error('Kitchen token print error:', error)
       toast.error(`Print failed: ${error.message}`)
+    } finally {
+      setIsPrintingToken(false)
     }
   }
 
@@ -934,17 +945,27 @@ export default function WalkinOrderDetails({
           <div className="flex items-center gap-0.5 shrink-0">
               <button
                 onClick={handlePrintReceipt}
-                className="flex items-center gap-1 px-1.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap"
+                disabled={isPrintingReceipt}
+                className={`flex items-center gap-1 px-1.5 py-1.5 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap ${
+                  isPrintingReceipt
+                    ? 'bg-blue-400 cursor-not-allowed opacity-60'
+                    : 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800'
+                }`}
               >
-                <Printer className="w-3 h-3" />
-                Print
+                <Printer className={`w-3 h-3 ${isPrintingReceipt ? 'animate-pulse' : ''}`} />
+                {isPrintingReceipt ? 'Printing…' : 'Print'}
               </button>
               <button
                 onClick={handlePrintToken}
-                className="flex items-center gap-1 px-1.5 py-1.5 bg-orange-500 hover:bg-orange-600 active:bg-orange-700 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap"
+                disabled={isPrintingToken}
+                className={`flex items-center gap-1 px-1.5 py-1.5 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap ${
+                  isPrintingToken
+                    ? 'bg-orange-300 cursor-not-allowed opacity-60'
+                    : 'bg-orange-500 hover:bg-orange-600 active:bg-orange-700'
+                }`}
               >
-                <Printer className="w-3 h-3" />
-                Token
+                <Printer className={`w-3 h-3 ${isPrintingToken ? 'animate-pulse' : ''}`} />
+                {isPrintingToken ? 'Printing…' : 'Token'}
               </button>
               {/* Send Bill via WhatsApp (Customer Account only) */}
               <SendBillButton order={order} size="sm" />

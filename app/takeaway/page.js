@@ -942,6 +942,22 @@ export default function TakeawayPage() {
 
         if (updateError) throw updateError
 
+        // Optimistic local patch — sidebar removes/updates the card instantly
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('orderLocallyUpdated', {
+            detail: {
+              orderId: order.id,
+              patch: {
+                payment_method: paymentData.paymentMethod,
+                payment_status: isUnpaid ? 'Pending' : 'Paid',
+                amount_paid: (isComplimentary || isUnpaid) ? 0 : paymentData.newTotal,
+                total_amount: isComplimentary || isUnpaid ? order.total_amount : paymentData.newTotal,
+                ...(shouldComplete ? { order_status: 'Completed' } : {}),
+              },
+            },
+          }))
+        }
+
         console.log('✅ [Takeaway Payment] Payment updated in Supabase successfully')
       } else {
         console.log('📴 [Takeaway Payment] OFFLINE - Caching order update')
@@ -1092,6 +1108,17 @@ export default function TakeawayPage() {
             orderType: order.order_type,
           })
         }
+      } else if (paymentData.paymentMethod === 'Account' && order.customer_id) {
+        // OFFLINE: queue the Account ledger entry so syncPendingLedgerEntries replays it on reconnect
+        cacheManager.addPendingLedgerEntry({
+          type: 'debit',
+          customer_id: order.customer_id,
+          amount: paymentData.newTotal,
+          order_id: order.id,
+          description: `Order #${order.order_number} - ${order.order_type?.toUpperCase() || 'TAKEAWAY'}`,
+          notes: 'Queued offline — will sync on reconnect',
+        })
+        console.log('💳 [Takeaway Payment] Offline — Account ledger queued for sync')
       }
 
       // Payment-only: update selectedOrder in state and return — no modal, stays in order details
@@ -1485,6 +1512,13 @@ export default function TakeawayPage() {
 
       // Set order data and show modal/auto-redirect based on settings
       triggerOrderSuccess(orderData, skipAutoPrint, forceModal)
+
+      // Optimistic local patch — removes the card from the sidebar instantly
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('orderLocallyUpdated', {
+          detail: { orderId: order.id, patch: { order_status: 'Completed' } },
+        }))
+      }
 
       // Mark order as completed (this happens in background, modal stays visible)
       handleOrderStatusUpdate(order, 'Completed').catch(err => {

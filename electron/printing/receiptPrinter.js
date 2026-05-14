@@ -12,42 +12,78 @@ const { generateReceiptESCPOS } = require('./usbPrinter');
  */
 
 // Send a raw ESC/POS buffer to an IP thermal printer via TCP
+//
+// Correctness contract (replaces the old fire-and-forget 300ms-timer impl):
+//   1. Connect to ip:port.
+//   2. socket.write(buffer, cb) — cb fires only after the kernel has accepted
+//      every byte. For large receipts (logo + QR images) this can take well
+//      over 300ms on slow networks; the old impl destroyed the socket too
+//      early and printed truncated receipts.
+//   3. socket.end() — sends FIN, the canonical "end of job" signal for port
+//      9100 raw printing. The kernel drains any remaining data first.
+//   4. Resolve on 'close' (clean shutdown) or on an ECONNRESET/EPIPE that
+//      arrives *after* the write completed — many thermal printers send RST
+//      the instant they're done consuming the job; that's success, not failure.
+//   5. If the printer keeps the socket open and we hit the idle timeout after
+//      the write was acknowledged, treat as success and force-close ourselves.
+//   6. Anything before the write callback fires is a real failure (reject).
 function sendRawToIPPrinter(ip, port, buffer) {
   return new Promise((resolve, reject) => {
-    // Prevent double-settling: once write() succeeds the data is en-route to
-    // the printer. Some printers close (RST) immediately after receiving, which
-    // would trigger socket 'error' with ECONNRESET and falsely reject an already-
-    // successful print. `settled` ensures only the first outcome wins.
+    let writeDone = false;
     let settled = false;
     const settle = (fn, val) => { if (!settled) { settled = true; fn(val); } };
 
     const socket = new net.Socket();
-    socket.setTimeout(10000);
+    // Idle timeout — applies to inactivity, not total duration. 15s gives slow
+    // networks + heavy image payloads enough headroom.
+    socket.setTimeout(15000);
 
     socket.connect(parseInt(port), ip, () => {
-      // Hand data to the kernel synchronously. For small ESC/POS buffers this
-      // effectively delivers the job to the printer.
-      socket.write(buffer);
-      // Mark settled IMMEDIATELY after write() is called — before any async
-      // event (ECONNRESET, error) can fire. Thermal printers often send RST
-      // right after receiving data, which can race with the write callback and
-      // cause a false failure. Setting settled=true here guarantees that any
-      // subsequent socket error is ignored once the data is in-flight.
-      settled = true;
-      setTimeout(() => {
-        socket.destroy();
-        resolve({ success: true });
-      }, 300);
+      console.log(`🔌 [IP Receipt] Connected to ${ip}:${port}, writing ${buffer.length} bytes`);
+      socket.write(buffer, (err) => {
+        if (err) {
+          socket.destroy();
+          return settle(reject, err);
+        }
+        writeDone = true;
+        console.log(`✅ [IP Receipt] ${buffer.length} bytes flushed to kernel`);
+        // Graceful close — kernel sends FIN after the send buffer drains.
+        socket.end();
+      });
+    });
+
+    socket.on('close', () => {
+      if (writeDone) {
+        settle(resolve, { success: true });
+      } else {
+        settle(reject, new Error('Connection closed before data was sent'));
+      }
     });
 
     socket.on('error', (err) => {
+      // Printer-side RST after consuming the job is the common pattern for
+      // port-9100 thermal printers. If our write already completed, the data
+      // is already on paper — ignore the RST.
+      if (writeDone && (err.code === 'ECONNRESET' || err.code === 'EPIPE')) {
+        console.log(`ℹ️  [IP Receipt] Printer closed connection (${err.code}) after write — treating as success`);
+        socket.destroy();
+        return settle(resolve, { success: true });
+      }
+      console.error('❌ [IP Receipt] Socket error:', err.code || err.message);
       socket.destroy();
       settle(reject, err);
     });
 
     socket.on('timeout', () => {
+      // Some printers keep the connection open indefinitely after the job.
+      // If the write already completed, the print itself succeeded.
+      if (writeDone) {
+        console.log('ℹ️  [IP Receipt] Printer kept socket open after write — forcing close');
+        socket.destroy();
+        return settle(resolve, { success: true });
+      }
       socket.destroy();
-      settle(reject, new Error('Connection timeout after 10s'));
+      settle(reject, new Error(`No activity from ${ip}:${port} for 15s`));
     });
   });
 }

@@ -974,6 +974,19 @@ const processOrder = async () => {
       // Update customer ledger entry if payment method is Account with a customer
       // NOTE: "Unpaid" means pay-later in cash - do NOT add to customer ledger
       if (selectedPaymentMethod?.id === 'account' && orderData.customer?.id) {
+        if (!cacheManager.checkOnlineStatus()) {
+          // OFFLINE: queue the ledger update — syncPendingLedgerEntries will replay on reconnect.
+          // Server-side dedup-by-order_id keeps this safe even if a prior debit row exists.
+          cacheManager.addPendingLedgerEntry({
+            type: 'debit',
+            customer_id: orderData.customer.id,
+            amount: orderData.total,
+            order_id: orderData.existingOrderId,
+            description: `Order #${orderData.existingOrderNumber} - ${orderData.orderType?.toUpperCase() || 'WALKIN'} (Modified)`,
+            notes: `Order modified offline - Updated total: Rs ${orderData.total}`,
+          })
+          console.log('💳 [Payment] Offline — modify ledger queued for sync')
+        } else {
         try {
           console.log('💳 [Payment] Updating customer ledger for modified order')
 
@@ -1040,6 +1053,7 @@ const processOrder = async () => {
           console.error('❌ [Payment] Failed to update customer ledger:', ledgerError.message)
           // Don't fail the order if ledger update fails
         }
+        } // end else (online ledger branch)
       }
 
       // Order history + order_item_changes were written atomically inside
@@ -1272,46 +1286,63 @@ const processOrder = async () => {
 
     // Auto-create expense entry for complimentary orders (food cost is a real expense)
     if (selectedPaymentMethod?.id === 'complimentary' && orderData.total > 0) {
-      try {
-        const finalOrderNumber = orderData.isModifying ? orderData.existingOrderNumber : orderNumber
+      const finalOrderNumber = orderData.isModifying ? orderData.existingOrderNumber : orderNumber
+      const expenseDescription = `Complimentary Order #${finalOrderNumber} - ${complimentaryReason}`
+      const expensePayload = {
+        user_id: currentUser.id,
+        amount: orderData.total,
+        total_amount: orderData.total,
+        tax_rate: 0,
+        tax_amount: 0,
+        payment_method: 'Unpaid',
+        description: expenseDescription,
+        expense_date: new Date().toISOString().split('T')[0],
+        expense_time: new Date().toTimeString().split(' ')[0],
+      }
 
-        // Find or create "Complimentary Orders" expense category
-        let compCategoryId = null
-        const { data: existingCat } = await supabase
-          .from('expense_categories')
-          .select('id')
-          .eq('user_id', currentUser.id)
-          .eq('name', 'Complimentary Orders')
-          .maybeSingle()
-
-        if (existingCat) {
-          compCategoryId = existingCat.id
-        } else {
-          const { data: newCat } = await supabase
-            .from('expense_categories')
-            .insert({ user_id: currentUser.id, name: 'Complimentary Orders', icon: 'Gift', color: '#ec4899' })
-            .select('id')
-            .single()
-          if (newCat) compCategoryId = newCat.id
-        }
-
-        await supabase.from('expenses').insert({
-          user_id: currentUser.id,
-          amount: orderData.total,
-          total_amount: orderData.total,
-          tax_rate: 0,
-          tax_amount: 0,
-          payment_method: 'Unpaid',
-          category_id: compCategoryId,
-          description: `Complimentary Order #${finalOrderNumber} - ${complimentaryReason}`,
-          expense_date: new Date().toISOString().split('T')[0],
-          expense_time: new Date().toTimeString().split(' ')[0]
+      if (!cacheManager.checkOnlineStatus()) {
+        // OFFLINE: queue the expense (with category resolution deferred to sync time)
+        cacheManager.addPendingExpenseEntry({
+          ...expensePayload,
+          needs_complimentary_category: true,
         })
+        console.log(`🎁 Complimentary expense queued offline for Order #${finalOrderNumber}: Rs ${orderData.total}`)
+      } else {
+        try {
+          // Find or create "Complimentary Orders" expense category
+          let compCategoryId = null
+          const { data: existingCat } = await supabase
+            .from('expense_categories')
+            .select('id')
+            .eq('user_id', currentUser.id)
+            .eq('name', 'Complimentary Orders')
+            .maybeSingle()
 
-        console.log(`🎁 Complimentary expense created for Order #${finalOrderNumber}: Rs ${orderData.total}`)
-      } catch (expErr) {
-        console.error('Failed to create complimentary expense:', expErr)
-        // Don't fail the order if expense creation fails
+          if (existingCat) {
+            compCategoryId = existingCat.id
+          } else {
+            const { data: newCat } = await supabase
+              .from('expense_categories')
+              .insert({ user_id: currentUser.id, name: 'Complimentary Orders', icon: 'Gift', color: '#ec4899' })
+              .select('id')
+              .single()
+            if (newCat) compCategoryId = newCat.id
+          }
+
+          await supabase.from('expenses').insert({
+            ...expensePayload,
+            category_id: compCategoryId,
+          })
+
+          console.log(`🎁 Complimentary expense created for Order #${finalOrderNumber}: Rs ${orderData.total}`)
+        } catch (expErr) {
+          console.error('Failed to create complimentary expense — queuing for retry:', expErr)
+          // Network blip mid-write — queue so it doesn't get lost
+          cacheManager.addPendingExpenseEntry({
+            ...expensePayload,
+            needs_complimentary_category: true,
+          })
+        }
       }
     }
 
@@ -1516,6 +1547,8 @@ const processOrder = async () => {
         show_logo_on_receipt: showLogo,
         show_business_name_on_receipt: showBusinessName,
         show_powered_by_airoxlab: showPoweredBy,
+        receipt_review_message: userProfile?.receipt_review_message || user?.receipt_review_message || '',
+        receipt_footer_message: userProfile?.receipt_footer_message || user?.receipt_footer_message || '',
         cashier_name: cashierId ? cashierName : null,
       }
     } catch (error) {
@@ -1539,6 +1572,8 @@ const processOrder = async () => {
         show_logo_on_receipt: cachedProfile.show_logo_on_receipt !== false,
         show_business_name_on_receipt: cachedProfile.show_business_name_on_receipt !== false,
         show_powered_by_airoxlab: cachedProfile.show_powered_by_airoxlab !== false,
+        receipt_review_message: cachedProfile.receipt_review_message || '',
+        receipt_footer_message: cachedProfile.receipt_footer_message || '',
       }
     }
   }

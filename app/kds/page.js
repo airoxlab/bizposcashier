@@ -78,6 +78,9 @@ export default function KDSPage() {
   const [kdsOrderTimeoutMinutes, setKdsOrderTimeoutMinutes] = useState(null)
   const [kdsTimeoutSoundEnabled, setKdsTimeoutSoundEnabled] = useState(false)
   const [timedOutOrderIds, setTimedOutOrderIds] = useState(new Set())
+  // Orders currently printing — used to disable per-order Print buttons so
+  // rapid double-clicks don't fire multiple kitchen-token print jobs.
+  const [printingOrderIds, setPrintingOrderIds] = useState(new Set())
   const audioRef = useRef(null)
   const alertAudioRef = useRef(null)
   const lastSoundTimeRef = useRef(0)
@@ -824,6 +827,17 @@ export default function KDSPage() {
       e.stopPropagation()
     }
 
+    // Guard against rapid double-clicks: same order can't queue twice
+    if (order?.id && printingOrderIds.has(order.id)) return
+
+    if (order?.id) {
+      setPrintingOrderIds(prev => {
+        const next = new Set(prev)
+        next.add(order.id)
+        return next
+      })
+    }
+
     try {
       // Check if we're in Electron environment
       if (!printerManager.isElectron()) {
@@ -992,6 +1006,14 @@ export default function KDSPage() {
     } catch (error) {
       console.error('❌ Error printing docket:', error)
       notify.error(`Error printing docket: ${error.message}`)
+    } finally {
+      if (order?.id) {
+        setPrintingOrderIds(prev => {
+          const next = new Set(prev)
+          next.delete(order.id)
+          return next
+        })
+      }
     }
   }
 
@@ -1119,12 +1141,13 @@ export default function KDSPage() {
         <div className="flex gap-1.5">
           <button
             onClick={(e) => printDocket(order, e)}
+            disabled={printingOrderIds.has(order.id)}
             className={`flex-1 py-1.5 rounded text-xs font-medium flex items-center justify-center gap-1 ${
               isDark ? 'bg-gray-700 hover:bg-gray-600 text-gray-200' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
-            }`}
+            } ${printingOrderIds.has(order.id) ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
-            <Printer className="w-3.5 h-3.5" />
-            Print
+            <Printer className={`w-3.5 h-3.5 ${printingOrderIds.has(order.id) ? 'animate-pulse' : ''}`} />
+            {printingOrderIds.has(order.id) ? 'Printing…' : 'Print'}
           </button>
           {config.nextStatus && (
             <button
@@ -1145,7 +1168,7 @@ export default function KDSPage() {
   }
 
   // Status Column Component for Column View
-  const StatusColumn = ({ title, icon: Icon, status, orders, config, onOrderClick, onStatusUpdate, onPrintDocket, classes, isDark, updatedIds, changesMap, timedOutIds }) => {
+  const StatusColumn = ({ title, icon: Icon, status, orders, config, onOrderClick, onStatusUpdate, onPrintDocket, classes, isDark, updatedIds, changesMap, timedOutIds, printingIds }) => {
     const updatedCount = updatedIds ? orders.filter(o => updatedIds.has(o.id)).length : 0
 
     return (
@@ -1345,12 +1368,13 @@ export default function KDSPage() {
                   <div className="flex gap-1.5">
                     <button
                       onClick={(e) => onPrintDocket(order, e)}
+                      disabled={printingIds?.has(order.id)}
                       className={`flex-1 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 ${
                         isDark ? 'bg-gray-700 hover:bg-gray-600 text-gray-200' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
-                      }`}
+                      } ${printingIds?.has(order.id) ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
-                      <Printer className="w-3 h-3" />
-                      Print
+                      <Printer className={`w-3 h-3 ${printingIds?.has(order.id) ? 'animate-pulse' : ''}`} />
+                      {printingIds?.has(order.id) ? 'Printing…' : 'Print'}
                     </button>
                     {config.nextStatus && (
                       <button
@@ -1568,6 +1592,7 @@ export default function KDSPage() {
               }}
               onStatusUpdate={updateOrderStatus}
               onPrintDocket={printDocket}
+              printingIds={printingOrderIds}
               classes={classes}
               isDark={isDark}
               updatedIds={updatedOrderIds}
@@ -1588,6 +1613,7 @@ export default function KDSPage() {
               }}
               onStatusUpdate={updateOrderStatus}
               onPrintDocket={printDocket}
+              printingIds={printingOrderIds}
               classes={classes}
               isDark={isDark}
               updatedIds={updatedOrderIds}
@@ -1608,6 +1634,7 @@ export default function KDSPage() {
               }}
               onStatusUpdate={updateOrderStatus}
               onPrintDocket={printDocket}
+              printingIds={printingOrderIds}
               classes={classes}
               isDark={isDark}
               updatedIds={updatedOrderIds}
@@ -1628,6 +1655,7 @@ export default function KDSPage() {
               }}
               onStatusUpdate={updateOrderStatus}
               onPrintDocket={printDocket}
+              printingIds={printingOrderIds}
               classes={classes}
               isDark={isDark}
               updatedIds={updatedOrderIds}
@@ -1851,14 +1879,15 @@ export default function KDSPage() {
                   {/* Print Docket Button - Always show */}
                   <button
                     onClick={() => printDocket(selectedOrder)}
+                    disabled={printingOrderIds.has(selectedOrder.id)}
                     className={`px-6 py-3 rounded-xl font-semibold shadow-lg flex items-center ${
                       isDark
                         ? 'bg-gray-700 hover:bg-gray-600 text-white'
                         : 'bg-gray-200 hover:bg-gray-300 text-gray-800'
-                    }`}
+                    } ${printingOrderIds.has(selectedOrder.id) ? 'opacity-50 cursor-not-allowed' : ''}`}
                   >
-                    <Printer className="w-5 h-5 mr-2" />
-                    Print Docket
+                    <Printer className={`w-5 h-5 mr-2 ${printingOrderIds.has(selectedOrder.id) ? 'animate-pulse' : ''}`} />
+                    {printingOrderIds.has(selectedOrder.id) ? 'Printing…' : 'Print Docket'}
                   </button>
 
                   {/* Status Action Button - Only show if there's a next status */}

@@ -42,6 +42,7 @@ const api = {
   
   // Printer methods
   printerTestConnection: (data) => ipcRenderer.invoke('printer-test-connection', data),
+  printerCheckConnection: (printerConfig) => ipcRenderer.invoke('printer-check-connection', printerConfig),
   printerPrintReceipt: (data) => ipcRenderer.invoke('printer-print-receipt', data),
   printerPrintKitchen: (data) => ipcRenderer.invoke('printer-print-kitchen', data),  // Added
   printerTestKitchen: (data) => ipcRenderer.invoke('printer-test-kitchen', data),      // Added

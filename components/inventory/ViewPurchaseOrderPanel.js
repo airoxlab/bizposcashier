@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useEffect } from 'react'
-import { ArrowLeft, Download, Trash2, Loader2, Edit2, Package, CreditCard, Check, X, AlertCircle, CheckCircle, RotateCcw } from 'lucide-react'
+import { ArrowLeft, Download, Trash2, Loader2, Edit2, Package, CreditCard, Check, X, AlertCircle, RotateCcw } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { authManager } from '../../lib/authManager'
 import { permissionManager } from '../../lib/permissionManager'
@@ -233,18 +233,6 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
             <Download className="w-4 h-4" /> PDF
           </button>
 
-          {/* Draft → Confirm (sent) */}
-          {purchaseOrder.status === 'draft' && canChangeStatus && (
-            <button
-              onClick={() => handleStatusChange('sent')}
-              disabled={statusChanging}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white"
-            >
-              {statusChanging ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
-              Confirm Order
-            </button>
-          )}
-
           {/* Sent → Revert to Draft */}
           {purchaseOrder.status === 'sent' && canChangeStatus && (
             <button
@@ -267,6 +255,12 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
             <button onClick={() => setShowPaymentModal(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white">
               <CreditCard className="w-4 h-4" /> Record Payment
             </button>
+          )}
+
+          {purchaseOrder.payment_status === 'paid' && (
+            <div className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300">
+              <Check className="w-4 h-4" /> Fully Paid
+            </div>
           )}
 
           {canReceiveStock && (

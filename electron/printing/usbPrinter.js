@@ -63,6 +63,17 @@ function leftText(str) {
   return text(str + '\n');
 }
 
+// Helper: pad a line out to PAPER_WIDTH so it spans the same horizontal
+// width as leftRight() rows. Required when the surrounding section runs
+// under inherited CENTER alignment — a short un-padded line would re-center
+// itself and visually shift relative to leftRight rows above/below.
+function padToWidth(str) {
+  if (str.length >= PAPER_WIDTH) {
+    return text(str.substring(0, PAPER_WIDTH) + '\n');
+  }
+  return text(str + ' '.repeat(PAPER_WIDTH - str.length) + '\n');
+}
+
 // Helper: Wrap long text across multiple lines
 function wrapText(str, indent = 0) {
   const buffers = [];
@@ -344,12 +355,11 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
     for (const item of orderData.cart) {
 
       if (item.isDeal) {
-        const dealName = `${item.quantity}x ${item.dealName}`;
-        const price = `Rs ${item.totalPrice.toFixed(0)}`;
+        const dealName = `${item.quantity}x ${item.dealName || 'Deal'}`;
+        const price = `Rs ${parseFloat(item.totalPrice || 0).toFixed(0)}`;
         commands.push(leftRight(dealName, price));
 
         if (item.dealProducts && item.dealProducts.length > 0) {
-          commands.push(CMD.ALIGN_LEFT);
           for (const product of item.dealProducts) {
             let productLine = `  - ${product.quantity}x ${product.name}`;
             // Check for variant or flavor
@@ -360,7 +370,10 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
             if (variantName) {
               productLine += ` - ${variantName}`;
             }
-            commands.push(leftText(productLine));
+            // Pad to PAPER_WIDTH so the sub-item lines occupy the same horizontal
+            // span as the leftRight rows above/below and remain visually aligned
+            // under the printer's inherited alignment state (no ALIGN_LEFT toggle).
+            commands.push(padToWidth(productLine));
           }
         }
       } else {
@@ -499,6 +512,9 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
         const qrData = await imageToEscPos(assets.qr, 200);
         if (qrData) {
           commands.push(qrData);
+          // Breathing room below QR before the review message / hashtags
+          commands.push(CMD.FEED);
+          commands.push(CMD.FEED);
         }
       } catch (e) {
         console.error('QR processing error:', e.message);
@@ -516,7 +532,11 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
     const hashtag1 = userProfile?.hashtag1 || '';
     const hashtag2 = userProfile?.hashtag2 || '';
     if (hashtag1 || hashtag2) {
+      // Always insert a blank line above hashtags so they aren't crammed against
+      // whatever printed above (QR / review message / etc.).
+      commands.push(CMD.FEED);
       const hashtagLine = [hashtag1, hashtag2].filter(Boolean).join(' ');
+      commands.push(CMD.ALIGN_CENTER);
       commands.push(CMD.BOLD_ON);
       commands.push(text(hashtagLine + '\n'));
       commands.push(CMD.BOLD_OFF);
@@ -528,6 +548,8 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
   // ========================================
   const footerMsg = userProfile?.receipt_footer_message;
   if (footerMsg) {
+    // Blank line for visual separation from whatever printed above
+    commands.push(CMD.FEED);
     commands.push(CMD.ALIGN_CENTER);
     commands.push(text(footerMsg + '\n'));
   }
@@ -626,35 +648,44 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
   // ========================================
 
   // Helper to print a single item line (deal or regular)
+  //
+  // Critical: do NOT toggle ALIGN_LEFT here. The items section enters under
+  // inherited CENTER alignment from the "ITEMS"/"CHANGES" heading, which gives
+  // a small symmetric margin on the 80mm (48-char) roll. The column header
+  // ("Item Name / Qty") and the leftRight item rows are both PAPER_WIDTH wide
+  // and stay visually aligned under that CENTER state. Sub-item and instruction
+  // lines must be padded to PAPER_WIDTH for the same reason — otherwise the
+  // printer re-centers them and they shift relative to the rows above.
   const printItem = (item, prefix) => {
     const maxNameLength = PAPER_WIDTH - 6;
+    // Trim — DB-stored names sometimes carry leading/trailing whitespace, which
+    // would shift the printed name right relative to the "Item Name" header.
     if (item.isDeal) {
-      let itemName = item.name;
+      let itemName = (item.name || 'Deal').trim();
       if (itemName.length > maxNameLength) itemName = itemName.substring(0, maxNameLength);
-      commands.push(CMD.ALIGN_LEFT);
-      commands.push(leftRight(`${prefix}${itemName}`, item.quantity.toString()));
+      commands.push(leftRight(`${prefix}${itemName}`, String(item.quantity)));
       if (item.dealProducts && item.dealProducts.length > 0) {
         for (const product of item.dealProducts) {
           const variantName = product.variant ||
             (product.flavor ?
               (typeof product.flavor === 'object' ? (product.flavor.flavor_name || product.flavor.name) : product.flavor)
               : null);
-          let productLine = `  ${product.quantity}x ${product.name}`;
-          if (variantName) productLine += ` - ${variantName}`;
-          commands.push(leftText(productLine));
+          const cleanName = (product.name || '').trim();
+          let productLine = `  ${product.quantity}x ${cleanName}`;
+          if (variantName) productLine += ` - ${String(variantName).trim()}`;
+          commands.push(padToWidth(productLine));
         }
       }
       if (item.instructions) {
-        commands.push(leftText(`  * ${item.instructions}`));
+        commands.push(padToWidth(`  * ${String(item.instructions).trim()}`));
       }
     } else {
-      let itemName = item.name;
-      if (item.size) itemName = `${item.name} (${item.size})`;
+      let itemName = (item.name || '').trim();
+      if (item.size) itemName = `${itemName} (${String(item.size).trim()})`;
       if (itemName.length > maxNameLength) itemName = itemName.substring(0, maxNameLength);
-      commands.push(CMD.ALIGN_LEFT);
-      commands.push(leftRight(`${prefix}${itemName}`, item.quantity.toString()));
+      commands.push(leftRight(`${prefix}${itemName}`, String(item.quantity)));
       if (item.instructions) {
-        commands.push(leftText(`  * ${item.instructions}`));
+        commands.push(padToWidth(`  * ${String(item.instructions).trim()}`));
       }
     }
   };
@@ -701,7 +732,6 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
         let itemName = item.isDeal ? item.name : (item.size ? `${item.name} (${item.size})` : item.name);
         const maxNameLength = PAPER_WIDTH - 6;
         if (itemName.length > maxNameLength) itemName = itemName.substring(0, maxNameLength);
-        commands.push(CMD.ALIGN_LEFT);
         commands.push(leftRight(itemName, `${item.oldQuantity} > ${item.newQuantity}`));
       }
     }
@@ -726,12 +756,17 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
     commands.push(text('RUNNING ORDER\n'));
     commands.push(CMD.BOLD_OFF);
     commands.push(drawLine('-'));
+    // Anchor alignment for the column header + item rows. Both are 42-char
+    // leftRight strings; under the same alignment they share an identical
+    // left edge so item names sit directly below "Item Name".
+    commands.push(CMD.ALIGN_CENTER);
     commands.push(leftRight('Item Name', 'Qty'));
     commands.push(drawLine('-'));
 
     // Print all current items (exclude removed ones)
     const currentItems = orderData.items.filter(i => i.changeType !== 'removed');
     for (const item of currentItems) {
+      commands.push(CMD.ALIGN_CENTER);
       printItem(item, '');
     }
 
@@ -744,11 +779,14 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
     commands.push(CMD.BOLD_OFF);
     commands.push(drawLine('-'));
 
+    // Anchor alignment for the column header + item rows.
+    commands.push(CMD.ALIGN_CENTER);
     commands.push(leftRight('Item Name', 'Qty'));
     commands.push(drawLine('-'));
 
     if (orderData.items && orderData.items.length > 0) {
       for (const item of orderData.items) {
+        commands.push(CMD.ALIGN_CENTER);
         printItem(item, '');
       }
     } else {

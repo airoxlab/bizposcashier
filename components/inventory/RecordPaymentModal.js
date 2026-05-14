@@ -128,6 +128,22 @@ export default function RecordPaymentModal({ isOpen, onClose, purchaseOrder, onP
 
       // Balance deduction is handled automatically by the
       // auto_debit_payment_account_from_supplier_payment trigger on INSERT.
+
+      // Get all payments for this PO to update payment status
+      const { data: payments } = await supabase
+        .from('supplier_payments')
+        .select('amount_paid')
+        .eq('purchase_order_id', purchaseOrder.id)
+
+      const totalPaid = (payments || []).reduce((sum, p) => sum + (p.amount_paid || 0), 0)
+      const newPaymentStatus = totalPaid >= purchaseOrder.grand_total ? 'paid' : totalPaid > 0 ? 'partial' : 'unpaid'
+
+      // Update the purchase order payment status
+      await supabase
+        .from('purchase_orders')
+        .update({ payment_status: newPaymentStatus })
+        .eq('id', purchaseOrder.id)
+
       notify.success(`Payment of Rs. ${amount.toFixed(2)} recorded`)
       onPaymentRecorded?.()
       onClose()

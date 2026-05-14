@@ -354,10 +354,25 @@ export default function WalkinOrdersSidebar({
       }
     }
 
+    // Optimistic local patch — applied instantly, no Supabase round-trip needed.
+    // Order pages dispatch this event right after a successful payment/complete
+    // so the card updates (or disappears) before fetchPendingOrders re-fetches.
+    const PENDING_STATUSES = ['Pending', 'Preparing', 'Ready', 'Dispatched']
+    const handleLocalUpdate = (event) => {
+      const { orderId, patch } = event.detail || {}
+      if (!orderId || !patch) return
+      setOrders(prev => prev
+        .map(o => o.id === orderId ? { ...o, ...patch } : o)
+        .filter(o => PENDING_STATUSES.includes(o.order_status))
+      )
+    }
+
     window.addEventListener('ordersUpdated', handleOrdersUpdated)
+    window.addEventListener('orderLocallyUpdated', handleLocalUpdate)
 
     return () => {
       window.removeEventListener('ordersUpdated', handleOrdersUpdated)
+      window.removeEventListener('orderLocallyUpdated', handleLocalUpdate)
     }
   }, [effectiveOrderType])
 
