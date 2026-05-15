@@ -263,17 +263,32 @@ function CreateReturnPanel({ user, onClose, onCreated }) {
     setLoadingItems(true)
     setStep(2)
     setSelectedPO(po)
-    const { data } = await supabase
-      .from('purchase_order_items')
-      .select('id, inventory_item_id, quantity, received_quantity, cost_per_unit, inventory_items(id, name, sku, units(abbreviation))')
-      .eq('purchase_order_id', po.id)
-      .gt('received_quantity', 0)
+    const [itemsRes, returnsRes] = await Promise.all([
+      supabase
+        .from('purchase_order_items')
+        .select('id, inventory_item_id, quantity, received_quantity, cost_per_unit, inventory_items(id, name, sku, units(abbreviation))')
+        .eq('purchase_order_id', po.id)
+        .gt('received_quantity', 0),
+      // Quantities already returned against this PO (prevents over-returning)
+      supabase
+        .from('purchase_return_items')
+        .select('inventory_item_id, quantity, purchase_returns!inner(purchase_order_id)')
+        .eq('purchase_returns.purchase_order_id', po.id),
+    ])
+    const returnedMap = {}
+    ;(returnsRes.data || []).forEach(r => {
+      returnedMap[r.inventory_item_id] = (returnedMap[r.inventory_item_id] || 0) + (parseFloat(r.quantity) || 0)
+    })
     setPoItems(
-      (data || []).map(i => ({
-        ...i,
-        return_qty: String(i.received_quantity || 0),
-        checked: true,
-      }))
+      (itemsRes.data || [])
+        .map(i => {
+          const returnable = Math.max(
+            0,
+            (parseFloat(i.received_quantity) || 0) - (returnedMap[i.inventory_item_id] || 0)
+          )
+          return { ...i, returnable, return_qty: String(returnable), checked: returnable > 0 }
+        })
+        .filter(i => i.returnable > 0)
     )
     setLoadingItems(false)
   }
@@ -301,7 +316,7 @@ function CreateReturnPanel({ user, onClose, onCreated }) {
     if (activeItems.length === 0) { notify.error('Select at least one item with a return quantity'); return }
     for (const i of activeItems) {
       const rq  = parseFloat(i.return_qty)
-      const max = parseFloat(i.received_quantity)
+      const max = parseFloat(i.returnable)
       if (!rq || rq <= 0) { notify.error(`Enter a valid qty for ${i.inventory_items?.name}`); return }
       if (rq > max) { notify.error(`${i.inventory_items?.name}: max returnable is ${max}`); return }
     }
@@ -460,7 +475,7 @@ function CreateReturnPanel({ user, onClose, onCreated }) {
                     <tr className={`border-b ${isDark ? 'border-gray-700' : 'border-gray-200'}`}>
                       <th className="w-10 px-3 py-2.5"></th>
                       <th className={`text-left px-3 py-2.5 text-xs font-semibold uppercase tracking-wide ${themeClasses.textSecondary}`}>Item</th>
-                      <th className={`text-center px-3 py-2.5 text-xs font-semibold uppercase tracking-wide ${themeClasses.textSecondary} w-28`}>Received</th>
+                      <th className={`text-center px-3 py-2.5 text-xs font-semibold uppercase tracking-wide ${themeClasses.textSecondary} w-28`}>Returnable</th>
                       <th className={`text-center px-3 py-2.5 text-xs font-semibold uppercase tracking-wide ${themeClasses.textSecondary} w-32`}>Return Qty</th>
                       <th className={`text-right px-5 py-2.5 text-xs font-semibold uppercase tracking-wide ${themeClasses.textSecondary} w-28`}>Est. Value</th>
                     </tr>
@@ -494,11 +509,11 @@ function CreateReturnPanel({ user, onClose, onCreated }) {
                             </p>
                           </td>
                           <td className={`px-3 py-3 text-center text-sm ${themeClasses.textSecondary}`}>
-                            {item.received_quantity}&nbsp;{unit}
+                            {item.returnable}&nbsp;{unit}
                           </td>
                           <td className="px-3 py-3 text-center">
                             <input
-                              type="number" step="0.01" min="0" max={item.received_quantity}
+                              type="number" step="0.01" min="0" max={item.returnable}
                               value={item.return_qty}
                               onChange={e => setQty(idx, e.target.value)}
                               onClick={() => setPoItems(p => p.map((i, n) => n === idx ? { ...i, checked: true } : i))}

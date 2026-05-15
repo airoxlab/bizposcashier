@@ -46,6 +46,11 @@ if (isDev) {
 // Configure auto-updater logging
 autoUpdater.logger = log;
 autoUpdater.logger.transports.file.level = 'info';
+// Do NOT download automatically — a new release only downloads when the
+// cashier clicks "Download" in the banner, so it never competes for bandwidth
+// during urgent work. Once downloaded, install on quit as a fallback.
+autoUpdater.autoDownload = false;
+autoUpdater.autoInstallOnAppQuit = true;
 log.info('App starting...');
 
 // Import handlers
@@ -371,8 +376,17 @@ app.whenReady().then(() => {
     return { path: filePath, name, type };
   });
 
-  // Update check is now manual from Settings > Updates page
-  // No automatic check on startup to avoid timing issues
+  // Auto-update: check once on startup. The renderer's update banner decides
+  // what happens next — it auto-downloads only if the user enabled "Automatic
+  // Updates" in Settings, otherwise it waits for a "Download" click. The delay
+  // lets the renderer mount its update listeners before the check runs.
+  if (!isDev && mainWindow) {
+    mainWindow.webContents.once('did-finish-load', () => {
+      setTimeout(() => {
+        autoUpdater.checkForUpdates().catch(err => log.error('Startup update check failed:', err));
+      }, 8000);
+    });
+  }
 
   // Register kitchen token printer - supports both USB and IP
   ipcMain.handle('print-kitchen-token', async (event, { orderData, userProfile, printerConfig }) => {

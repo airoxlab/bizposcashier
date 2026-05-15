@@ -116,6 +116,33 @@ export default function LedgersPage() {
     return { ...supplier, balance, transactions: supplierLedger.length }
   })
 
+  // Per-entry cumulative running balance — computed over ALL entries for each
+  // supplier, oldest-first, seeded with the supplier's opening amount.
+  // (The displayed list is newest-first, so a running balance must be
+  //  pre-computed in chronological order, not by row index.)
+  const runningBalanceById = (() => {
+    const map = {}
+    const bySupplier = {}
+    ledgerEntries.forEach(e => {
+      ;(bySupplier[e.supplier_id] = bySupplier[e.supplier_id] || []).push(e)
+    })
+    Object.entries(bySupplier).forEach(([sid, entries]) => {
+      const sorted = [...entries].sort((a, b) => {
+        const d = new Date(a.transaction_date) - new Date(b.transaction_date)
+        if (d !== 0) return d
+        return new Date(a.created_at || 0) - new Date(b.created_at || 0)
+      })
+      const supplier = suppliers.find(s => s.id === sid)
+      let bal = parseFloat(supplier?.opening_amount || 0)
+      sorted.forEach(e => {
+        const isDebit = e.transaction_type === 'debit' || e.transaction_type === 'purchase'
+        bal += isDebit ? e.amount : -e.amount
+        map[e.id] = bal
+      })
+    })
+    return map
+  })()
+
   if (!user) return <div className={`h-screen w-screen ${themeClasses.background}`} />
 
   const typeColors = {
@@ -335,15 +362,10 @@ export default function LedgersPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredEntries.map((entry, idx) => {
+                    {filteredEntries.map((entry) => {
                       const supplier = suppliers.find(s => s.id === entry.supplier_id)
                       const isDebit = entry.transaction_type === 'debit' || entry.transaction_type === 'purchase'
-                      const balance = filteredEntries.slice(0, idx + 1)
-                        .filter(e => e.supplier_id === entry.supplier_id)
-                        .reduce((sum, e) => {
-                          if (e.transaction_type === 'debit' || e.transaction_type === 'purchase') return sum + e.amount
-                          else return sum - e.amount
-                        }, 0)
+                      const balance = runningBalanceById[entry.id] ?? 0
 
                       return (
                         <tr

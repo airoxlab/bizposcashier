@@ -7,6 +7,7 @@ import { authManager } from '../../lib/authManager'
 import { permissionManager } from '../../lib/permissionManager'
 import { notify } from '../ui/NotificationSystem'
 import themeManager from '../../lib/themeManager'
+import { poDraft } from '../../lib/poDraft'
 
 const VALID_METHODS = ['Cash', 'EasyPaisa', 'JazzCash', 'Bank', 'Cheque']
 const resolvePaymentMethod = (key) => {
@@ -134,17 +135,28 @@ const emptyRow = () => ({
   expiry_date: ''
 })
 
-export default function CreatePurchaseOrderPanel({ onClose, onCreated }) {
+export default function CreatePurchaseOrderPanel({ onClose, onCreated, restoreDraft = false }) {
+  const user    = authManager.getCurrentUser()
+  const cashier = authManager.getCashier()
+  const isAdmin = authManager.getRole() === 'admin'
+  const userId  = user?.id
+
+  // Load a previously auto-saved draft when the caller asked to resume one.
+  const savedDraft = restoreDraft ? poDraft.load(userId) : null
+
   const [saving, setSaving]           = useState(false)
+  const submittedRef                  = useRef(false)   // true once the PO is saved — stops auto-save
   const [dataLoading, setDataLoading] = useState(true)
   const [suppliers, setSuppliers]     = useState([])
   const [inventoryItems, setInventoryItems] = useState([])
   const [units, setUnits]             = useState([])
   const [locations, setLocations]     = useState([])
   const [paymentAccounts, setPaymentAccounts] = useState([])
-  const [rows, setRows]               = useState([emptyRow()])
+  const [rows, setRows]               = useState(
+    () => (savedDraft?.rows?.length ? savedDraft.rows : [emptyRow()])
+  )
 
-  const [header, setHeader] = useState({
+  const [header, setHeader] = useState(() => savedDraft?.header || {
     po_date: new Date().toISOString().split('T')[0],
     notes: '',
     delivery_charges: '',
@@ -154,10 +166,10 @@ export default function CreatePurchaseOrderPanel({ onClose, onCreated }) {
     tax_percentage: ''
   })
 
-  const [markAsReceived, setMarkAsReceived] = useState(false)
-  const [payNow, setPayNow]               = useState(false)
-  const [paymentAccountId, setPaymentAccountId] = useState('')
-  const [paymentAmount, setPaymentAmount] = useState('')
+  const [markAsReceived, setMarkAsReceived] = useState(() => savedDraft?.markAsReceived || false)
+  const [payNow, setPayNow]               = useState(() => savedDraft?.payNow || false)
+  const [paymentAccountId, setPaymentAccountId] = useState(() => savedDraft?.paymentAccountId || '')
+  const [paymentAmount, setPaymentAmount] = useState(() => savedDraft?.paymentAmount || '')
 
   // Quick-add state
   const [showAddSupplier, setShowAddSupplier] = useState(false)
@@ -167,11 +179,6 @@ export default function CreatePurchaseOrderPanel({ onClose, onCreated }) {
   const [quickSku, setQuickSku]               = useState('')
   const [quickUnit, setQuickUnit]             = useState('')
   const [quickSaving, setQuickSaving]         = useState(false)
-
-  const user    = authManager.getCurrentUser()
-  const cashier = authManager.getCashier()
-  const isAdmin = authManager.getRole() === 'admin'
-  const userId  = user?.id
 
   const canCreate      = permissionManager.hasPermission('PO_CREATE')      || isAdmin
   const canReceive     = permissionManager.hasPermission('PO_RECEIVE')     || isAdmin
@@ -190,6 +197,23 @@ export default function CreatePurchaseOrderPanel({ onClose, onCreated }) {
   }`
 
   useEffect(() => { loadData() }, [])
+
+  // ── Auto-save draft ─────────────────────────────────────────────────────────
+  // Persist the in-progress form to localStorage on every change so an
+  // unfinished PO survives navigation, refresh, or app restart. Once the form
+  // is emptied out again the stale draft is dropped.
+  useEffect(() => {
+    if (saving || submittedRef.current) return   // don't re-save while submitting / after save
+    const hasContent =
+      rows.some(r => r.inventory_item_id || r.quantity || r.total_amount) ||
+      header.notes?.trim() ||
+      markAsReceived || payNow
+    if (hasContent) {
+      poDraft.save(userId, { rows, header, markAsReceived, payNow, paymentAccountId, paymentAmount })
+    } else {
+      poDraft.clear(userId)
+    }
+  }, [rows, header, markAsReceived, payNow, paymentAccountId, paymentAmount, saving, userId])
 
   const loadData = async () => {
     try {
@@ -227,7 +251,12 @@ export default function CreatePurchaseOrderPanel({ onClose, onCreated }) {
       setSuppliers(suppRes.data || [])
       setInventoryItems(uniqueItems)
       setUnits(uniqueUnits)
-      setLocations(locsRes.data || [])
+      const locs = locsRes.data || []
+      setLocations(locs)
+      const kitchen = locs.find(l => /kitchen/i.test(l.slug) || /kitchen/i.test(l.name))
+      if (kitchen) {
+        setRows(prev => prev.map(r => r.target_location ? r : { ...r, target_location: kitchen.slug }))
+      }
       setPaymentAccounts(accsRes.data || [])
     } catch { notify.error('Failed to load data') }
     finally { setDataLoading(false) }
@@ -306,6 +335,10 @@ export default function CreatePurchaseOrderPanel({ onClose, onCreated }) {
     if (validRows.length === 0) { notify.error('Add at least one complete item row'); return }
     if (payNow && !paymentAccountId) { notify.error('Select a payment account'); return }
     if (payNow && !canPay) { notify.error('No permission to make payments'); return }
+    if (payNow && new Set(validRows.map(r => r.supplier_id).filter(Boolean)).size > 1) {
+      notify.error('Pay Now supports single-supplier POs only. Create the PO, then record payments per supplier from Supplier Ledger.')
+      return
+    }
     if (markAsReceived && !canReceive) { notify.error('No permission to receive stock'); return }
 
     try {
@@ -389,6 +422,8 @@ export default function CreatePurchaseOrderPanel({ onClose, onCreated }) {
         }
       }
 
+      submittedRef.current = true   // stop auto-save
+      poDraft.clear(userId)         // PO saved — discard the auto-saved draft
       notify.success(`PO ${po.po_number} created${markAsReceived ? ' & received' : ''}${payNow ? ' & paid' : ''}`)
       onCreated?.({ ...po, id: poId })
     } catch (err) {
@@ -556,7 +591,10 @@ export default function CreatePurchaseOrderPanel({ onClose, onCreated }) {
         </table>
 
         <button
-          onClick={() => setRows(prev => [...prev, emptyRow()])}
+          onClick={() => {
+            const kitchen = locations.find(l => /kitchen/i.test(l.slug) || /kitchen/i.test(l.name))
+            setRows(prev => [...prev, { ...emptyRow(), target_location: kitchen?.slug || '' }])
+          }}
           className={`w-full py-2.5 text-sm font-semibold flex items-center justify-center gap-1.5 border-b transition-colors ${
             isDark ? 'border-gray-700 text-teal-400 hover:bg-gray-700/40' : 'border-gray-200 text-teal-600 hover:bg-teal-50'
           }`}

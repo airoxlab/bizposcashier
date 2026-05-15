@@ -5,6 +5,7 @@ import { motion } from 'framer-motion'
 import { Download, RefreshCw, CheckCircle, AlertTriangle } from 'lucide-react'
 import themeManager from '../../../lib/themeManager'
 import { notify } from '../../../components/ui/NotificationSystem'
+import { isAutoUpdateEnabled, setAutoUpdateEnabled } from '../../../lib/updatePrefs'
 
 export function UpdatesPanel() {
   const classes = themeManager.getClasses()
@@ -22,6 +23,19 @@ export function UpdatesPanel() {
     hasChecked: false,
   })
 
+  const [autoUpdate, setAutoUpdate] = useState(false)
+
+  useEffect(() => { setAutoUpdate(isAutoUpdateEnabled()) }, [])
+
+  const toggleAutoUpdate = () => {
+    setAutoUpdate(prev => {
+      const next = !prev
+      setAutoUpdateEnabled(next)
+      notify.success(next ? 'Automatic updates enabled' : 'Automatic updates disabled')
+      return next
+    })
+  }
+
   useEffect(() => {
     if (!window.electronAPI) return
 
@@ -29,54 +43,52 @@ export function UpdatesPanel() {
       setUpdateState(prev => ({ ...prev, currentVersion: version }))
     })
 
-    window.electronAPI.onUpdateStatus(() => {
-      setUpdateState(prev => ({ ...prev, checking: true }))
-    })
+    const disposers = [
+      window.electronAPI.onUpdateStatus(() => {
+        setUpdateState(prev => ({ ...prev, checking: true }))
+      }),
 
-    window.electronAPI.onUpdateAvailable((data) => {
-      setUpdateState(prev => ({ ...prev, checking: false, available: true, version: data.version }))
-    })
+      window.electronAPI.onUpdateAvailable((data) => {
+        setUpdateState(prev => ({ ...prev, checking: false, available: true, version: data.version }))
+      }),
 
-    window.electronAPI.onUpdateNotAvailable(() => {
-      setUpdateState(prev => ({ ...prev, checking: false, available: false }))
-    })
+      window.electronAPI.onUpdateNotAvailable(() => {
+        setUpdateState(prev => ({ ...prev, checking: false, available: false }))
+      }),
 
-    window.electronAPI.onUpdateDownloadProgress((data) => {
-      const fmt = (bytes) => {
-        if (bytes === 0) return '0 B'
-        const k = 1024
-        const sizes = ['B', 'KB', 'MB', 'GB']
-        const i = Math.floor(Math.log(bytes) / Math.log(k))
-        return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
-      }
-      setUpdateState(prev => ({
-        ...prev,
-        downloading: true,
-        progress: {
-          percent: Math.round(data.percent),
-          transferred: fmt(data.transferred),
-          total: fmt(data.total),
-          speed: fmt(data.bytesPerSecond) + '/s',
-        },
-      }))
-    })
+      window.electronAPI.onUpdateDownloadProgress((data) => {
+        const fmt = (bytes) => {
+          if (bytes === 0) return '0 B'
+          const k = 1024
+          const sizes = ['B', 'KB', 'MB', 'GB']
+          const i = Math.floor(Math.log(bytes) / Math.log(k))
+          return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
+        }
+        setUpdateState(prev => ({
+          ...prev,
+          downloading: true,
+          progress: {
+            percent: Math.round(data.percent),
+            transferred: fmt(data.transferred),
+            total: fmt(data.total),
+            speed: fmt(data.bytesPerSecond) + '/s',
+          },
+        }))
+      }),
 
-    window.electronAPI.onUpdateDownloaded((data) => {
-      setUpdateState(prev => ({ ...prev, downloading: false, downloaded: true, version: data.version }))
-      notify.success('Update downloaded! Click "Install Update" to restart and update.')
-    })
+      window.electronAPI.onUpdateDownloaded((data) => {
+        setUpdateState(prev => ({ ...prev, downloading: false, downloaded: true, version: data.version }))
+        notify.success('Update downloaded! Click "Install Update" to restart and update.')
+      }),
 
-    window.electronAPI.onUpdateError((data) => {
-      setUpdateState(prev => ({ ...prev, checking: false, downloading: false, error: data.message }))
-      notify.error('Update error: ' + data.message)
-      setTimeout(() => setUpdateState(prev => ({ ...prev, error: null })), 10000)
-    })
+      window.electronAPI.onUpdateError((data) => {
+        setUpdateState(prev => ({ ...prev, checking: false, downloading: false, error: data.message }))
+        notify.error('Update error: ' + data.message)
+        setTimeout(() => setUpdateState(prev => ({ ...prev, error: null })), 10000)
+      }),
+    ].filter(fn => typeof fn === 'function')
 
-    return () => {
-      if (window.electronAPI?.removeUpdateListeners) {
-        window.electronAPI.removeUpdateListeners()
-      }
-    }
+    return () => disposers.forEach(dispose => dispose())
   }, [])
 
   useEffect(() => {
@@ -135,6 +147,32 @@ export function UpdatesPanel() {
             </div>
             <CheckCircle className={`w-6 h-6 ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
           </div>
+        </div>
+
+        {/* Automatic updates toggle */}
+        <div className={`mb-4 p-4 rounded-xl flex items-center justify-between gap-4 ${isDark ? 'bg-gray-700/50' : 'bg-gray-50'}`}>
+          <div>
+            <p className={`font-semibold text-sm ${classes.textPrimary}`}>Automatic Updates</p>
+            <p className={`text-xs ${classes.textSecondary} mt-0.5`}>
+              {autoUpdate
+                ? 'New updates download automatically in the background.'
+                : 'Updates wait for you to click Download, so they never slow you down during urgent work.'}
+            </p>
+          </div>
+          <button
+            onClick={toggleAutoUpdate}
+            role="switch"
+            aria-checked={autoUpdate}
+            className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
+              autoUpdate ? 'bg-blue-600' : isDark ? 'bg-gray-600' : 'bg-gray-300'
+            }`}
+          >
+            <span
+              className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                autoUpdate ? 'translate-x-5' : ''
+              }`}
+            />
+          </button>
         </div>
 
         <div className="space-y-3">

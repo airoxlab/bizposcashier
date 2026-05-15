@@ -17,6 +17,7 @@ const resolvePaymentMethod = (key) => {
 export default function RecordPaymentModal({ isOpen, onClose, purchaseOrder, onPaymentRecorded }) {
   const [loading, setLoading] = useState(false)
   const [accounts, setAccounts] = useState([])
+  const [alreadyPaid, setAlreadyPaid] = useState(0)
   const [form, setForm] = useState({ payment_account_id: '', amount: '', notes: '' })
 
   const user    = authManager.getCurrentUser()
@@ -32,14 +33,26 @@ export default function RecordPaymentModal({ isOpen, onClose, purchaseOrder, onP
   useEffect(() => {
     if (isOpen && purchaseOrder) {
       loadAccounts()
-      const remaining = (purchaseOrder.grand_total || 0) - (purchaseOrder.amount_paid || 0)
-      setForm({
-        payment_account_id: '',
-        amount: remaining > 0 ? remaining.toFixed(2) : purchaseOrder.grand_total?.toFixed(2) || '',
-        notes: `Payment for PO ${purchaseOrder.po_number}`
-      })
+      loadPaidTotal()
     }
   }, [isOpen, purchaseOrder?.id])
+
+  // purchase_orders has no amount_paid column — the real total paid must be
+  // summed from supplier_payments for this PO.
+  const loadPaidTotal = async () => {
+    const { data } = await supabase
+      .from('supplier_payments')
+      .select('amount_paid')
+      .eq('purchase_order_id', purchaseOrder.id)
+    const paid = (data || []).reduce((s, p) => s + parseFloat(p.amount_paid || 0), 0)
+    setAlreadyPaid(paid)
+    const remaining = (purchaseOrder.grand_total || 0) - paid
+    setForm({
+      payment_account_id: '',
+      amount: remaining > 0 ? remaining.toFixed(2) : '',
+      notes: `Payment for PO ${purchaseOrder.po_number}`,
+    })
+  }
 
   const drawerEnabled = !isAdmin && (
     user?.use_cashier_drawer === true ||
@@ -67,6 +80,11 @@ export default function RecordPaymentModal({ isOpen, onClose, purchaseOrder, onP
     if (!form.payment_account_id) { notify.error('Select a payment account'); return }
     if (!form.amount || parseFloat(form.amount) <= 0) { notify.error('Enter a valid amount'); return }
     if (!purchaseOrder.supplier_id) { notify.error('Purchase order has no supplier'); return }
+    const remainingDue = (purchaseOrder.grand_total || 0) - alreadyPaid
+    if (parseFloat(form.amount) > remainingDue + 0.01) {
+      notify.error(`Amount exceeds the remaining balance of Rs. ${remainingDue.toFixed(2)}`)
+      return
+    }
 
     try {
       setLoading(true)
@@ -156,7 +174,7 @@ export default function RecordPaymentModal({ isOpen, onClose, purchaseOrder, onP
 
   if (!isOpen || !purchaseOrder) return null
 
-  const remaining = (purchaseOrder.grand_total || 0) - (purchaseOrder.amount_paid || 0)
+  const remaining = (purchaseOrder.grand_total || 0) - alreadyPaid
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -191,10 +209,10 @@ export default function RecordPaymentModal({ isOpen, onClose, purchaseOrder, onP
               <span className={themeClasses.textSecondary}>Grand Total</span>
               <span className={`font-semibold ${themeClasses.textPrimary}`}>Rs. {(purchaseOrder.grand_total || 0).toFixed(2)}</span>
             </div>
-            {(purchaseOrder.amount_paid || 0) > 0 && (
+            {alreadyPaid > 0 && (
               <div className="flex justify-between text-sm">
                 <span className={themeClasses.textSecondary}>Already Paid</span>
-                <span className="font-semibold text-green-500">Rs. {(purchaseOrder.amount_paid || 0).toFixed(2)}</span>
+                <span className="font-semibold text-green-500">Rs. {alreadyPaid.toFixed(2)}</span>
               </div>
             )}
             <div className={`flex justify-between font-bold border-t pt-1.5 ${isDark ? 'border-gray-600' : 'border-gray-200'}`}>

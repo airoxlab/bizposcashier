@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowLeft, Plus, Search, Loader2, ShoppingCart,
-  ChevronDown, RotateCcw, Activity, ArrowUpDown, Filter
+  ChevronDown, RotateCcw, Activity, ArrowUpDown, Filter, FileClock
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
@@ -18,6 +18,17 @@ import EditPurchaseOrderPanel from '../../components/inventory/EditPurchaseOrder
 import PurchaseReturnsTab from '../../components/inventory/PurchaseReturnsTab'
 import StockTransactionsTab from '../../components/inventory/StockTransactionsTab'
 import themeManager from '../../lib/themeManager'
+import { poDraft } from '../../lib/poDraft'
+
+// "x minutes ago" for the unfinished-PO prompt
+const timeAgo = (ts) => {
+  if (!ts) return ''
+  const s = Math.floor((Date.now() - ts) / 1000)
+  if (s < 60)    return 'just now'
+  if (s < 3600)  return `${Math.floor(s / 60)} min ago`
+  if (s < 86400) return `${Math.floor(s / 3600)} hr ago`
+  return `${Math.floor(s / 86400)} day(s) ago`
+}
 
 const STATUS_STYLES = {
   draft:     { badge: 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300' },
@@ -54,6 +65,9 @@ export default function PurchaseOrdersPage() {
   const [sortOrder, setSortOrder]               = useState('desc')  // 'asc' | 'desc'
   const [showSortMenu, setShowSortMenu]         = useState(false)
   const [selectedPaymentStatus, setSelectedPaymentStatus] = useState('all')
+  const [showDraftPrompt, setShowDraftPrompt]   = useState(false)
+  const [restoreDraft, setRestoreDraft]         = useState(false)
+  const [draftMeta, setDraftMeta]               = useState(null)  // { savedAt, itemCount }
 
   const themeClasses    = themeManager.getClasses()
   const isDark          = themeManager.isDark()
@@ -147,6 +161,35 @@ export default function PurchaseOrdersPage() {
   }
 
   const refresh = async () => { if (user?.id) await loadPurchaseOrders(user.id) }
+
+  // Keep the unfinished-draft indicator in sync whenever we land on the list
+  const syncDraftMeta = () => {
+    if (!user?.id) { setDraftMeta(null); return }
+    const d = poDraft.load(user.id)
+    setDraftMeta(d ? { savedAt: d.savedAt, itemCount: (d.rows || []).filter(r => r.inventory_item_id).length } : null)
+  }
+  useEffect(() => { if (mode === 'list') syncDraftMeta() }, [mode, user])
+
+  // "New PO" — resume an unfinished draft or start fresh
+  const openCreate = (resume) => {
+    setRestoreDraft(resume)
+    setSelectedPO(null)
+    setShowDraftPrompt(false)
+    setMode('create')
+  }
+  const handleNewPO = () => {
+    if (user?.id && poDraft.exists(user.id)) {
+      syncDraftMeta()
+      setShowDraftPrompt(true)
+    } else {
+      openCreate(false)
+    }
+  }
+  const startFreshPO = () => {
+    if (user?.id) poDraft.clear(user.id)
+    setDraftMeta(null)
+    openCreate(false)
+  }
 
   const quickStatusChange = async (po, newStatus, e) => {
     e.stopPropagation()
@@ -242,8 +285,8 @@ export default function PurchaseOrdersPage() {
                     {canCreate && (
                       <motion.button
                         whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
-                        onClick={() => { setSelectedPO(null); setMode('create') }}
-                        className={`px-3 py-2 rounded-lg text-sm font-semibold transition-all flex items-center gap-1 flex-shrink-0 ${
+                        onClick={handleNewPO}
+                        className={`relative px-3 py-2 rounded-lg text-sm font-semibold transition-all flex items-center gap-1 flex-shrink-0 ${
                           mode === 'create'
                             ? 'bg-teal-600 text-white'
                             : isDark
@@ -252,6 +295,9 @@ export default function PurchaseOrdersPage() {
                         }`}
                       >
                         <Plus className="w-4 h-4" /> New PO
+                        {draftMeta && mode !== 'create' && (
+                          <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-amber-500 ring-2 ring-white dark:ring-gray-900" title="Unfinished PO draft saved" />
+                        )}
                       </motion.button>
                     )}
                   </div>
@@ -439,6 +485,7 @@ export default function PurchaseOrdersPage() {
                   {mode === 'create' && (
                     <motion.div key="create" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="h-full">
                       <CreatePurchaseOrderPanel
+                        restoreDraft={restoreDraft}
                         onClose={() => setMode('list')}
                         onCreated={async (data) => { await refresh(); setSelectedPO(data); setMode('view') }}
                       />
@@ -474,7 +521,7 @@ export default function PurchaseOrdersPage() {
                         Pick a PO from the list
                         {canCreate && (
                           <>, or{' '}
-                            <button onClick={() => setMode('create')} className="text-teal-600 hover:text-teal-500 font-semibold underline underline-offset-2">
+                            <button onClick={handleNewPO} className="text-teal-600 hover:text-teal-500 font-semibold underline underline-offset-2">
                               create a new one
                             </button>
                           </>
@@ -495,6 +542,61 @@ export default function PurchaseOrdersPage() {
 
         </div>
       </div>
+
+      {/* ── Unfinished PO draft prompt ── */}
+      <AnimatePresence>
+        {showDraftPrompt && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          >
+            <div className="absolute inset-0 bg-black/60" onClick={() => setShowDraftPrompt(false)} />
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
+              className={`relative w-full max-w-sm rounded-2xl shadow-2xl border p-6 ${isDark ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`}
+            >
+              <div className="flex items-start gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl bg-amber-100 dark:bg-amber-900/40 flex items-center justify-center flex-shrink-0">
+                  <FileClock className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div>
+                  <h3 className={`font-bold text-base ${themeClasses.textPrimary}`}>Unfinished Purchase Order</h3>
+                  <p className={`text-xs mt-0.5 ${themeClasses.textSecondary}`}>
+                    You have a saved draft
+                    {draftMeta?.itemCount ? ` with ${draftMeta.itemCount} item${draftMeta.itemCount !== 1 ? 's' : ''}` : ''}
+                    {draftMeta?.savedAt ? ` · edited ${timeAgo(draftMeta.savedAt)}` : ''}.
+                  </p>
+                </div>
+              </div>
+              <p className={`text-sm mb-5 ${themeClasses.textSecondary}`}>
+                Continue where you left off, or discard it and start a new purchase order?
+              </p>
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={() => openCreate(true)}
+                  className="w-full py-2.5 rounded-xl text-sm font-semibold bg-teal-600 hover:bg-teal-700 text-white transition-colors"
+                >
+                  Continue Last PO
+                </button>
+                <button
+                  onClick={startFreshPO}
+                  className={`w-full py-2.5 rounded-xl text-sm font-semibold transition-colors ${
+                    isDark ? 'bg-gray-700 hover:bg-gray-600 text-gray-200' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+                  }`}
+                >
+                  Discard &amp; Start New
+                </button>
+                <button
+                  onClick={() => setShowDraftPrompt(false)}
+                  className={`w-full py-2 text-xs font-medium ${themeClasses.textSecondary} hover:underline`}
+                >
+                  Cancel
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </ProtectedPage>
   )
 }

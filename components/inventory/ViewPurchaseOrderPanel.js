@@ -216,9 +216,15 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
                 <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${
                   purchaseOrder.payment_status === 'paid'
                     ? 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300'
-                    : 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300'
+                    : purchaseOrder.payment_status === 'partial'
+                      ? 'bg-yellow-100 dark:bg-yellow-900/40 text-yellow-700 dark:text-yellow-300'
+                      : 'bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-300'
                 }`}>
-                  {purchaseOrder.payment_status === 'paid' ? 'Paid' : 'Unpaid'}
+                  {purchaseOrder.payment_status === 'paid'
+                    ? 'Paid'
+                    : purchaseOrder.payment_status === 'partial'
+                      ? 'Partial'
+                      : 'Unpaid'}
                 </span>
               )}
             </div>
@@ -252,7 +258,12 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
           )}
 
           {canPay && purchaseOrder.payment_status !== 'paid' && (
-            <button onClick={() => setShowPaymentModal(true)} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white">
+            <button
+              onClick={() => allSuppliers.length > 1
+                ? notify.error('This PO has items from multiple suppliers — record payments per supplier from the Supplier Ledger.')
+                : setShowPaymentModal(true)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white"
+            >
               <CreditCard className="w-4 h-4" /> Record Payment
             </button>
           )}

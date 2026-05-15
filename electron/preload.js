@@ -11,14 +11,41 @@ const api = {
   downloadUpdate: () => ipcRenderer.invoke('download-update'),
   installUpdate: () => ipcRenderer.invoke('install-update'),
 
-  // Auto-update event listeners
-  onUpdateStatus: (callback) => ipcRenderer.on('update-status', (event, data) => callback(data)),
-  onUpdateAvailable: (callback) => ipcRenderer.on('update-available', (event, data) => callback(data)),
-  onUpdateNotAvailable: (callback) => ipcRenderer.on('update-not-available', () => callback()),
-  onUpdateDownloadProgress: (callback) => ipcRenderer.on('update-download-progress', (event, data) => callback(data)),
-  onUpdateDownloaded: (callback) => ipcRenderer.on('update-downloaded', (event, data) => callback(data)),
-  onUpdateError: (callback) => ipcRenderer.on('update-error', (event, data) => callback(data)),
+  // Auto-update event listeners — each returns a disposer that removes ONLY
+  // that listener, so multiple components (banner + settings panel) can
+  // subscribe without one's cleanup wiping the other's.
+  onUpdateStatus: (callback) => {
+    const h = (event, data) => callback(data);
+    ipcRenderer.on('update-status', h);
+    return () => ipcRenderer.removeListener('update-status', h);
+  },
+  onUpdateAvailable: (callback) => {
+    const h = (event, data) => callback(data);
+    ipcRenderer.on('update-available', h);
+    return () => ipcRenderer.removeListener('update-available', h);
+  },
+  onUpdateNotAvailable: (callback) => {
+    const h = () => callback();
+    ipcRenderer.on('update-not-available', h);
+    return () => ipcRenderer.removeListener('update-not-available', h);
+  },
+  onUpdateDownloadProgress: (callback) => {
+    const h = (event, data) => callback(data);
+    ipcRenderer.on('update-download-progress', h);
+    return () => ipcRenderer.removeListener('update-download-progress', h);
+  },
+  onUpdateDownloaded: (callback) => {
+    const h = (event, data) => callback(data);
+    ipcRenderer.on('update-downloaded', h);
+    return () => ipcRenderer.removeListener('update-downloaded', h);
+  },
+  onUpdateError: (callback) => {
+    const h = (event, data) => callback(data);
+    ipcRenderer.on('update-error', h);
+    return () => ipcRenderer.removeListener('update-error', h);
+  },
 
+  // Kept for backward compatibility — prefer the disposers returned above.
   removeUpdateListeners: () => {
     ipcRenderer.removeAllListeners('update-status');
     ipcRenderer.removeAllListeners('update-available');

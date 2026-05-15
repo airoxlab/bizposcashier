@@ -133,12 +133,16 @@ export default function SuppliersPage() {
 
     try {
       setSubmitting(true)
-      const { error } = await supabase
-        .from('suppliers')
-        .delete()
-        .eq('id', selectedSupplier.id)
+      // Use the delete_supplier RPC — it atomically clears every FK dependency
+      // (ledger, payments, purchase returns, fixed assets, POs, inventory).
+      // A raw delete fails on suppliers that have purchase returns / assets.
+      const { data, error } = await supabase.rpc('delete_supplier', {
+        p_user_id: user.id,
+        p_supplier_id: selectedSupplier.id,
+      })
 
       if (error) throw error
+      if (!data?.success) throw new Error(data?.error || 'Failed to delete supplier')
 
       notify.success('Supplier deleted successfully')
       setShowDeleteConfirm(false)

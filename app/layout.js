@@ -4,6 +4,7 @@ import NotificationSystem from '../components/ui/NotificationSystem'
 import GlobalPrintListener from '../components/GlobalPrintListener'
 import TrialBanner from '../components/TrialBanner'
 import TrialExpiredGate from '../components/TrialExpiredGate'
+import UpdateNotification from '../components/UpdateNotification'
 
 export const metadata = {
   title: 'BizPOS - Point of Sale System',
@@ -40,6 +41,7 @@ export default function RootLayout({ children }) {
         <Script id="theme-init" strategy="beforeInteractive" dangerouslySetInnerHTML={{ __html: setInitialThemeScript }} />
       </head>
       <body className="font-sans" suppressHydrationWarning>
+        <UpdateNotification />
         <TrialBanner />
         <GlobalPrintListener />
         <TrialExpiredGate>

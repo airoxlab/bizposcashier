@@ -282,6 +282,10 @@ export default function EditPurchaseOrderPanel({ purchaseOrder, onBack, onUpdate
     if (validRows.length === 0) { notify.error('Add at least one complete item row'); return }
     if (payNow && !paymentAccountId) { notify.error('Select a payment account'); return }
     if (payNow && !canPay) { notify.error('No permission to make payments'); return }
+    if (payNow && new Set(validRows.map(r => r.supplier_id).filter(Boolean)).size > 1) {
+      notify.error('Pay Now supports single-supplier POs only. Save the PO, then record payments per supplier from Supplier Ledger.')
+      return
+    }
 
     try {
       setSaving(true)
