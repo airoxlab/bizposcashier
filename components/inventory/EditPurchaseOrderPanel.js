@@ -530,46 +530,7 @@ export default function EditPurchaseOrderPanel({ purchaseOrder, onBack, onUpdate
 
       {/* ── Footer ──────────────────────────────────────────────────────────── */}
       <div className={`flex-shrink-0 border-t ${isDark ? 'border-gray-700 bg-gray-800' : 'border-gray-200 bg-gray-50'}`}>
-        <div className="flex items-start gap-6 px-6 py-4">
-          <div className="flex flex-col gap-3 flex-shrink-0 w-52">
-            {canPay && (
-              <label className="flex items-start gap-3 cursor-pointer">
-                <div onClick={() => setPayNow(p => !p)} className={`mt-0.5 w-5 h-5 rounded flex-shrink-0 border-2 flex items-center justify-center transition-all ${payNow ? 'bg-indigo-600 border-indigo-600' : isDark ? 'border-gray-500 bg-gray-700' : 'border-gray-300 bg-white'}`}>
-                  {payNow && <Check className="w-3 h-3 text-white" />}
-                </div>
-                <div>
-                  <p className={`text-sm font-semibold ${themeClasses.textPrimary}`}>Pay Now</p>
-                  <p className={`text-xs ${themeClasses.textSecondary}`}>{isAdmin ? 'Record from account' : 'Pay from cashier account'}</p>
-                </div>
-              </label>
-            )}
-            {canPay && payNow && (
-              <div className="space-y-2 pl-8">
-                <div className="flex flex-wrap gap-2">
-                  {paymentAccounts.map(a => (
-                    <button
-                      key={a.id}
-                      type="button"
-                      onClick={() => setPaymentAccountId(a.id)}
-                      className={`flex flex-col items-start px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
-                        paymentAccountId === a.id
-                          ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm'
-                          : isDark
-                            ? 'bg-gray-700 border-gray-600 text-gray-200 hover:border-indigo-500'
-                            : 'bg-white border-gray-200 text-gray-700 hover:border-indigo-400'
-                      }`}
-                    >
-                      <span>{a.name}</span>
-                      <span className={`text-[10px] font-normal ${paymentAccountId === a.id ? 'text-indigo-200' : themeClasses.textSecondary}`}>
-                        Rs. {parseFloat(a.current_balance || 0).toLocaleString()}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-                <input type="number" step="0.01" placeholder="Amount" value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} className={`${inputCls} text-xs`} />
-              </div>
-            )}
-          </div>
+        <div className="flex items-start gap-6 px-6 pt-4 pb-3">
 
           <div className="flex-1 grid grid-cols-5 gap-3">
             {[
@@ -596,6 +557,48 @@ export default function EditPurchaseOrderPanel({ purchaseOrder, onBack, onUpdate
             </div>
           </div>
         </div>
+
+        {/* Pay Now row — checkbox + payment accounts inline */}
+        {canPay && (
+          <div className="flex items-center gap-4 px-6 pb-4 flex-wrap">
+            <label className="flex items-start gap-3 cursor-pointer flex-shrink-0 w-52">
+              <div onClick={() => setPayNow(p => !p)} className={`mt-0.5 w-5 h-5 rounded flex-shrink-0 border-2 flex items-center justify-center transition-all ${payNow ? 'bg-indigo-600 border-indigo-600' : isDark ? 'border-gray-500 bg-gray-700' : 'border-gray-300 bg-white'}`}>
+                {payNow && <Check className="w-3 h-3 text-white" />}
+              </div>
+              <div>
+                <p className={`text-sm font-semibold ${themeClasses.textPrimary}`}>Pay Now</p>
+                <p className={`text-xs ${themeClasses.textSecondary}`}>{isAdmin ? 'Record from account' : 'Pay from cashier account'}</p>
+              </div>
+            </label>
+
+            {payNow && (
+              <div className="flex flex-wrap items-center gap-2">
+                {paymentAccounts.map(a => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() => setPaymentAccountId(a.id)}
+                    className={`flex flex-col items-start px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
+                      paymentAccountId === a.id
+                        ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm'
+                        : isDark
+                          ? 'bg-gray-700 border-gray-600 text-gray-200 hover:border-indigo-500'
+                          : 'bg-white border-gray-200 text-gray-700 hover:border-indigo-400'
+                    }`}
+                  >
+                    <span>{a.name}</span>
+                    <span className={`text-[10px] font-normal ${paymentAccountId === a.id ? 'text-indigo-200' : themeClasses.textSecondary}`}>
+                      Rs. {parseFloat(a.current_balance || 0).toLocaleString()}
+                    </span>
+                  </button>
+                ))}
+                <div className="w-40">
+                  <input type="number" step="0.01" placeholder="Amount" value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} className={`${inputCls} text-xs`} />
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
 

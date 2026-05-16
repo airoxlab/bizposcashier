@@ -47,9 +47,18 @@ const EXPENSE_CACHE = {
 }
 
 // ─── Date preset helpers ───────────────────────────────────────────────────────
+// Format a Date using LOCAL calendar parts — never UTC. toISOString() converts
+// to UTC, which shifts an expense recorded after midnight PKT to the previous day.
+const localDateStr = (d) => {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 function getDateRangeFromPreset(preset) {
   const today = new Date()
-  const fmt = (d) => d.toISOString().split('T')[0]
+  const fmt = localDateStr
 
   switch (preset) {
     case 'today':
@@ -137,7 +146,7 @@ export default function ExpensesPage() {
     paymentMethod: '',
     paymentAccountId: '',
     taxRate: 0,
-    expenseDate: new Date().toISOString().split('T')[0]
+    expenseDate: localDateStr(new Date())
   })
 
   // Category form (new category tab)
@@ -616,7 +625,7 @@ export default function ExpensesPage() {
       paymentMethod: '',
       paymentAccountId: '',
       taxRate: 0,
-      expenseDate: new Date().toISOString().split('T')[0]
+      expenseDate: localDateStr(new Date())
     })
   }
 

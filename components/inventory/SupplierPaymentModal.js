@@ -7,6 +7,13 @@ import { authManager } from '../../lib/authManager'
 import { notify } from '../ui/NotificationSystem'
 import themeManager from '../../lib/themeManager'
 
+// supplier_payments.payment_method is NOT NULL and constrained to this set.
+const VALID_METHODS = ['Cash', 'EasyPaisa', 'JazzCash', 'Bank', 'Cheque']
+const resolvePaymentMethod = (key) => {
+  if (!key) return 'Cash'
+  return VALID_METHODS.find(v => v.toLowerCase() === key.toLowerCase().trim()) || 'Cash'
+}
+
 export default function SupplierPaymentModal({ isOpen, onClose, supplier, onPaymentRecorded }) {
   const [loading, setLoading] = useState(false)
   const [accounts, setAccounts] = useState([])
@@ -53,7 +60,10 @@ export default function SupplierPaymentModal({ isOpen, onClose, supplier, onPaym
     try {
       setLoading(true)
       const amount = parseFloat(form.amount)
-      const today  = new Date().toISOString().split('T')[0]
+      // Business date in PKT (UTC+5) — using plain UTC would record a payment
+      // made after midnight PKT on the previous calendar day.
+      const today  = new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString().split('T')[0]
+      const selectedAccount = accounts.find(a => a.id === form.payment_account_id)
 
       const { data: payment, error: payErr } = await supabase
         .from('supplier_payments')
@@ -62,6 +72,7 @@ export default function SupplierPaymentModal({ isOpen, onClose, supplier, onPaym
           supplier_id:        supplier.id,
           purchase_order_id:  null,
           payment_account_id: form.payment_account_id,
+          payment_method:     resolvePaymentMethod(selectedAccount?.payment_method_key),
           amount_paid:        amount,
           amount_settled:     amount,
           amount_unapplied:   0,
@@ -134,6 +145,16 @@ export default function SupplierPaymentModal({ isOpen, onClose, supplier, onPaym
 
         {/* Body */}
         <div className="p-6 space-y-4">
+          {/* Current supplier balance */}
+          {supplier.balance != null && (
+            <div className={`rounded-xl p-3 flex items-center justify-between ${isDark ? 'bg-gray-700/40' : 'bg-gray-50'}`}>
+              <span className={`text-xs font-semibold ${themeClasses.textSecondary}`}>Current Balance</span>
+              <span className={`text-base font-bold ${parseFloat(supplier.balance || 0) > 0 ? 'text-red-500' : 'text-green-500'}`}>
+                Rs. {parseFloat(supplier.balance || 0).toFixed(2)}
+              </span>
+            </div>
+          )}
+
           {accounts.length === 0 ? (
             <div className={`rounded-xl p-4 text-center text-sm ${isDark ? 'bg-gray-700/40 text-gray-400' : 'bg-amber-50 text-amber-700'}`}>
               {drawerEnabled

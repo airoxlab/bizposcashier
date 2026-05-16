@@ -75,7 +75,7 @@ const CASHIER_PLANS = {
     name: 'Business',
     routes: new Set([
       '/purchase-orders', '/suppliers',
-      '/ledgers', '/my-till', '/web-orders',
+      '/ledgers', '/my-till', '/web-orders', '/payroll',
     ]),
   },
 }
@@ -555,6 +555,14 @@ export default function Dashboard() {
       gradient: 'from-blue-500 to-indigo-600',
       route: '/ledgers',
       permissionKey: 'SUPPLIER_LEDGER'
+    },
+    {
+      id: 'payroll',
+      title: 'Payroll',
+      icon: Users,
+      gradient: 'from-blue-500 to-indigo-600',
+      route: '/payroll',
+      permissionKey: 'PAYROLL'
     },
 
   ]

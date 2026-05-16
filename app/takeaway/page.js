@@ -906,11 +906,25 @@ export default function TakeawayPage() {
       }
 
       // Regular payment (paymentData is an object)
-      // Validate Account payment requires customer with name + phone
+      // Validate Account (Customer Ledger) payment requires a customer WITH a phone number
       if (paymentData.paymentMethod === 'Account') {
-        const cust = order.customers || order.customer
-        if (!cust?.full_name?.trim()) { alert('Customer must have a name for Account payment!'); return }
-        if (!cust?.phone?.trim()) { alert('Customer must have a phone number for Account payment!'); return }
+        let cust = order.customers || order.customer
+        // The customer object may not be joined onto the order — verify against the DB
+        if ((!cust || !cust.phone) && order.customer_id) {
+          const { data: dbCust } = await supabase
+            .from('customers').select('full_name, phone').eq('id', order.customer_id).single()
+          if (dbCust) cust = dbCust
+        }
+        if (!order.customer_id || !cust) {
+          alert('Customer Ledger payment requires a customer. Please add a customer first.')
+          return
+        }
+        if (!cust.full_name?.trim()) { alert('Customer Ledger payment requires a customer name.'); return }
+        const realPhone = (cust.phone || '').trim()
+        if (!realPhone || /^noph/i.test(realPhone)) {
+          alert("Customer Ledger payment requires the customer's phone number. Please add the number before completing this order.")
+          return
+        }
       }
 
       // CRITICAL FIX: Check if online or offline

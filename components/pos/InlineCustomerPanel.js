@@ -294,7 +294,8 @@ export default function InlineCustomerPanel({
 
     setCreating(true)
     try {
-      const phone = trimPhone || `noPhone_${Date.now()}`
+      // No fake placeholder — a customer added by name only is stored with an empty phone.
+      const phone = trimPhone
       const trimAddress = newCustAddress.trim()
       const customerData = {
         fullName: trimName || trimPhone,

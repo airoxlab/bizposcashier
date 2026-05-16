@@ -41,7 +41,8 @@ export default function LedgersPage() {
         supabase.from('supplier_ledger')
           .select('*, suppliers(id, name), purchase_orders(id, po_number), supplier_payments(id, amount_paid)')
           .eq('user_id', userId)
-          .order('transaction_date', { ascending: false }),
+          .order('transaction_date', { ascending: false })
+          .order('created_at', { ascending: false }),
       ])
       setSuppliers(suppliersData || [])
       setLedgerEntries(ledgerData || [])

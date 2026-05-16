@@ -256,18 +256,22 @@ export default function InlinePaymentSection({
   const quickAmounts = order ? generateQuickAmounts(getCurrentTotal()) : []
 
   const handlePaymentMethodSelect = (method) => {
-    // Validate customer has name and phone for Account payments
+    // Validate customer has name and phone for Customer Ledger (Account) payments
     if (method.requiresCustomer) {
       if (!order?.customer_id) {
-        alert('Customer Account payment requires a customer to be selected!')
+        alert('Customer Ledger payment requires a customer to be selected!')
         return
       }
-      if (!order?.customers?.full_name?.trim()) {
-        alert('Customer must have a name for Account payment!')
+      const cust = order?.customers || order?.customer
+      // Block here only when we can see the customer is missing details; the
+      // page-level handler re-checks against the DB as the final guard.
+      if (cust && !cust.full_name?.trim()) {
+        alert('Customer Ledger payment requires a customer name.')
         return
       }
-      if (!order?.customers?.phone?.trim()) {
-        alert('Customer must have a phone number for Account payment!')
+      const custPhone = (cust?.phone || '').trim()
+      if (cust && (!custPhone || /^noph/i.test(custPhone))) {
+        alert("This customer has no phone number. Customer Ledger payment requires a phone number — please add it first.")
         return
       }
     }
