@@ -4,8 +4,8 @@ import React, { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  ArrowLeft, PlusCircle, X, Search, DollarSign, Wallet,
-  TrendingDown, Save, RefreshCw, Users, Clock
+  ArrowLeft, PlusCircle, X, Search, DollarSign,
+  Save, Users, Clock, Wallet
 } from 'lucide-react'
 import ProtectedPage from '../../components/ProtectedPage'
 import { supabase } from '../../lib/supabase'
@@ -15,9 +15,6 @@ import NotificationSystem, { notify } from '../../components/ui/NotificationSyst
 
 const formatCurrency = (amount) =>
   new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', minimumFractionDigits: 0 }).format(amount || 0)
-
-const formatDate = (d) =>
-  d ? new Date(d).toLocaleDateString('en-PK', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'
 
 const REPAYMENT_TYPES = [
   { value: 'next_payroll', label: 'Deduct from Next Payroll' },
@@ -48,10 +45,8 @@ function PayrollPageInner() {
   const router = useRouter()
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [advances, setAdvances] = useState([])
   const [employees, setEmployees] = useState([])
   const [paymentAccounts, setPaymentAccounts] = useState([])
-  const [searchTerm, setSearchTerm] = useState('')
 
   const [showModal, setShowModal] = useState(false)
   const [form, setForm] = useState({ ...EMPTY_FORM })
@@ -74,21 +69,10 @@ function PayrollPageInner() {
   const fetchAll = async () => {
     setLoading(true)
     try {
-      await Promise.all([fetchAdvances(), fetchEmployees(), fetchPaymentAccounts()])
+      await Promise.all([fetchEmployees(), fetchPaymentAccounts()])
     } finally {
       setLoading(false)
     }
-  }
-
-  const fetchAdvances = async () => {
-    const { data, error } = await supabase
-      .from('payroll_advances')
-      .select('*, payroll_employees(name, designation)')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false })
-      .limit(100)
-    if (error) { notify.error('Failed to load advances'); return }
-    setAdvances(data || [])
   }
 
   const fetchEmployees = async () => {
@@ -102,9 +86,6 @@ function PayrollPageInner() {
   }
 
   const fetchPaymentAccounts = async () => {
-    // Mirror the Purchase Order "Pay Now" behaviour: when a cashier with their
-    // own drawer is logged in, show that cashier's accounts; otherwise show the
-    // business accounts (cashier_id null).
     const isAdmin = authManager.getRole() === 'admin'
     const cashier = authManager.getCashier()
     const drawerEnabled = !isAdmin && (
@@ -147,7 +128,6 @@ function PayrollPageInner() {
       const cashierTag = cashier?.name ? `Given by cashier: ${cashier.name}` : 'Given via cashier app'
       const fullNotes = form.notes.trim() ? `${form.notes.trim()} — ${cashierTag}` : cashierTag
 
-      // Step 1: create the advance as pending
       const { data: inserted, error: insErr } = await supabase
         .from('payroll_advances')
         .insert({
@@ -167,7 +147,6 @@ function PayrollPageInner() {
       if (insErr) throw insErr
       insertedId = inserted.id
 
-      // Step 2: approve + disburse (debits the payment account, writes the ledger)
       const { data: result, error: rpcErr } = await supabase.rpc('approve_salary_advance', {
         p_advance_id: inserted.id,
         p_user_id: user.id,
@@ -180,9 +159,7 @@ function PayrollPageInner() {
       const empName = employees.find(e => e.id === form.employee_id)?.name || 'employee'
       notify.success(`${formatCurrency(amount)} advance paid to ${empName}`)
       setShowModal(false)
-      fetchAll()
     } catch (err) {
-      // Roll back the pending advance if disbursement failed
       if (insertedId) {
         await supabase.from('payroll_advances').delete().eq('id', insertedId).eq('status', 'pending')
       }
@@ -191,21 +168,6 @@ function PayrollPageInner() {
       setSaving(false)
     }
   }
-
-  // ── Stats ──
-  const totalGiven = advances
-    .filter(a => a.status === 'approved' || a.status === 'fully_repaid')
-    .reduce((s, a) => s + (a.amount || 0), 0)
-  const totalOutstanding = advances
-    .filter(a => a.status === 'approved')
-    .reduce((s, a) => s + Math.max(0, (a.amount || 0) - (a.total_repaid || 0)), 0)
-
-  const filtered = advances.filter(a => {
-    if (!searchTerm) return true
-    const emp = a.payroll_employees
-    return emp?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-           a.reason?.toLowerCase().includes(searchTerm.toLowerCase())
-  })
 
   const selectedEmployee = employees.find(e => e.id === form.employee_id)
   const filteredEmployees = employees.filter(e =>
@@ -219,7 +181,7 @@ function PayrollPageInner() {
       <NotificationSystem />
 
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+      <div className="flex items-center justify-between gap-3 mb-6">
         <div className="flex items-center gap-3">
           <button
             onClick={() => router.push('/dashboard')}
@@ -234,102 +196,30 @@ function PayrollPageInner() {
         </div>
         <button
           onClick={openModal}
-          className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium shadow-sm"
+          disabled={loading}
+          className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium shadow-sm disabled:opacity-60"
         >
           <PlusCircle className="w-4 h-4" /> Give Advance
         </button>
       </div>
 
-      {/* Stat cards */}
-      <div className="grid grid-cols-2 gap-3 mb-4">
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 border border-gray-100 dark:border-slate-700">
-          <div className="flex items-center justify-between gap-2">
-            <div className="min-w-0">
-              <p className="text-xs text-gray-600 dark:text-slate-400 mb-0.5">Total Given</p>
-              <p className="text-lg sm:text-xl font-bold text-gray-900 dark:text-white truncate">{formatCurrency(totalGiven)}</p>
-            </div>
-            <div className="p-2 rounded-full bg-blue-100 dark:bg-blue-900/40 shrink-0">
-              <DollarSign className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-            </div>
-          </div>
+      {/* Centered prompt */}
+      <div className="flex flex-col items-center justify-center py-24">
+        <div className="p-5 rounded-full bg-blue-50 dark:bg-blue-900/20 mb-4">
+          <Wallet className="w-10 h-10 text-blue-500 dark:text-blue-400" />
         </div>
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 border border-gray-100 dark:border-slate-700">
-          <div className="flex items-center justify-between gap-2">
-            <div className="min-w-0">
-              <p className="text-xs text-gray-600 dark:text-slate-400 mb-0.5">Outstanding</p>
-              <p className="text-lg sm:text-xl font-bold text-gray-900 dark:text-white truncate">{formatCurrency(totalOutstanding)}</p>
-            </div>
-            <div className="p-2 rounded-full bg-red-100 dark:bg-red-900/40 shrink-0">
-              <TrendingDown className="w-5 h-5 text-red-600 dark:text-red-400" />
-            </div>
-          </div>
-        </div>
+        <p className="text-gray-700 dark:text-slate-300 font-medium mb-1">Give a salary advance</p>
+        <p className="text-sm text-gray-400 dark:text-slate-500 mb-5 text-center max-w-xs">
+          Select an employee, enter the amount and payment account, then confirm.
+        </p>
+        <button
+          onClick={openModal}
+          disabled={loading}
+          className="flex items-center gap-2 px-5 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium shadow disabled:opacity-60"
+        >
+          <PlusCircle className="w-4 h-4" /> Give Advance
+        </button>
       </div>
-
-      {/* Search */}
-      <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm mb-4 p-3 border border-gray-100 dark:border-slate-700">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
-            value={searchTerm}
-            onChange={e => setSearchTerm(e.target.value)}
-            placeholder="Search employee or reason…"
-            className="w-full pl-9 pr-3 py-2 border border-gray-300 dark:border-slate-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white dark:bg-slate-700 text-gray-900 dark:text-white text-sm"
-          />
-        </div>
-      </div>
-
-      {/* List */}
-      {loading ? (
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm flex items-center justify-center py-20 border border-gray-100 dark:border-slate-700">
-          <div className="text-center">
-            <RefreshCw className="w-8 h-8 text-blue-600 mx-auto mb-3 animate-spin" />
-            <p className="text-gray-500 dark:text-slate-400 text-sm">Loading…</p>
-          </div>
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="bg-white dark:bg-slate-800 rounded-lg shadow-sm flex flex-col items-center justify-center py-20 border border-gray-100 dark:border-slate-700">
-          <Wallet className="w-10 h-10 text-gray-300 dark:text-slate-600 mb-3" />
-          <p className="text-gray-500 dark:text-slate-400 text-sm">No advances yet</p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {filtered.map(adv => {
-            const emp = adv.payroll_employees
-            const outstanding = Math.max(0, (adv.amount || 0) - (adv.total_repaid || 0))
-            return (
-              <div key={adv.id} className="bg-white dark:bg-slate-800 rounded-lg shadow-sm p-3 border border-gray-100 dark:border-slate-700">
-                <div className="flex items-center gap-3 mb-3">
-                  <InitialsAvatar name={emp?.name} />
-                  <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-gray-900 dark:text-white truncate">{emp?.name || '—'}</p>
-                    <p className="text-xs text-gray-500 dark:text-slate-400">{formatDate(adv.created_at)}</p>
-                  </div>
-                  <p className="text-lg font-bold text-gray-900 dark:text-white shrink-0">{formatCurrency(adv.amount)}</p>
-                </div>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div>
-                    <p className="text-xs text-gray-500 dark:text-slate-400">Outstanding</p>
-                    <p className={`font-semibold ${outstanding > 0 ? 'text-red-600 dark:text-red-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                      {formatCurrency(outstanding)}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500 dark:text-slate-400">Repayment</p>
-                    <p className="text-gray-700 dark:text-slate-300 capitalize text-xs">{adv.repayment_type?.replace(/_/g, ' ') || '—'}</p>
-                  </div>
-                  {adv.reason && (
-                    <div className="col-span-2">
-                      <p className="text-xs text-gray-500 dark:text-slate-400">Reason</p>
-                      <p className="text-gray-700 dark:text-slate-300 text-xs line-clamp-2">{adv.reason}</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      )}
 
       {/* Give Advance Modal */}
       <AnimatePresence>
@@ -539,7 +429,7 @@ function PayrollPageInner() {
                   disabled={saving || employees.length === 0}
                   className="flex items-center gap-2 px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium disabled:opacity-60"
                 >
-                  {saving ? <Clock className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  {saving ? <Clock className="w-4 h-4 animate-spin" /> : <DollarSign className="w-4 h-4" />}
                   {saving ? 'Paying…' : 'Pay Advance'}
                 </button>
               </div>

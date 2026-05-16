@@ -8,6 +8,13 @@ import { permissionManager } from '../../lib/permissionManager'
 import NotificationSystem, { notify } from '../ui/NotificationSystem'
 import Modal from '../ui/Modal'
 
+const localDateStr = (d = new Date()) => {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 export default function CreatePurchaseOrderModal({ isOpen, onClose, onCreated }) {
   const [step, setStep] = useState(1) // 1: header | 2: items | 3: confirm
   const [loading, setLoading] = useState(false)
@@ -19,7 +26,7 @@ export default function CreatePurchaseOrderModal({ isOpen, onClose, onCreated })
 
   const [formData, setFormData] = useState({
     supplier_id: '',
-    po_date: new Date().toISOString().split('T')[0],
+    po_date: localDateStr(),
     notes: '',
     delivery_charges: 0,
     labour_charges: 0,
@@ -182,7 +189,7 @@ export default function CreatePurchaseOrderModal({ isOpen, onClose, onCreated })
     setStep(1)
     setFormData({
       supplier_id: '',
-      po_date: new Date().toISOString().split('T')[0],
+      po_date: localDateStr(),
       notes: '',
       delivery_charges: 0,
       labour_charges: 0,

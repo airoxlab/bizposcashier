@@ -8,6 +8,13 @@ import { permissionManager } from '../../lib/permissionManager'
 import { notify } from '../ui/NotificationSystem'
 import themeManager from '../../lib/themeManager'
 
+const localDateStr = (d = new Date()) => {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 const VALID_METHODS = ['Cash', 'EasyPaisa', 'JazzCash', 'Bank', 'Cheque']
 const resolvePaymentMethod = (key) => {
   if (!key) return 'Cash'
@@ -332,7 +339,7 @@ export default function EditPurchaseOrderPanel({ purchaseOrder, onBack, onUpdate
 
       if (payNow && paymentAccountId && canPay) {
         const amt   = parseFloat(paymentAmount) || grand
-        const today = header.po_date || new Date().toISOString().split('T')[0]
+        const today = header.po_date || localDateStr()
         const selectedAccount = paymentAccounts.find(a => a.id === paymentAccountId)
         const { data: payment } = await supabase.from('supplier_payments').insert({
           user_id: userId, supplier_id: primarySupplierId, purchase_order_id: purchaseOrder.id,

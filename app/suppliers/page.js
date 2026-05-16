@@ -10,6 +10,7 @@ import ProtectedPage from '../../components/ProtectedPage'
 import NotificationSystem, { notify } from '../../components/ui/NotificationSystem'
 import SupplierPaymentModal from '../../components/inventory/SupplierPaymentModal'
 import themeManager from '../../lib/themeManager'
+import { permissionManager } from '../../lib/permissionManager'
 
 export default function SuppliersPage() {
   const router = useRouter()
@@ -31,6 +32,11 @@ export default function SuppliersPage() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [formData, setFormData] = useState({ name: '', phone: '', email: '', address: '', opening_amount: 0 })
   const [submitting, setSubmitting] = useState(false)
+
+  // Permissions (admin always gets full access)
+  const isAdmin = authManager.getRole() === 'admin'
+  const canRecordPayment = isAdmin || permissionManager.hasPermission('SUPPLIER_RECORD_PAYMENT')
+  const canViewLedger    = isAdmin || permissionManager.hasPermission('SUPPLIER_VIEW_LEDGER')
 
   // Theme
   const themeClasses = themeManager.getClasses()
@@ -234,17 +240,19 @@ export default function SuppliersPage() {
                   className="w-full pl-9 pr-3 py-2 text-sm bg-white/90 border-white/20 text-gray-800 rounded-lg focus:ring-1 focus:ring-white/30 border"
                 />
               </div>
-              <motion.button
-                whileHover={{ scale: 1.05 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => {
-                  resetForm()
-                  setShowAddModal(true)
-                }}
-                className="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-lg transition-all"
-              >
-                <Plus className="w-4 h-4 text-white" />
-              </motion.button>
+              {isAdmin && (
+                <motion.button
+                  whileHover={{ scale: 1.05 }}
+                  whileTap={{ scale: 0.95 }}
+                  onClick={() => {
+                    resetForm()
+                    setShowAddModal(true)
+                  }}
+                  className="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-lg transition-all"
+                >
+                  <Plus className="w-4 h-4 text-white" />
+                </motion.button>
+              )}
             </div>
           </div>
 
@@ -306,27 +314,31 @@ export default function SuppliersPage() {
                     )}
                   </div>
                   <div className="flex items-center gap-2">
-                    <motion.button
-                      whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
-                      onClick={() => setShowPaymentModal(true)}
-                      className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
-                    >
-                      <CreditCard className="w-4 h-4" /> Record Payment
-                    </motion.button>
-                    <motion.button
-                      whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
-                      onClick={() => openEditModal(selectedSupplier)}
-                      className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold ${isDark ? 'bg-gray-700 hover:bg-gray-600 text-gray-200' : 'bg-white hover:bg-gray-100 text-gray-700 border border-gray-200'}`}
-                    >
-                      <Edit2 className="w-3.5 h-3.5" /> Edit
-                    </motion.button>
-                    <motion.button
-                      whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
-                      onClick={() => setShowDeleteConfirm(true)}
-                      className={`p-2 rounded-xl ${isDark ? 'bg-gray-700 hover:bg-red-900/40 text-gray-400 hover:text-red-400' : 'bg-white hover:bg-red-50 text-gray-400 hover:text-red-500 border border-gray-200'}`}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </motion.button>
+                    {canRecordPayment && (
+                      <motion.button
+                        whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
+                        onClick={() => setShowPaymentModal(true)}
+                        className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
+                      >
+                        <CreditCard className="w-4 h-4" /> Record Payment
+                      </motion.button>
+                    )}
+                    {isAdmin && <>
+                      <motion.button
+                        whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
+                        onClick={() => openEditModal(selectedSupplier)}
+                        className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold ${isDark ? 'bg-gray-700 hover:bg-gray-600 text-gray-200' : 'bg-white hover:bg-gray-100 text-gray-700 border border-gray-200'}`}
+                      >
+                        <Edit2 className="w-3.5 h-3.5" /> Edit
+                      </motion.button>
+                      <motion.button
+                        whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
+                        onClick={() => setShowDeleteConfirm(true)}
+                        className={`p-2 rounded-xl ${isDark ? 'bg-gray-700 hover:bg-red-900/40 text-gray-400 hover:text-red-400' : 'bg-white hover:bg-red-50 text-gray-400 hover:text-red-500 border border-gray-200'}`}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </motion.button>
+                    </>}
                   </div>
                 </div>
 
@@ -355,7 +367,7 @@ export default function SuppliersPage() {
                 </div>
 
                 {/* Transactions table — same style as ledger */}
-                <motion.div
+                {canViewLedger && <motion.div
                   initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
                   className={`${themeClasses.card} rounded-xl border ${themeClasses.border} overflow-hidden`}
                 >
@@ -417,7 +429,7 @@ export default function SuppliersPage() {
                       </table>
                     </div>
                   )}
-                </motion.div>
+                </motion.div>}
               </motion.div>
             ) : (
               <motion.div

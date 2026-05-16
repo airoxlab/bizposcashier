@@ -8,6 +8,13 @@ import { permissionManager } from '../../lib/permissionManager'
 import { notify } from '../ui/NotificationSystem'
 import themeManager from '../../lib/themeManager'
 
+const localDateStr = (d = new Date()) => {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 const VALID_METHODS = ['Cash', 'EasyPaisa', 'JazzCash', 'Bank', 'Cheque']
 const resolvePaymentMethod = (key) => {
   if (!key) return 'Cash'
@@ -89,7 +96,7 @@ export default function RecordPaymentModal({ isOpen, onClose, purchaseOrder, onP
     try {
       setLoading(true)
       const amount = parseFloat(form.amount)
-      const today  = new Date().toISOString().split('T')[0]
+      const today  = localDateStr()
 
       const selectedAccount = accounts.find(a => a.id === form.payment_account_id)
       const paymentMethod   = resolvePaymentMethod(selectedAccount?.payment_method_key)

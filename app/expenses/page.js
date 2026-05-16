@@ -24,7 +24,8 @@ import {
   ChevronDown,
   ChevronUp,
   Sun,
-  Moon
+  Moon,
+  Truck
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
@@ -115,6 +116,9 @@ export default function ExpensesPage() {
   // Payment accounts
   const [paymentAccounts, setPaymentAccounts] = useState([])
 
+  // Suppliers
+  const [suppliers, setSuppliers] = useState([])
+
   // UI states
   const [showAddExpense, setShowAddExpense] = useState(false)
   const [showCategoryModal, setShowCategoryModal] = useState(false)
@@ -145,6 +149,7 @@ export default function ExpensesPage() {
     description: '',
     paymentMethod: '',
     paymentAccountId: '',
+    supplierId: '',
     taxRate: 0,
     expenseDate: localDateStr(new Date())
   })
@@ -303,9 +308,10 @@ export default function ExpensesPage() {
             .from('expenses')
             .select(`
               id, amount, description, payment_method, expense_date, expense_time,
-              tax_rate, tax_amount, total_amount, created_at, category_id, subcategory_id, cashier_id,
+              tax_rate, tax_amount, total_amount, created_at, category_id, subcategory_id, cashier_id, supplier_id,
               category:expense_categories (id, name),
-              subcategory:expense_subcategories (id, name)
+              subcategory:expense_subcategories (id, name),
+              supplier:suppliers (id, name)
             `)
             .eq('user_id', user.id)
             .order('expense_date', { ascending: false })
@@ -341,6 +347,7 @@ export default function ExpensesPage() {
       localStorage.setItem(EXPENSE_CACHE.subcategories, JSON.stringify(subcategoriesResult.data || []))
 
       fetchPaymentAccounts()
+      fetchSuppliers()
     } catch (error) {
       console.error('Error fetching expense data:', error)
       notify.error(`Failed to load data: ${error.message}`)
@@ -464,6 +471,14 @@ export default function ExpensesPage() {
     }
   }
 
+  const fetchSuppliers = async () => {
+    try {
+      if (!user?.id) return
+      const { data } = await supabase.from('suppliers').select('id, name').eq('user_id', user.id).order('name')
+      setSuppliers(data || [])
+    } catch { /* silent */ }
+  }
+
   // ─── Expense CRUD ──────────────────────────────────────────────────────────
   const calculateTotalAmount = () => {
     const amount = parseFloat(expenseForm.amount) || 0
@@ -472,7 +487,8 @@ export default function ExpensesPage() {
 
   const handleSaveExpense = async () => {
     try {
-      if (!expenseForm.amount || !expenseForm.categoryId || !expenseForm.paymentMethod) {
+      const effectivePaymentMethod = expenseForm.supplierId ? 'Unpaid' : expenseForm.paymentMethod
+      if (!expenseForm.amount || !expenseForm.categoryId || !effectivePaymentMethod) {
         notify.warning('Please fill in all required fields')
         return
       }
@@ -486,8 +502,9 @@ export default function ExpensesPage() {
         category_id: expenseForm.categoryId,
         subcategory_id: expenseForm.subcategoryId || null,
         description: expenseForm.description,
-        payment_method: expenseForm.paymentMethod,
-        payment_account_id: expenseForm.paymentAccountId || null,
+        payment_method: effectivePaymentMethod,
+        payment_account_id: expenseForm.supplierId ? null : (expenseForm.paymentAccountId || null),
+        supplier_id: expenseForm.supplierId || null,
         tax_rate: expenseForm.taxRate,
         tax_amount: taxAmount,
         total_amount: totalAmount,
@@ -529,8 +546,35 @@ export default function ExpensesPage() {
         const { error } = await supabase.from('expenses').update(expenseData).eq('id', editingExpense.id)
         if (error) throw error
       } else {
-        const { error } = await supabase.from('expenses').insert(expenseData)
+        const { data: newExpense, error } = await supabase.from('expenses').insert(expenseData).select().single()
         if (error) throw error
+
+        // Create supplier ledger debit entry if linked to a supplier
+        if (expenseForm.supplierId && newExpense) {
+          const { data: lastEntry } = await supabase
+            .from('supplier_ledger')
+            .select('balance_after')
+            .eq('supplier_id', expenseForm.supplierId)
+            .eq('user_id', user.id)
+            .order('created_at', { ascending: false })
+            .limit(1).maybeSingle()
+
+          const balanceBefore = parseFloat(lastEntry?.balance_after ?? 0)
+          const balanceAfter  = balanceBefore + totalAmount
+
+          const selectedCat = categories.find(c => c.id === expenseForm.categoryId)
+          await supabase.from('supplier_ledger').insert({
+            user_id:          user.id,
+            supplier_id:      expenseForm.supplierId,
+            transaction_type: 'debit',
+            transaction_date: expenseForm.expenseDate,
+            amount:           totalAmount,
+            balance_before:   balanceBefore,
+            balance_after:    balanceAfter,
+            description:      expenseForm.description || `Expense: ${selectedCat?.name || 'Uncategorized'}`,
+            created_by:       user.id,
+          })
+        }
       }
       setShowAddExpense(false)
       setEditingExpense(null)
@@ -624,6 +668,7 @@ export default function ExpensesPage() {
       description: '',
       paymentMethod: '',
       paymentAccountId: '',
+      supplierId: '',
       taxRate: 0,
       expenseDate: localDateStr(new Date())
     })
@@ -638,6 +683,7 @@ export default function ExpensesPage() {
       description: expense.description || '',
       paymentMethod: expense.payment_method,
       paymentAccountId: expense.payment_account_id || '',
+      supplierId: expense.supplier_id || '',
       taxRate: expense.tax_rate || 0,
       expenseDate: expense.expense_date
     })
@@ -1275,10 +1321,58 @@ export default function ExpensesPage() {
                   </div>
                 )}
 
+                {/* Link to Supplier (optional) */}
+                {suppliers.length > 0 && (
+                  <div>
+                    <label className={`block text-sm font-semibold ${themeClasses.textPrimary} mb-1.5`}>
+                      Link to Supplier
+                      <span className={`ml-2 text-xs font-normal ${themeClasses.textSecondary}`}>optional — marks as unpaid in supplier ledger</span>
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={() => setExpenseForm(f => ({ ...f, supplierId: '', paymentMethod: f.supplierId ? '' : f.paymentMethod }))}
+                        className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
+                          !expenseForm.supplierId
+                            ? 'bg-gray-500 border-gray-500 text-white'
+                            : isDark ? 'bg-gray-700 border-gray-600 text-gray-300 hover:border-gray-500' : 'bg-white border-gray-200 text-gray-600 hover:border-gray-400'
+                        }`}
+                      >
+                        None
+                      </button>
+                      {suppliers.map(s => (
+                        <button
+                          key={s.id}
+                          onClick={() => setExpenseForm(f => ({ ...f, supplierId: s.id, paymentMethod: 'Unpaid', paymentAccountId: '' }))}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
+                            expenseForm.supplierId === s.id
+                              ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm'
+                              : isDark ? 'bg-gray-700 border-gray-600 text-gray-200 hover:border-indigo-500' : 'bg-white border-gray-200 text-gray-700 hover:border-indigo-400'
+                          }`}
+                        >
+                          <Truck className="w-3 h-3" />
+                          {s.name}
+                        </button>
+                      ))}
+                    </div>
+                    {expenseForm.supplierId && (
+                      <p className={`mt-1.5 text-xs ${isDark ? 'text-amber-400' : 'text-amber-600'}`}>
+                        This expense will be recorded as unpaid in the supplier ledger. Pay via Suppliers → Record Payment.
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {/* Pay From Account */}
                 <div>
-                  <label className={`block text-sm font-semibold ${themeClasses.textPrimary} mb-2`}>Pay From Account *</label>
-                  {paymentAccounts.length > 0 ? (
+                  <label className={`block text-sm font-semibold ${themeClasses.textPrimary} mb-2`}>
+                    {expenseForm.supplierId ? 'Payment' : 'Pay From Account *'}
+                  </label>
+                  {expenseForm.supplierId ? (
+                    <div className={`flex items-center gap-2 px-4 py-3 rounded-xl border-2 ${isDark ? 'bg-amber-900/20 border-amber-700' : 'bg-amber-50 border-amber-300'}`}>
+                      <Clock className={`w-4 h-4 ${isDark ? 'text-amber-400' : 'text-amber-600'}`} />
+                      <span className={`text-sm font-semibold ${isDark ? 'text-amber-300' : 'text-amber-700'}`}>Unpaid — linked to supplier</span>
+                    </div>
+                  ) : paymentAccounts.length > 0 ? (
                     <div className="grid grid-cols-2 gap-2">
                       {paymentAccounts.map((account) => (
                         <button

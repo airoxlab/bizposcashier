@@ -52,6 +52,13 @@ import SendBillButton from '../../components/pos/SendBillButton'
 
 import Image from 'next/image'
 
+const localDateStr = (d = new Date()) => {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 export default function PaymentPage() {
   const router = useRouter()
   const [user, setUser] = useState(null)
@@ -1163,7 +1170,7 @@ const processOrder = async () => {
             id: order.id,
             order_number: newOrderNumber,
             order_type: orderData.orderType,
-            order_date: new Date().toISOString().split('T')[0],
+            order_date: localDateStr(),
             total_amount: orderData.total,
             customer_id: orderData.customer?.id || null,
             customers: orderData.customer || null,
@@ -1296,7 +1303,7 @@ const processOrder = async () => {
         tax_amount: 0,
         payment_method: 'Unpaid',
         description: expenseDescription,
-        expense_date: new Date().toISOString().split('T')[0],
+        expense_date: localDateStr(),
         expense_time: new Date().toTimeString().split(' ')[0],
       }
 

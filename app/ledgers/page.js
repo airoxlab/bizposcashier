@@ -10,6 +10,7 @@ import ProtectedPage from '../../components/ProtectedPage'
 import NotificationSystem, { notify } from '../../components/ui/NotificationSystem'
 import SupplierPaymentModal from '../../components/inventory/SupplierPaymentModal'
 import themeManager from '../../lib/themeManager'
+import { permissionManager } from '../../lib/permissionManager'
 
 export default function LedgersPage() {
   const router = useRouter()
@@ -22,6 +23,9 @@ export default function LedgersPage() {
   const [selectedType, setSelectedType]         = useState('all')
   const [searchTerm, setSearchTerm]             = useState('')
   const [showPaymentModal, setShowPaymentModal] = useState(false)
+
+  const isAdmin         = authManager.getRole() === 'admin'
+  const canRecordPayment = isAdmin || permissionManager.hasPermission('SUPPLIER_RECORD_PAYMENT')
 
   const themeClasses = themeManager.getClasses()
   const isDark       = themeManager.isDark()
@@ -128,7 +132,7 @@ export default function LedgersPage() {
   if (!user) return <div className={`h-screen w-screen ${themeClasses.background}`} />
 
   return (
-    <ProtectedPage permissionKey="SUPPLIER_LEDGER" pageName="Supplier Ledger">
+    <ProtectedPage permissionKey="SUPPLIER_VIEW_LEDGER" pageName="Supplier Ledger">
       <NotificationSystem />
       <div className={`h-screen flex ${themeClasses.background} overflow-hidden text-sm`}>
 
@@ -251,7 +255,7 @@ export default function LedgersPage() {
                 </p>
               )}
             </div>
-            {activeSupplierObj && (
+            {activeSupplierObj && canRecordPayment && (
               <motion.button
                 whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
                 onClick={() => setShowPaymentModal(true)}

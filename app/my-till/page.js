@@ -46,6 +46,13 @@ const SOURCE_LABELS = {
 }
 
 
+const localDateStr = (d = new Date()) => {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 function MyTillContent() {
   const router = useRouter()
   const [user, setUser] = useState(null)
@@ -55,7 +62,7 @@ function MyTillContent() {
   const [ledgerEntries, setLedgerEntries] = useState([])
   const [ledgerLoading, setLedgerLoading] = useState(false)
   const [selectedAccountId, setSelectedAccountId] = useState('all')
-  const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0])
+  const [selectedDate, setSelectedDate] = useState(() => localDateStr())
   const [typeFilter, setTypeFilter] = useState('all')
   const [expandedEntry, setExpandedEntry] = useState(null)
 
@@ -188,19 +195,19 @@ function MyTillContent() {
     } finally { setLedgerLoading(false) }
   }, [accounts, selectedAccountId, selectedDate, typeFilter])
 
-  const today = new Date().toISOString().split('T')[0]
+  const today = localDateStr()
   const isToday = selectedDate === today
 
   const goToPrevDay = () => {
     const d = new Date(selectedDate + 'T12:00:00')
     d.setDate(d.getDate() - 1)
-    setSelectedDate(d.toISOString().split('T')[0])
+    setSelectedDate(localDateStr(d))
   }
 
   const goToNextDay = () => {
     const d = new Date(selectedDate + 'T12:00:00')
     d.setDate(d.getDate() + 1)
-    const next = d.toISOString().split('T')[0]
+    const next = localDateStr(d)
     if (next <= today) setSelectedDate(next)
   }
 

@@ -9,6 +9,13 @@ import { notify } from '../ui/NotificationSystem'
 import themeManager from '../../lib/themeManager'
 import { poDraft } from '../../lib/poDraft'
 
+const localDateStr = (d = new Date()) => {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 const VALID_METHODS = ['Cash', 'EasyPaisa', 'JazzCash', 'Bank', 'Cheque']
 const resolvePaymentMethod = (key) => {
   if (!key) return 'Cash'
@@ -157,7 +164,7 @@ export default function CreatePurchaseOrderPanel({ onClose, onCreated, restoreDr
   )
 
   const [header, setHeader] = useState(() => savedDraft?.header || {
-    po_date: new Date().toISOString().split('T')[0],
+    po_date: localDateStr(),
     notes: '',
     delivery_charges: '',
     labour_charges: '',
@@ -398,7 +405,7 @@ export default function CreatePurchaseOrderPanel({ onClose, onCreated, restoreDr
 
       if (payNow && paymentAccountId && canPay) {
         const amt   = parseFloat(paymentAmount) || grand
-        const today = header.po_date || new Date().toISOString().split('T')[0]
+        const today = header.po_date || localDateStr()
         const selectedAccount = paymentAccounts.find(a => a.id === paymentAccountId)
         const { data: payment } = await supabase.from('supplier_payments').insert({
           user_id: userId, supplier_id: primarySupplierId, purchase_order_id: poId,

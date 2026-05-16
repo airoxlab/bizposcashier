@@ -81,6 +81,13 @@ const CASHIER_PLANS = {
 }
 const PLAN_TIER = { starter: 0, growth: 1, business: 2 }
 
+const localDateStr = (d = new Date()) => {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 // Returns the required plan display name if current plan cannot access route, else null.
 function getRoutePlanLock(route, currentSlug) {
   for (const [slug, plan] of Object.entries(CASHIER_PLANS)) {
@@ -354,7 +361,7 @@ export default function Dashboard() {
     try {
       const userData = authManager.getCurrentUser()
       if (!userData?.id) return
-      const today = new Date().toISOString().split('T')[0]
+      const today = localDateStr()
 
       if (!cacheManager.checkOnlineStatus()) {
         const cached = cacheManager.cache.orders || []

@@ -8,6 +8,13 @@ import {
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { authManager } from '../../lib/authManager'
+
+const localDateStr = (d = new Date()) => {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
 import { permissionManager } from '../../lib/permissionManager'
 import { notify } from '../ui/NotificationSystem'
 import themeManager from '../../lib/themeManager'
@@ -330,7 +337,7 @@ function CreateReturnPanel({ user, onClose, onCreated }) {
         p_supplier_id:        selectedPO.supplier_id,
         p_purchase_order_id:  selectedPO.id,
         p_po_number:          selectedPO.po_number,
-        p_return_date:        new Date().toISOString().split('T')[0],
+        p_return_date:        localDateStr(),
         p_reason:             reason.trim(),
         p_refund_type:        refundType,
         p_payment_account_id: refundType === 'cash_refund' ? paymentAccountId : null,
@@ -352,7 +359,7 @@ function CreateReturnPanel({ user, onClose, onCreated }) {
         id:            result.return_id,
         return_number: result.return_number,
         po_number:     selectedPO.po_number,
-        return_date:   new Date().toISOString().split('T')[0],
+        return_date:   localDateStr(),
         refund_type:   refundType,
         total_amount:  result.total_amount,
         supplier_id:   selectedPO.supplier_id,
