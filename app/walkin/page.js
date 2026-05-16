@@ -1063,24 +1063,24 @@ export default function WalkInPage() {
       }
 
       // WhatsApp auto-send
+      const waNotify = (r, successMsg) => {
+        if (r?.success) toast.success(successMsg, { duration: 3000 })
+        else if (r && !r.silent) toast.error(`WhatsApp: ${r.error || 'Failed to send'}`, { duration: 5000 })
+      }
       if (newStatus === 'Preparing') {
         triggerWhatsAppAutoSend(order, user?.id, 'Preparing')
-          .then(r => { if (r?.success) toast.success('WhatsApp: preparing notification sent', { duration: 3000 }) })
-          .catch(err => console.error('[Walkin] WA preparing-send error:', err.message))
+          .then(r => waNotify(r, 'WhatsApp: preparing notification sent'))
+          .catch(err => toast.error(`WhatsApp error: ${err.message}`, { duration: 5000 }))
       }
       if (newStatus === 'Ready') {
         triggerWhatsAppAutoSend(order, user?.id, 'Ready')
-          .then(r => { if (r?.success) toast.success('WhatsApp: order ready notification sent', { duration: 3000 }) })
-          .catch(err => console.error('[Walkin] WA ready-send error:', err.message))
+          .then(r => waNotify(r, 'WhatsApp: order ready notification sent'))
+          .catch(err => toast.error(`WhatsApp error: ${err.message}`, { duration: 5000 }))
       }
       if (newStatus === 'Completed') {
-        triggerWhatsAppAutoSend(order, user?.id, 'Completed').then(result => {
-          if (result?.success) {
-            toast.success(`WhatsApp message sent to customer`, { duration: 3000 })
-          } else if (result?.error) {
-            toast.error(`WhatsApp: ${result.error}`, { duration: 4000 })
-          }
-        }).catch(err => console.error('[Walkin] WA auto-send error:', err.message))
+        triggerWhatsAppAutoSend(order, user?.id, 'Completed')
+          .then(r => waNotify(r, 'WhatsApp message sent to customer'))
+          .catch(err => toast.error(`WhatsApp error: ${err.message}`, { duration: 5000 }))
       }
 
       // If order is completed, free up the table

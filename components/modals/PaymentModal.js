@@ -74,19 +74,32 @@ export default function PaymentModal({
   const [serviceChargeAmount, setServiceChargeAmount] = useState(0)
 
   const METHOD_KEY_UI = {
-    cash:      { icon: DollarSign, color: 'from-green-500 to-green-600',  requiresAmount: true,  logo: null },
-    easypaisa: { icon: Smartphone, color: 'from-green-600 to-green-700',  requiresAmount: false, logo: '/images/Easypaisa-logo.png' },
-    jazzcash:  { icon: Smartphone, color: 'from-orange-500 to-red-600',   requiresAmount: false, logo: '/images/new-Jazzcash-logo.png' },
-    bank:      { icon: Building,   color: 'from-blue-500 to-indigo-600',  requiresAmount: false, logo: '/images/meezan-bank-logo.png' },
+    cash:      { icon: DollarSign, color: 'from-green-500 to-green-600',   requiresAmount: true,  logo: null },
+    easypaisa: { icon: Smartphone, color: 'from-green-600 to-green-700',   requiresAmount: false, logo: '/images/Easypaisa-logo.png' },
+    jazzcash:  { icon: Smartphone, color: 'from-orange-500 to-red-600',    requiresAmount: false, logo: '/images/new-Jazzcash-logo.png' },
+    bank:      { icon: Building,   color: 'from-blue-500 to-indigo-600',   requiresAmount: false, logo: '/images/meezan-bank-logo.png' },
+    upaisa:    { icon: Smartphone, color: 'from-purple-500 to-purple-700', requiresAmount: false, logo: '/images/upaisa.png', logoClass: 'scale-150' },
+    nayapay:   { icon: Smartphone, color: 'from-red-500 to-red-700',       requiresAmount: false, logo: '/images/nayapay.png' },
+    sadapay:   { icon: Smartphone, color: 'from-pink-500 to-pink-700',     requiresAmount: false, logo: '/images/sadapay.png' },
+    hbl:       { icon: Building,   color: 'from-green-700 to-green-900',   requiresAmount: false, logo: '/images/hbl.png' },
+    hbl_pay:   { icon: Building,   color: 'from-green-700 to-green-900',   requiresAmount: false, logo: '/images/hbl.png' },
   }
   const DEFAULT_ACCT_UI = { icon: Wallet, color: 'from-indigo-500 to-purple-600', requiresAmount: false, logo: null }
 
-  const paymentMethods = cashierAccounts.map(acct => ({
-    id: acct.name,
-    name: acct.name,
-    accountId: acct.id,
-    ...(METHOD_KEY_UI[acct.payment_method_key] || DEFAULT_ACCT_UI),
-  }))
+  const paymentMethods = cashierAccounts.map(acct => {
+    const _name = (acct.name || '').toLowerCase()
+    const nameUi = _name.includes('easypaisa') ? METHOD_KEY_UI.easypaisa
+      : _name.includes('jazzcash') ? METHOD_KEY_UI.jazzcash
+      : _name.includes('upaisa')   ? METHOD_KEY_UI.upaisa
+      : _name.includes('nayapay')  ? METHOD_KEY_UI.nayapay
+      : _name.includes('sadapay')  ? METHOD_KEY_UI.sadapay
+      : _name.includes('hbl')      ? METHOD_KEY_UI.hbl
+      : _name.includes('cash')     ? METHOD_KEY_UI.cash
+      : _name.includes('bank')     ? METHOD_KEY_UI.bank
+      : null
+    const ui = METHOD_KEY_UI[acct.payment_method_key] || nameUi || DEFAULT_ACCT_UI
+    return { id: acct.name, name: acct.name, accountId: acct.id, ...ui }
+  })
 
   useEffect(() => {
     if (order) {

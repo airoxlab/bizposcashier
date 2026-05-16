@@ -1460,29 +1460,29 @@ export default function OrdersPage() {
       // ================================================================
 
       // WhatsApp auto-send
+      const waNotify = (r, successMsg) => {
+        if (r?.success) notify.success(successMsg)
+        else if (r && !r.silent) notify.error(`WhatsApp: ${r.error || 'Failed to send'}`)
+      }
       if (newStatus === 'Preparing') {
         triggerWhatsAppAutoSend(selectedOrder, user?.id, 'Preparing')
-          .then(r => { if (r?.success) notify.success('WhatsApp: preparing notification sent') })
-          .catch(err => console.error('[Orders] WA preparing-send error:', err.message))
+          .then(r => waNotify(r, 'WhatsApp: preparing notification sent'))
+          .catch(err => notify.error(`WhatsApp error: ${err.message}`))
       }
       if (newStatus === 'Ready') {
         triggerWhatsAppAutoSend(selectedOrder, user?.id, 'Ready')
-          .then(r => { if (r?.success) notify.success('WhatsApp: order ready notification sent') })
-          .catch(err => console.error('[Orders] WA ready-send error:', err.message))
+          .then(r => waNotify(r, 'WhatsApp: order ready notification sent'))
+          .catch(err => notify.error(`WhatsApp error: ${err.message}`))
       }
       if (newStatus === 'Dispatched') {
         triggerWhatsAppAutoSend(selectedOrder, user?.id, 'Dispatched')
-          .then(r => { if (r?.success) notify.success('WhatsApp: dispatch notification sent') })
-          .catch(err => console.error('[Orders] WA dispatch-send error:', err.message))
+          .then(r => waNotify(r, 'WhatsApp: dispatch notification sent'))
+          .catch(err => notify.error(`WhatsApp error: ${err.message}`))
       }
       if (newStatus === 'Completed') {
-        triggerWhatsAppAutoSend(selectedOrder, user?.id, 'Completed').then(result => {
-          if (result?.success) {
-            notify.success('WhatsApp thank-you message sent to customer')
-          } else if (result?.error) {
-            notify.error(`WhatsApp: ${result.error}`)
-          }
-        }).catch(err => console.error('[Orders] WA auto-send error:', err.message))
+        triggerWhatsAppAutoSend(selectedOrder, user?.id, 'Completed')
+          .then(r => waNotify(r, 'WhatsApp thank-you message sent to customer'))
+          .catch(err => notify.error(`WhatsApp error: ${err.message}`))
       }
 
       // Log order action only when online (it requires database access)

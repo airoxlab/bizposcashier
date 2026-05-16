@@ -26,7 +26,7 @@ export default function RecordPaymentModal({ isOpen, onClose, purchaseOrder, onP
   const isDark  = themeManager.isDark()
   const themeClasses = themeManager.getClasses()
 
-  const inputCls = `w-full px-3 py-2.5 rounded-lg border text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 ${
+  const inputCls = `w-full px-3 py-2.5 rounded-lg border text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
     isDark ? 'bg-gray-700 border-gray-600 text-white' : 'bg-white border-gray-300 text-gray-900'
   }`
 
@@ -183,15 +183,15 @@ export default function RecordPaymentModal({ isOpen, onClose, purchaseOrder, onP
         {/* Header */}
         <div className={`flex items-center justify-between px-6 py-4 border-b ${isDark ? 'border-gray-700' : 'border-gray-200'}`}>
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-teal-500/15 flex items-center justify-center">
-              <CreditCard className="w-5 h-5 text-teal-500" />
+            <div className="w-9 h-9 rounded-xl bg-indigo-500/15 flex items-center justify-center">
+              <CreditCard className="w-5 h-5 text-indigo-500" />
             </div>
             <div>
               <h3 className={`font-bold ${themeClasses.textPrimary}`}>Record Payment</h3>
               <p className={`text-xs ${themeClasses.textSecondary}`}>
                 {purchaseOrder.po_number}
                 {drawerEnabled && cashier?.name && (
-                  <span className="ml-1.5 text-teal-500 font-medium">· {cashier.name}'s account</span>
+                  <span className="ml-1.5 text-indigo-500 font-medium">· {cashier.name}'s account</span>
                 )}
               </p>
             </div>
@@ -230,7 +230,7 @@ export default function RecordPaymentModal({ isOpen, onClose, purchaseOrder, onP
           ) : (
             <div>
               <label className={`block text-xs font-semibold mb-1.5 ${themeClasses.textSecondary}`}>
-                Payment Account * {drawerEnabled && <span className="text-teal-500">(Cashier Account)</span>}
+                Payment Account * {drawerEnabled && <span className="text-indigo-500">(Cashier Account)</span>}
               </label>
               <select
                 value={form.payment_account_id}
@@ -279,7 +279,7 @@ export default function RecordPaymentModal({ isOpen, onClose, purchaseOrder, onP
           <button
             onClick={handleSubmit}
             disabled={loading || accounts.length === 0}
-            className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-teal-600 hover:bg-teal-700 disabled:bg-gray-400 text-white flex items-center justify-center gap-2"
+            className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white flex items-center justify-center gap-2"
           >
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
             Record Payment

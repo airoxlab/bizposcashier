@@ -209,7 +209,7 @@ export default function PurchaseOrdersPage() {
       <div className={`h-screen flex flex-col ${themeClasses.background} overflow-hidden`}>
 
         {/* ── TOP TAB BAR ── */}
-        <div className="bg-gradient-to-r from-teal-500 via-cyan-500 to-blue-600 flex-shrink-0 px-4 pt-3 pb-0">
+        <div className="bg-gradient-to-br from-blue-500 via-indigo-500 to-purple-600 flex-shrink-0 px-4 pt-3 pb-0">
           <div className="flex items-center gap-4">
             <motion.button
               whileHover={{ x: -2 }} whileTap={{ scale: 0.97 }}
@@ -229,7 +229,7 @@ export default function PurchaseOrdersPage() {
                   onClick={() => { setActiveTab(key); setMode('list') }}
                   className={`flex items-center gap-2 px-4 py-2 rounded-t-xl text-sm font-semibold transition-all ${
                     activeTab === key
-                      ? 'bg-white text-teal-700 shadow-sm'
+                      ? 'bg-white text-indigo-700 shadow-sm'
                       : 'text-white/80 hover:text-white hover:bg-white/15'
                   }`}
                 >
@@ -275,7 +275,7 @@ export default function PurchaseOrdersPage() {
                       <input
                         type="text" placeholder="Search PO# or supplier..."
                         value={searchTerm} onChange={e => setSearchTerm(e.target.value)}
-                        className={`w-full pl-9 pr-3 py-2 text-sm rounded-lg border focus:outline-none focus:ring-1 focus:ring-teal-500 ${
+                        className={`w-full pl-9 pr-3 py-2 text-sm rounded-lg border focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
                           isDark
                             ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-500'
                             : 'bg-white border-gray-300 text-gray-800 placeholder-gray-400'
@@ -288,10 +288,10 @@ export default function PurchaseOrdersPage() {
                         onClick={handleNewPO}
                         className={`relative px-3 py-2 rounded-lg text-sm font-semibold transition-all flex items-center gap-1 flex-shrink-0 ${
                           mode === 'create'
-                            ? 'bg-teal-600 text-white'
+                            ? 'bg-indigo-600 text-white'
                             : isDark
                               ? 'bg-gray-700 hover:bg-gray-600 text-gray-200'
-                              : 'bg-teal-50 hover:bg-teal-100 text-teal-700 border border-teal-200'
+                              : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200'
                         }`}
                       >
                         <Plus className="w-4 h-4" /> New PO
@@ -314,7 +314,7 @@ export default function PurchaseOrdersPage() {
                         onClick={() => setSelectedStatus(status)}
                         className={`px-2.5 py-1 rounded-full text-xs font-semibold transition-all ${
                           selectedStatus === status
-                            ? 'bg-teal-600 text-white shadow-sm'
+                            ? 'bg-indigo-600 text-white shadow-sm'
                             : isDark
                               ? 'bg-gray-700 text-gray-400 hover:bg-gray-600'
                               : 'bg-white text-gray-500 hover:bg-gray-100 border border-gray-200'
@@ -382,7 +382,7 @@ export default function PurchaseOrdersPage() {
                               }}
                               className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium text-left transition-colors ${
                                 sortBy === opt.value
-                                  ? isDark ? 'bg-teal-900/40 text-teal-300' : 'bg-teal-50 text-teal-700'
+                                  ? isDark ? 'bg-indigo-900/40 text-indigo-300' : 'bg-indigo-50 text-indigo-700'
                                   : isDark ? 'hover:bg-gray-700 text-gray-200' : 'hover:bg-gray-50 text-gray-700'
                               }`}
                             >
@@ -404,7 +404,7 @@ export default function PurchaseOrdersPage() {
                 <div className="flex-1 overflow-y-auto py-2">
                   {loading ? (
                     <div className="flex items-center justify-center py-12">
-                      <Loader2 className="w-5 h-5 animate-spin text-teal-500" />
+                      <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
                     </div>
                   ) : filteredOrders.length === 0 ? (
                     <div className={`flex flex-col items-center justify-center py-16 px-4 text-center ${themeClasses.textSecondary}`}>
@@ -437,7 +437,7 @@ export default function PurchaseOrdersPage() {
                           key={po.id} whileHover={{ x: 2 }}
                           className={`w-full border-b transition-all relative ${
                             isSelected
-                              ? isDark ? 'bg-teal-900/40 border-l-2 border-l-teal-500' : 'bg-teal-50 border-l-2 border-l-teal-500'
+                              ? isDark ? 'bg-indigo-900/40 border-l-2 border-l-indigo-500' : 'bg-indigo-50 border-l-2 border-l-indigo-500'
                               : isDark ? 'border-gray-800 hover:bg-gray-800/60' : 'border-gray-100 hover:bg-gray-50'
                           }`}
                         >
@@ -521,7 +521,7 @@ export default function PurchaseOrdersPage() {
                         Pick a PO from the list
                         {canCreate && (
                           <>, or{' '}
-                            <button onClick={handleNewPO} className="text-teal-600 hover:text-teal-500 font-semibold underline underline-offset-2">
+                            <button onClick={handleNewPO} className="text-indigo-600 hover:text-indigo-500 font-semibold underline underline-offset-2">
                               create a new one
                             </button>
                           </>
@@ -574,7 +574,7 @@ export default function PurchaseOrdersPage() {
               <div className="flex flex-col gap-2">
                 <button
                   onClick={() => openCreate(true)}
-                  className="w-full py-2.5 rounded-xl text-sm font-semibold bg-teal-600 hover:bg-teal-700 text-white transition-colors"
+                  className="w-full py-2.5 rounded-xl text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 text-white transition-colors"
                 >
                   Continue Last PO
                 </button>

@@ -280,7 +280,7 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
               className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
                 receivingMode
                   ? isDark ? 'bg-gray-700 text-gray-300' : 'bg-gray-200 text-gray-700'
-                  : 'bg-teal-600 hover:bg-teal-700 text-white'
+                  : 'bg-indigo-600 hover:bg-indigo-700 text-white'
               }`}
             >
               <Package className="w-4 h-4" />
@@ -299,7 +299,7 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
       {/* Body */}
       {loading ? (
         <div className="flex-1 flex items-center justify-center">
-          <Loader2 className="w-6 h-6 animate-spin text-teal-500" />
+          <Loader2 className="w-6 h-6 animate-spin text-indigo-500" />
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto p-6 space-y-5">
@@ -338,16 +338,16 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
 
           {/* Receive stock inline */}
           {receivingMode && (
-            <div className={`rounded-xl border-2 overflow-hidden ${isDark ? 'border-teal-700 bg-gray-800' : 'border-teal-200 bg-teal-50/40'}`}>
-              <div className={`flex items-center justify-between px-5 py-3 ${isDark ? 'bg-teal-900/30' : 'bg-teal-100/60'}`}>
+            <div className={`rounded-xl border-2 overflow-hidden ${isDark ? 'border-indigo-700 bg-gray-800' : 'border-indigo-200 bg-indigo-50/40'}`}>
+              <div className={`flex items-center justify-between px-5 py-3 ${isDark ? 'bg-indigo-900/30' : 'bg-indigo-100/60'}`}>
                 <div className="flex items-center gap-2">
-                  <Package className="w-4 h-4 text-teal-500" />
-                  <span className={`text-sm font-bold ${isDark ? 'text-teal-300' : 'text-teal-800'}`}>Receive Stock — PO #{purchaseOrder.po_number}</span>
+                  <Package className="w-4 h-4 text-indigo-500" />
+                  <span className={`text-sm font-bold ${isDark ? 'text-indigo-300' : 'text-indigo-800'}`}>Receive Stock — PO #{purchaseOrder.po_number}</span>
                 </div>
                 <button
                   onClick={handleReceive}
                   disabled={receiveSaving}
-                  className="flex items-center gap-2 px-4 py-1.5 bg-teal-600 hover:bg-teal-700 disabled:bg-gray-400 text-white text-sm font-semibold rounded-lg"
+                  className="flex items-center gap-2 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white text-sm font-semibold rounded-lg"
                 >
                   {receiveSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
                   Receive Stock
@@ -400,7 +400,7 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
                                 const val = Math.min(parseFloat(e.target.value) || 0, remaining)
                                 setReceivedQty(p => ({ ...p, [item.id]: val >= 0 ? val : 0 }))
                               }}
-                              className={`w-28 px-2 py-1 rounded-lg border text-sm text-center focus:outline-none focus:ring-2 focus:ring-teal-500 ${isDark ? 'bg-gray-700 border-gray-600 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
+                              className={`w-28 px-2 py-1 rounded-lg border text-sm text-center focus:outline-none focus:ring-2 focus:ring-indigo-500 ${isDark ? 'bg-gray-700 border-gray-600 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
                             />
                           )}
                         </td>
@@ -480,8 +480,8 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
 
           {/* Totals + Notes */}
           <div className="grid grid-cols-2 gap-4">
-            <div className={`rounded-xl p-5 space-y-2 border ${isDark ? 'bg-teal-900/20 border-teal-700' : 'bg-teal-50 border-teal-200'}`}>
-              <h3 className={`text-sm font-bold mb-3 ${isDark ? 'text-teal-300' : 'text-teal-800'}`}>Totals</h3>
+            <div className={`rounded-xl p-5 space-y-2 border ${isDark ? 'bg-indigo-900/20 border-indigo-700' : 'bg-indigo-50 border-indigo-200'}`}>
+              <h3 className={`text-sm font-bold mb-3 ${isDark ? 'text-indigo-300' : 'text-indigo-800'}`}>Totals</h3>
               {[
                 { label: 'Subtotal', value: `Rs. ${purchaseOrder.total_amount?.toFixed(2)}` },
                 purchaseOrder.delivery_charges > 0 && { label: 'Delivery', value: `Rs. ${purchaseOrder.delivery_charges.toFixed(2)}` },
@@ -491,11 +491,11 @@ export default function ViewPurchaseOrderPanel({ purchaseOrder, onBack, onEdit, 
                 purchaseOrder.tax_amount > 0 && { label: `Tax (${purchaseOrder.tax_percentage}%)`, value: `Rs. ${purchaseOrder.tax_amount.toFixed(2)}` }
               ].filter(Boolean).map(({ label, value }) => (
                 <div key={label} className="flex justify-between text-sm">
-                  <span className={isDark ? 'text-teal-200' : 'text-teal-700'}>{label}</span>
+                  <span className={isDark ? 'text-indigo-200' : 'text-indigo-700'}>{label}</span>
                   <span className={`font-medium ${themeClasses.textPrimary}`}>{value}</span>
                 </div>
               ))}
-              <div className={`flex justify-between font-bold text-base pt-2 border-t ${isDark ? 'border-teal-700 text-teal-300' : 'border-teal-300 text-teal-900'}`}>
+              <div className={`flex justify-between font-bold text-base pt-2 border-t ${isDark ? 'border-teal-700 text-indigo-300' : 'border-indigo-300 text-indigo-900'}`}>
                 <span>Grand Total</span>
                 <span>Rs. {(purchaseOrder.grand_total || 0).toFixed(2)}</span>
               </div>

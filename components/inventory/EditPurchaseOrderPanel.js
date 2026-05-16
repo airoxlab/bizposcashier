@@ -75,7 +75,7 @@ function SearchableDropdown({
               <button key={o.id} type="button" onClick={() => pick(o.id)}
                 className={`w-full text-left px-3 py-2 text-xs transition-colors ${
                   value === o.id
-                    ? `font-semibold ${isDark ? 'bg-teal-900/40 text-teal-300' : 'bg-teal-50 text-teal-700'}`
+                    ? `font-semibold ${isDark ? 'bg-indigo-900/40 text-indigo-300' : 'bg-indigo-50 text-indigo-700'}`
                     : isDark ? 'text-gray-200 hover:bg-gray-700/60' : 'text-gray-800 hover:bg-gray-50'
                 }`}
               >
@@ -87,7 +87,7 @@ function SearchableDropdown({
           {canAddNew && (
             <div className={`border-t ${isDark ? 'border-gray-700' : 'border-gray-100'}`}>
               <button type="button" onClick={() => { setOpen(false); setSearch(''); onAddNew() }}
-                className={`w-full flex items-center gap-2 px-3 py-2.5 text-xs font-semibold text-teal-500 hover:text-teal-400 transition-colors ${isDark ? 'hover:bg-gray-700/60' : 'hover:bg-teal-50'}`}>
+                className={`w-full flex items-center gap-2 px-3 py-2.5 text-xs font-semibold text-indigo-500 hover:text-indigo-400 transition-colors ${isDark ? 'hover:bg-gray-700/60' : 'hover:bg-indigo-50'}`}>
                 <Plus className="w-3.5 h-3.5" /> {addNewLabel}
               </button>
             </div>
@@ -140,10 +140,10 @@ export default function EditPurchaseOrderPanel({ purchaseOrder, onBack, onUpdate
   const isDark = themeManager.isDark()
   const themeClasses = themeManager.getClasses()
 
-  const cellCls = `px-2 py-1.5 border text-sm focus:outline-none focus:ring-1 focus:ring-teal-500 rounded w-full ${
+  const cellCls = `px-2 py-1.5 border text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 rounded w-full ${
     isDark ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-500' : 'bg-white border-gray-300 text-gray-900 placeholder-gray-400'
   }`
-  const inputCls = `px-3 py-2 border text-sm focus:outline-none focus:ring-2 focus:ring-teal-500 rounded-lg w-full ${
+  const inputCls = `px-3 py-2 border text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 rounded-lg w-full ${
     isDark ? 'bg-gray-700 border-gray-600 text-white' : 'bg-white border-gray-300 text-gray-900'
   }`
 
@@ -367,7 +367,7 @@ export default function EditPurchaseOrderPanel({ purchaseOrder, onBack, onUpdate
 
   if (dataLoading) return (
     <div className="flex items-center justify-center h-full">
-      <Loader2 className="w-6 h-6 animate-spin text-teal-500" />
+      <Loader2 className="w-6 h-6 animate-spin text-indigo-500" />
     </div>
   )
 
@@ -522,7 +522,7 @@ export default function EditPurchaseOrderPanel({ purchaseOrder, onBack, onUpdate
 
         <button
           onClick={() => setRows(prev => [...prev, { _id: Math.random(), inventory_item_id: '', supplier_id: '', quantity: '', purchase_unit_id: '', target_location: '', total_amount: '', discount: '0', batch_number: '', expiry_date: '' }])}
-          className={`w-full py-2.5 text-sm font-semibold flex items-center justify-center gap-1.5 border-b transition-colors ${isDark ? 'border-gray-700 text-teal-400 hover:bg-gray-700/40' : 'border-gray-200 text-teal-600 hover:bg-teal-50'}`}
+          className={`w-full py-2.5 text-sm font-semibold flex items-center justify-center gap-1.5 border-b transition-colors ${isDark ? 'border-gray-700 text-indigo-400 hover:bg-gray-700/40' : 'border-gray-200 text-indigo-600 hover:bg-indigo-50'}`}
         >
           <Plus className="w-4 h-4" /> Add Row
         </button>
@@ -534,7 +534,7 @@ export default function EditPurchaseOrderPanel({ purchaseOrder, onBack, onUpdate
           <div className="flex flex-col gap-3 flex-shrink-0 w-52">
             {canPay && (
               <label className="flex items-start gap-3 cursor-pointer">
-                <div onClick={() => setPayNow(p => !p)} className={`mt-0.5 w-5 h-5 rounded flex-shrink-0 border-2 flex items-center justify-center transition-all ${payNow ? 'bg-teal-600 border-teal-600' : isDark ? 'border-gray-500 bg-gray-700' : 'border-gray-300 bg-white'}`}>
+                <div onClick={() => setPayNow(p => !p)} className={`mt-0.5 w-5 h-5 rounded flex-shrink-0 border-2 flex items-center justify-center transition-all ${payNow ? 'bg-indigo-600 border-indigo-600' : isDark ? 'border-gray-500 bg-gray-700' : 'border-gray-300 bg-white'}`}>
                   {payNow && <Check className="w-3 h-3 text-white" />}
                 </div>
                 <div>
@@ -545,10 +545,27 @@ export default function EditPurchaseOrderPanel({ purchaseOrder, onBack, onUpdate
             )}
             {canPay && payNow && (
               <div className="space-y-2 pl-8">
-                <select value={paymentAccountId} onChange={e => setPaymentAccountId(e.target.value)} className={`${inputCls} text-xs`}>
-                  <option value="">Select account</option>
-                  {paymentAccounts.map(a => <option key={a.id} value={a.id}>{a.name} — Rs. {parseFloat(a.current_balance || 0).toLocaleString()}</option>)}
-                </select>
+                <div className="flex flex-wrap gap-2">
+                  {paymentAccounts.map(a => (
+                    <button
+                      key={a.id}
+                      type="button"
+                      onClick={() => setPaymentAccountId(a.id)}
+                      className={`flex flex-col items-start px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
+                        paymentAccountId === a.id
+                          ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm'
+                          : isDark
+                            ? 'bg-gray-700 border-gray-600 text-gray-200 hover:border-indigo-500'
+                            : 'bg-white border-gray-200 text-gray-700 hover:border-indigo-400'
+                      }`}
+                    >
+                      <span>{a.name}</span>
+                      <span className={`text-[10px] font-normal ${paymentAccountId === a.id ? 'text-indigo-200' : themeClasses.textSecondary}`}>
+                        Rs. {parseFloat(a.current_balance || 0).toLocaleString()}
+                      </span>
+                    </button>
+                  ))}
+                </div>
                 <input type="number" step="0.01" placeholder="Amount" value={paymentAmount} onChange={e => setPaymentAmount(e.target.value)} className={`${inputCls} text-xs`} />
               </div>
             )}
@@ -601,7 +618,7 @@ export default function EditPurchaseOrderPanel({ purchaseOrder, onBack, onUpdate
           <div className="flex gap-2 mt-4">
             <button onClick={() => setShowAddSupplier(false)} className={`flex-1 py-2 rounded-xl text-sm font-semibold ${btnSecondary}`}>Cancel</button>
             <button onClick={handleQuickAddSupplier} disabled={quickSaving || !quickName.trim()}
-              className="flex-1 py-2 rounded-xl text-sm font-semibold bg-teal-600 hover:bg-teal-700 disabled:bg-gray-400 text-white flex items-center justify-center gap-2">
+              className="flex-1 py-2 rounded-xl text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white flex items-center justify-center gap-2">
               {quickSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
               Add Supplier
             </button>
@@ -646,7 +663,7 @@ export default function EditPurchaseOrderPanel({ purchaseOrder, onBack, onUpdate
           <div className="flex gap-2 mt-4">
             <button onClick={() => setShowAddItem(false)} className={`flex-1 py-2 rounded-xl text-sm font-semibold ${btnSecondary}`}>Cancel</button>
             <button onClick={handleQuickAddItem} disabled={quickSaving || !quickName.trim()}
-              className="flex-1 py-2 rounded-xl text-sm font-semibold bg-teal-600 hover:bg-teal-700 disabled:bg-gray-400 text-white flex items-center justify-center gap-2">
+              className="flex-1 py-2 rounded-xl text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white flex items-center justify-center gap-2">
               {quickSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
               Add Item
             </button>

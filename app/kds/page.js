@@ -710,33 +710,29 @@ export default function KDSPage() {
       if (isOnline && user?.id) {
         // orderForWA captured above before state update
         if (orderForWA) {
+          const waNotify = (r, successMsg) => {
+            if (r?.success) notify.success(successMsg)
+            else if (r && !r.silent) notify.error(`WhatsApp: ${r.error || 'Failed to send'}`)
+          }
           if (newStatus === 'Preparing') {
             triggerWhatsAppAutoSend(orderForWA, user.id, 'Preparing')
-              .then(r => { if (r?.success) notify.success('WhatsApp: preparing notification sent') })
-              .catch(err => console.error('[KDS] WA preparing-send error:', err.message))
+              .then(r => waNotify(r, 'WhatsApp: preparing notification sent'))
+              .catch(err => notify.error(`WhatsApp error: ${err.message}`))
           }
-          if (newStatus === 'Ready' && orderForWA.order_type !== 'delivery') {
+          if (newStatus === 'Ready') {
             triggerWhatsAppAutoSend(orderForWA, user.id, 'Ready')
-              .then(r => { if (r?.success) notify.success('WhatsApp: order ready notification sent') })
-              .catch(err => console.error('[KDS] WA ready-send error:', err.message))
-          }
-          if (newStatus === 'Ready' && orderForWA.order_type === 'delivery') {
-            triggerWhatsAppAutoSend(orderForWA, user.id, 'Ready')
-              .then(r => { if (r?.success) notify.success('WhatsApp: order ready notification sent') })
-              .catch(err => console.error('[KDS] WA ready-status-send error:', err.message))
+              .then(r => waNotify(r, 'WhatsApp: order ready notification sent'))
+              .catch(err => notify.error(`WhatsApp error: ${err.message}`))
           }
           if (newStatus === 'Dispatched') {
             triggerWhatsAppAutoSend(orderForWA, user.id, 'Dispatched')
-              .then(r => { if (r?.success) notify.success('WhatsApp: dispatch notification sent') })
-              .catch(err => console.error('[KDS] WA dispatch-send error:', err.message))
+              .then(r => waNotify(r, 'WhatsApp: dispatch notification sent'))
+              .catch(err => notify.error(`WhatsApp error: ${err.message}`))
           }
           if (newStatus === 'Completed') {
             triggerWhatsAppAutoSend(orderForWA, user.id, 'Completed')
-              .then(r => {
-                if (r?.success) notify.success('WhatsApp thank-you message sent to customer')
-                else if (r?.error) notify.error(`WhatsApp: ${r.error}`)
-              })
-              .catch(err => console.error('[KDS] WA auto-send error:', err.message))
+              .then(r => waNotify(r, 'WhatsApp thank-you message sent to customer'))
+              .catch(err => notify.error(`WhatsApp error: ${err.message}`))
           }
         }
       }

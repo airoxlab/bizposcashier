@@ -2,13 +2,13 @@
 
 import React, { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ArrowLeft, Plus, Search, Edit2, Trash2, Loader2, X, Check, Phone, Mail, MapPin } from 'lucide-react'
+import { ArrowLeft, Plus, Search, Edit2, Trash2, Loader2, X, Check, Phone, Mail, MapPin, CreditCard, TrendingDown, TrendingUp, BookOpen } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
 import { authManager } from '../../lib/authManager'
 import ProtectedPage from '../../components/ProtectedPage'
 import NotificationSystem, { notify } from '../../components/ui/NotificationSystem'
-import Modal from '../../components/ui/Modal'
+import SupplierPaymentModal from '../../components/inventory/SupplierPaymentModal'
 import themeManager from '../../lib/themeManager'
 
 export default function SuppliersPage() {
@@ -19,6 +19,11 @@ export default function SuppliersPage() {
   const [loading, setLoading] = useState(true)
   const [selectedSupplier, setSelectedSupplier] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
+
+  // Ledger state for selected supplier
+  const [supplierLedger, setSupplierLedger]       = useState([])
+  const [ledgerLoading, setLedgerLoading]         = useState(false)
+  const [showPaymentModal, setShowPaymentModal]   = useState(false)
 
   // Modal states
   const [showAddModal, setShowAddModal] = useState(false)
@@ -160,6 +165,26 @@ export default function SuppliersPage() {
     setFormData({ name: '', phone: '', email: '', address: '', opening_amount: 0 })
   }
 
+  const loadSupplierLedger = async (supplierId) => {
+    try {
+      setLedgerLoading(true)
+      const { data } = await supabase
+        .from('supplier_ledger')
+        .select('*')
+        .eq('supplier_id', supplierId)
+        .order('transaction_date', { ascending: false })
+        .limit(10)
+      setSupplierLedger(data || [])
+    } catch { /* silent */ }
+    finally { setLedgerLoading(false) }
+  }
+
+  const handleSelectSupplier = (supplier) => {
+    setSelectedSupplier(supplier)
+    if (supplier?.id) loadSupplierLedger(supplier.id)
+    else setSupplierLedger([])
+  }
+
   const openEditModal = (supplier) => {
     setSelectedSupplier(supplier)
     setFormData({
@@ -181,7 +206,7 @@ export default function SuppliersPage() {
         {/* LEFT PANEL */}
         <div className={`w-80 flex-shrink-0 flex flex-col h-full border-r ${isDark ? 'bg-gray-900 border-gray-700' : 'bg-white border-gray-200'}`}>
           {/* Header */}
-          <div className="bg-gradient-to-br from-amber-500 via-orange-500 to-red-600 px-4 pt-4 pb-5 flex-shrink-0">
+          <div className="bg-gradient-to-br from-blue-500 via-indigo-500 to-purple-600 px-4 pt-4 pb-5 flex-shrink-0">
             <div className="flex items-center justify-between mb-3">
               <motion.button
                 whileHover={{ x: -2 }}
@@ -235,7 +260,7 @@ export default function SuppliersPage() {
           <div className="flex-1 overflow-y-auto py-1">
             {loading ? (
               <div className="flex items-center justify-center py-12">
-                <Loader2 className="w-5 h-5 animate-spin text-amber-500" />
+                <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
               </div>
             ) : filteredSuppliers.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 px-4 text-center">
@@ -246,10 +271,10 @@ export default function SuppliersPage() {
                 <motion.button
                   key={supplier.id}
                   whileHover={{ x: 2 }}
-                  onClick={() => setSelectedSupplier(supplier)}
+                  onClick={() => handleSelectSupplier(supplier)}
                   className={`w-full px-4 py-3 text-left border-b transition-all ${
                     selectedSupplier?.id === supplier.id
-                      ? isDark ? 'bg-amber-900/40 border-l-2 border-l-amber-500' : 'bg-amber-50 border-l-2 border-l-amber-500'
+                      ? isDark ? 'bg-indigo-900/40 border-l-2 border-l-indigo-500' : 'bg-indigo-50 border-l-2 border-l-indigo-500'
                       : isDark ? 'border-gray-800 hover:bg-gray-800/60' : 'border-gray-100 hover:bg-gray-50'
                   }`}
                 >
@@ -262,216 +287,284 @@ export default function SuppliersPage() {
         </div>
 
         {/* RIGHT PANEL */}
-        <div className="flex-1 overflow-y-auto p-6">
-          <AnimatePresence>
+        <div className="flex-1 h-full overflow-y-auto p-5">
+          <AnimatePresence mode="wait">
             {selectedSupplier ? (
               <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 20 }}
-                className={`${themeClasses.card} rounded-2xl p-6 ${themeClasses.shadow} ${themeClasses.border} border max-w-2xl`}
+                key={selectedSupplier.id}
+                initial={{ opacity: 0, x: 10 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 10 }}
+                className="space-y-4"
               >
-                <div className="flex items-center justify-between mb-6">
-                  <h2 className={`text-2xl font-bold ${themeClasses.textPrimary}`}>{selectedSupplier.name}</h2>
-                  <button
-                    onClick={() => setSelectedSupplier(null)}
-                    className={`${themeClasses.button} border rounded-lg p-2`}
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
+                {/* Header */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className={`text-base font-bold ${themeClasses.textPrimary}`}>{selectedSupplier.name}</h2>
+                    {selectedSupplier.phone && (
+                      <p className={`text-xs mt-0.5 ${themeClasses.textSecondary}`}>{selectedSupplier.phone}</p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <motion.button
+                      whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
+                      onClick={() => setShowPaymentModal(true)}
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
+                    >
+                      <CreditCard className="w-4 h-4" /> Record Payment
+                    </motion.button>
+                    <motion.button
+                      whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
+                      onClick={() => openEditModal(selectedSupplier)}
+                      className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold ${isDark ? 'bg-gray-700 hover:bg-gray-600 text-gray-200' : 'bg-white hover:bg-gray-100 text-gray-700 border border-gray-200'}`}
+                    >
+                      <Edit2 className="w-3.5 h-3.5" /> Edit
+                    </motion.button>
+                    <motion.button
+                      whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}
+                      onClick={() => setShowDeleteConfirm(true)}
+                      className={`p-2 rounded-xl ${isDark ? 'bg-gray-700 hover:bg-red-900/40 text-gray-400 hover:text-red-400' : 'bg-white hover:bg-red-50 text-gray-400 hover:text-red-500 border border-gray-200'}`}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </motion.button>
+                  </div>
                 </div>
 
-                <div className={`${isDark ? 'bg-gray-800' : 'bg-gray-50'} rounded-lg p-4 mb-6 space-y-3`}>
-                  {selectedSupplier.phone && (
-                    <div className="flex items-center gap-3">
-                      <Phone className={`w-4 h-4 ${themeClasses.textSecondary}`} />
-                      <span className={themeClasses.textPrimary}>{selectedSupplier.phone}</span>
-                    </div>
-                  )}
-                  {selectedSupplier.email && (
-                    <div className="flex items-center gap-3">
-                      <Mail className={`w-4 h-4 ${themeClasses.textSecondary}`} />
-                      <span className={themeClasses.textPrimary}>{selectedSupplier.email}</span>
-                    </div>
-                  )}
-                  {selectedSupplier.address && (
-                    <div className="flex items-start gap-3">
-                      <MapPin className={`w-4 h-4 ${themeClasses.textSecondary} mt-0.5`} />
-                      <span className={themeClasses.textPrimary}>{selectedSupplier.address}</span>
-                    </div>
-                  )}
+                {/* Info cards — same pattern as ledger summary cards */}
+                <div className="grid grid-cols-4 gap-3">
+                  {[
+                    { label: 'Phone',    value: selectedSupplier.phone   || '—', Icon: Phone,   cls: themeClasses.textPrimary },
+                    { label: 'Email',    value: selectedSupplier.email   || '—', Icon: Mail,    cls: themeClasses.textPrimary },
+                    { label: 'Address',  value: selectedSupplier.address || '—', Icon: MapPin,  cls: themeClasses.textPrimary },
+                    { label: 'Opening Balance', value: `Rs. ${parseFloat(selectedSupplier.opening_amount || 0).toFixed(0)}`, Icon: TrendingDown, cls: 'text-amber-600 dark:text-amber-400' },
+                  ].map(({ label, value, Icon, cls }) => (
+                    <motion.div
+                      key={label}
+                      initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                      className={`${themeClasses.card} rounded-xl p-3.5 border ${themeClasses.border} flex items-center gap-3`}
+                    >
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${isDark ? 'bg-gray-700' : 'bg-gray-100'}`}>
+                        <Icon className={`w-4 h-4 ${themeClasses.textSecondary}`} />
+                      </div>
+                      <div className="min-w-0">
+                        <p className={`text-[10px] font-medium ${themeClasses.textSecondary}`}>{label}</p>
+                        <p className={`text-xs font-semibold truncate ${cls}`}>{value}</p>
+                      </div>
+                    </motion.div>
+                  ))}
                 </div>
 
-                {/* Action Buttons */}
-                <div className="flex gap-2 flex-wrap">
-                  <motion.button
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={() => openEditModal(selectedSupplier)}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium flex items-center gap-2"
-                  >
-                    <Edit2 className="w-4 h-4" /> Edit
-                  </motion.button>
-
-                  <motion.button
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
-                    onClick={() => setShowDeleteConfirm(true)}
-                    className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium flex items-center gap-2"
-                  >
-                    <Trash2 className="w-4 h-4" /> Delete
-                  </motion.button>
-                </div>
+                {/* Transactions table — same style as ledger */}
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                  className={`${themeClasses.card} rounded-xl border ${themeClasses.border} overflow-hidden`}
+                >
+                  <div className={`flex items-center justify-between px-4 py-3 border-b ${themeClasses.border} ${isDark ? 'bg-gray-800/50' : 'bg-gray-50'}`}>
+                    <p className={`text-sm font-semibold ${themeClasses.textPrimary}`}>Recent Transactions</p>
+                    <button
+                      onClick={() => router.push('/ledgers')}
+                      className="text-xs font-medium text-amber-500 hover:text-amber-400"
+                    >
+                      View All →
+                    </button>
+                  </div>
+                  {ledgerLoading ? (
+                    <div className="flex items-center justify-center py-10">
+                      <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
+                    </div>
+                  ) : supplierLedger.length === 0 ? (
+                    <div className={`flex flex-col items-center justify-center py-10 ${themeClasses.textSecondary}`}>
+                      <BookOpen className="w-8 h-8 mb-2 opacity-25" />
+                      <p className="text-xs">No transactions yet</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full">
+                        <thead>
+                          <tr className={`border-b ${themeClasses.border} ${isDark ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                            {['Date', 'Type', 'Description', 'Amount'].map(h => (
+                              <th key={h} className={`px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide ${themeClasses.textSecondary}`}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className={`divide-y ${isDark ? 'divide-gray-700/60' : 'divide-gray-100'}`}>
+                          {supplierLedger.map(entry => {
+                            const isDebit = entry.transaction_type === 'debit' || entry.transaction_type === 'purchase'
+                            return (
+                              <tr key={entry.id} className={`transition-colors ${isDark ? 'hover:bg-gray-700/40' : 'hover:bg-gray-50'}`}>
+                                <td className={`px-4 py-2.5 text-xs ${themeClasses.textSecondary} whitespace-nowrap`}>
+                                  {new Date(entry.transaction_date).toLocaleDateString('en-PK')}
+                                </td>
+                                <td className="px-4 py-2.5">
+                                  <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
+                                    isDebit
+                                      ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400'
+                                      : 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400'
+                                  }`}>
+                                    {isDebit ? '↓ Purchase' : '↑ Payment'}
+                                  </span>
+                                </td>
+                                <td className={`px-4 py-2.5 text-xs ${themeClasses.textSecondary} max-w-[220px] truncate`}>
+                                  {entry.description || '—'}
+                                </td>
+                                <td className={`px-4 py-2.5 text-sm text-right font-bold ${isDebit ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>
+                                  {isDebit ? '−' : '+'} Rs.&nbsp;{parseFloat(entry.amount || 0).toFixed(0)}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </motion.div>
               </motion.div>
             ) : (
               <motion.div
+                key="empty"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                className="flex items-center justify-center h-full"
+                className="flex flex-col items-center justify-center h-full"
               >
-                <p className={`text-lg ${themeClasses.textSecondary}`}>Select a supplier to view details</p>
+                <div className={`w-16 h-16 rounded-2xl flex items-center justify-center mb-3 ${isDark ? 'bg-gray-800' : 'bg-white'} shadow-lg`}>
+                  <BookOpen className={`w-8 h-8 ${isDark ? 'text-gray-600' : 'text-gray-300'}`} />
+                </div>
+                <p className={`text-base font-semibold ${themeClasses.textPrimary}`}>No supplier selected</p>
+                <p className={`text-sm mt-1 ${themeClasses.textSecondary}`}>Pick a supplier from the list</p>
               </motion.div>
             )}
           </AnimatePresence>
         </div>
       </div>
 
-      {/* Add Modal */}
-      <Modal isOpen={showAddModal} onClose={() => setShowAddModal(false)} size="sm">
-        <div className="p-6 space-y-4">
-          <h2 className={`text-lg font-bold ${themeClasses.textPrimary}`}>Add Supplier</h2>
-
-          <input
-            type="text"
-            placeholder="Supplier Name *"
-            value={formData.name}
-            onChange={(e) => setFormData({...formData, name: e.target.value})}
-            className={`w-full px-3 py-2 border ${themeClasses.border} rounded-lg ${themeClasses.input}`}
-          />
-
-          <input
-            type="tel"
-            placeholder="Phone"
-            value={formData.phone}
-            onChange={(e) => setFormData({...formData, phone: e.target.value})}
-            className={`w-full px-3 py-2 border ${themeClasses.border} rounded-lg ${themeClasses.input}`}
-          />
-
-          <input
-            type="email"
-            placeholder="Email"
-            value={formData.email}
-            onChange={(e) => setFormData({...formData, email: e.target.value})}
-            className={`w-full px-3 py-2 border ${themeClasses.border} rounded-lg ${themeClasses.input}`}
-          />
-
-          <textarea
-            placeholder="Address"
-            value={formData.address}
-            onChange={(e) => setFormData({...formData, address: e.target.value})}
-            rows={2}
-            className={`w-full px-3 py-2 border ${themeClasses.border} rounded-lg ${themeClasses.input}`}
-          />
-
-          <div className="flex gap-2 justify-end">
-            <button
-              onClick={() => setShowAddModal(false)}
-              className={`px-4 py-2 rounded-lg font-medium ${themeClasses.button} border`}
+      {/* Add / Edit Supplier Modal — shared layout */}
+      {(showAddModal || showEditModal) && (() => {
+        const isEdit = showEditModal
+        const onClose = () => isEdit ? setShowEditModal(false) : setShowAddModal(false)
+        const onSubmit = isEdit ? handleUpdateSupplier : handleAddSupplier
+        const inputCls = `w-full px-3 py-2.5 rounded-xl border text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+          isDark ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-400' : 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-400'
+        }`
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
+              className={`relative w-full max-w-md rounded-2xl shadow-2xl overflow-hidden ${isDark ? 'bg-gray-800' : 'bg-white'}`}
             >
-              Cancel
-            </button>
-            <button
-              onClick={handleAddSupplier}
-              disabled={submitting}
-              className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white rounded-lg font-medium flex items-center gap-2"
-            >
-              {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-              Add
-            </button>
+              {/* Header */}
+              <div className={`flex items-center justify-between px-6 py-4 border-b ${isDark ? 'border-gray-700' : 'border-gray-100'}`}>
+                <div className="flex items-center gap-3">
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${isEdit ? 'bg-blue-500/15' : 'bg-indigo-500/15'}`}>
+                    {isEdit ? <Edit2 className="w-4 h-4 text-blue-500" /> : <Plus className="w-4 h-4 text-indigo-500" />}
+                  </div>
+                  <h3 className={`font-bold ${themeClasses.textPrimary}`}>{isEdit ? 'Edit Supplier' : 'Add Supplier'}</h3>
+                </div>
+                <button onClick={onClose} className={`p-2 rounded-lg ${isDark ? 'hover:bg-gray-700 text-gray-400' : 'hover:bg-gray-100 text-gray-400'}`}>
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Body */}
+              <div className="p-6 space-y-3">
+                <div>
+                  <label className={`block text-xs font-semibold mb-1.5 ${themeClasses.textSecondary}`}>Supplier Name *</label>
+                  <input type="text" placeholder="e.g. ABC Traders" value={formData.name}
+                    onChange={e => setFormData({ ...formData, name: e.target.value })} className={inputCls} />
+                </div>
+                <div>
+                  <label className={`block text-xs font-semibold mb-1.5 ${themeClasses.textSecondary}`}>Phone</label>
+                  <input type="tel" placeholder="e.g. 03001234567" value={formData.phone}
+                    onChange={e => setFormData({ ...formData, phone: e.target.value })} className={inputCls} />
+                </div>
+                <div>
+                  <label className={`block text-xs font-semibold mb-1.5 ${themeClasses.textSecondary}`}>Email</label>
+                  <input type="email" placeholder="e.g. supplier@email.com" value={formData.email}
+                    onChange={e => setFormData({ ...formData, email: e.target.value })} className={inputCls} />
+                </div>
+                <div>
+                  <label className={`block text-xs font-semibold mb-1.5 ${themeClasses.textSecondary}`}>Address</label>
+                  <textarea placeholder="Street, City..." value={formData.address}
+                    onChange={e => setFormData({ ...formData, address: e.target.value })}
+                    rows={2} className={inputCls} />
+                </div>
+                {!isEdit && (
+                  <div>
+                    <label className={`block text-xs font-semibold mb-1.5 ${themeClasses.textSecondary}`}>Opening Balance</label>
+                    <input type="number" placeholder="0" value={formData.opening_amount}
+                      onChange={e => setFormData({ ...formData, opening_amount: e.target.value })} className={inputCls} />
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className={`flex gap-3 px-6 py-4 border-t ${isDark ? 'border-gray-700 bg-gray-800/50' : 'border-gray-100 bg-gray-50'}`}>
+                <button onClick={onClose}
+                  className={`flex-1 py-2.5 rounded-xl text-sm font-semibold ${isDark ? 'bg-gray-700 hover:bg-gray-600 text-gray-200' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}>
+                  Cancel
+                </button>
+                <button onClick={onSubmit} disabled={submitting}
+                  className={`flex-1 py-2.5 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2 disabled:bg-gray-400 ${isEdit ? 'bg-blue-600 hover:bg-blue-700' : 'bg-indigo-600 hover:bg-indigo-700'}`}>
+                  {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                  {isEdit ? 'Save Changes' : 'Add Supplier'}
+                </button>
+              </div>
+            </motion.div>
           </div>
-        </div>
-      </Modal>
+        )
+      })()}
 
-      {/* Edit Modal */}
-      <Modal isOpen={showEditModal} onClose={() => setShowEditModal(false)} size="sm">
-        <div className="p-6 space-y-4">
-          <h2 className={`text-lg font-bold ${themeClasses.textPrimary}`}>Edit Supplier</h2>
-
-          <input
-            type="text"
-            placeholder="Supplier Name"
-            value={formData.name}
-            onChange={(e) => setFormData({...formData, name: e.target.value})}
-            className={`w-full px-3 py-2 border ${themeClasses.border} rounded-lg ${themeClasses.input}`}
-          />
-
-          <input
-            type="tel"
-            placeholder="Phone"
-            value={formData.phone}
-            onChange={(e) => setFormData({...formData, phone: e.target.value})}
-            className={`w-full px-3 py-2 border ${themeClasses.border} rounded-lg ${themeClasses.input}`}
-          />
-
-          <input
-            type="email"
-            placeholder="Email"
-            value={formData.email}
-            onChange={(e) => setFormData({...formData, email: e.target.value})}
-            className={`w-full px-3 py-2 border ${themeClasses.border} rounded-lg ${themeClasses.input}`}
-          />
-
-          <textarea
-            placeholder="Address"
-            value={formData.address}
-            onChange={(e) => setFormData({...formData, address: e.target.value})}
-            rows={2}
-            className={`w-full px-3 py-2 border ${themeClasses.border} rounded-lg ${themeClasses.input}`}
-          />
-
-          <div className="flex gap-2 justify-end">
-            <button
-              onClick={() => setShowEditModal(false)}
-              className={`px-4 py-2 rounded-lg font-medium ${themeClasses.button} border`}
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleUpdateSupplier}
-              disabled={submitting}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg font-medium flex items-center gap-2"
-            >
-              {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-              Save
-            </button>
-          </div>
-        </div>
-      </Modal>
+      {/* Supplier Payment Modal */}
+      {selectedSupplier && (
+        <SupplierPaymentModal
+          isOpen={showPaymentModal}
+          onClose={() => setShowPaymentModal(false)}
+          supplier={selectedSupplier}
+          onPaymentRecorded={() => {
+            setShowPaymentModal(false)
+            if (selectedSupplier?.id) loadSupplierLedger(selectedSupplier.id)
+          }}
+        />
+      )}
 
       {/* Delete Confirmation */}
-      <Modal isOpen={showDeleteConfirm} onClose={() => setShowDeleteConfirm(false)} size="sm">
-        <div className="p-6 space-y-4">
-          <h2 className={`text-lg font-bold ${themeClasses.textPrimary}`}>Delete Supplier?</h2>
-          <p className={`${themeClasses.textSecondary}`}>
-            Are you sure you want to delete {selectedSupplier?.name}? This action cannot be undone.
-          </p>
-          <div className="flex gap-2 justify-end">
-            <button
-              onClick={() => setShowDeleteConfirm(false)}
-              className={`px-4 py-2 rounded-lg font-medium ${themeClasses.button} border`}
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleDeleteSupplier}
-              disabled={submitting}
-              className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white rounded-lg font-medium"
-            >
-              {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Delete'}
-            </button>
-          </div>
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowDeleteConfirm(false)} />
+          <motion.div
+            initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+            className={`relative w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden ${isDark ? 'bg-gray-800' : 'bg-white'}`}
+          >
+            <div className={`flex items-center justify-between px-6 py-4 border-b ${isDark ? 'border-gray-700' : 'border-gray-100'}`}>
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-red-500/15 flex items-center justify-center">
+                  <Trash2 className="w-4 h-4 text-red-500" />
+                </div>
+                <h3 className={`font-bold ${themeClasses.textPrimary}`}>Delete Supplier</h3>
+              </div>
+              <button onClick={() => setShowDeleteConfirm(false)} className={`p-2 rounded-lg ${isDark ? 'hover:bg-gray-700 text-gray-400' : 'hover:bg-gray-100 text-gray-400'}`}>
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="px-6 py-5">
+              <p className={`text-sm ${themeClasses.textSecondary}`}>
+                Are you sure you want to delete <span className={`font-semibold ${themeClasses.textPrimary}`}>{selectedSupplier?.name}</span>? This action cannot be undone.
+              </p>
+            </div>
+            <div className={`flex gap-3 px-6 py-4 border-t ${isDark ? 'border-gray-700 bg-gray-800/50' : 'border-gray-100 bg-gray-50'}`}>
+              <button onClick={() => setShowDeleteConfirm(false)}
+                className={`flex-1 py-2.5 rounded-xl text-sm font-semibold ${isDark ? 'bg-gray-700 hover:bg-gray-600 text-gray-200' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}>
+                Cancel
+              </button>
+              <button onClick={handleDeleteSupplier} disabled={submitting}
+                className="flex-1 py-2.5 rounded-xl text-sm font-semibold bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white flex items-center justify-center gap-2">
+                {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                Delete
+              </button>
+            </div>
+          </motion.div>
         </div>
-      </Modal>
+      )}
     </ProtectedPage>
   )
 }

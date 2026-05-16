@@ -78,10 +78,10 @@ export default function NewOrderPage() {
   const [user, setUser] = useState(null)
   const [cashierData, setCashierData] = useState(null)
   const [sessionId, setSessionId] = useState(null)
-  const [categories, setCategories] = useState([])
-  const [menus, setMenus] = useState([])
-  const [allProducts, setAllProducts] = useState([])
-  const [deals, setDeals] = useState([])
+  const [categories, setCategories] = useState(() => cacheManager.isReady() ? cacheManager.getCategories() : [])
+  const [menus, setMenus] = useState(() => cacheManager.isReady() ? cacheManager.getMenus() : [])
+  const [allProducts, setAllProducts] = useState(() => cacheManager.isReady() ? cacheManager.getProducts() : [])
+  const [deals, setDeals] = useState(() => cacheManager.isReady() ? cacheManager.getDeals() : [])
   const [networkStatus, setNetworkStatus] = useState({ isOnline: true, unsyncedOrders: 0 })
   const [isDataReady, setIsDataReady] = useState(() => cacheManager.isReady())
   const [isLoading, setIsLoading] = useState(() => !cacheManager.isReady())
@@ -1151,33 +1151,37 @@ export default function NewOrderPage() {
         }
 
         // WhatsApp auto-send on Completed
-        triggerWhatsAppAutoSend(order, user?.id, 'Completed').then(result => {
-          if (result?.success) {
-            toast.success(`WhatsApp message sent to customer`, { duration: 3000 })
-          } else if (result?.error) {
-            toast.error(`WhatsApp: ${result.error}`, { duration: 4000 })
-          }
-        }).catch(err => console.error('[NewOrder] WA auto-send error:', err.message))
+        const waNotify = (r, successMsg) => {
+          if (r?.success) toast.success(successMsg, { duration: 3000 })
+          else if (r && !r.silent) toast.error(`WhatsApp: ${r.error || 'Failed to send'}`, { duration: 5000 })
+        }
+        triggerWhatsAppAutoSend(order, user?.id, 'Completed')
+          .then(r => waNotify(r, 'WhatsApp message sent to customer'))
+          .catch(err => toast.error(`WhatsApp error: ${err.message}`, { duration: 5000 }))
 
         setSelectedOrder(null)
         setCurrentView('products')
         setOrdersRefreshTrigger(prev => prev + 1)
       } else {
         // WhatsApp auto-send on intermediate statuses
+        const waNotify = (r, successMsg) => {
+          if (r?.success) toast.success(successMsg, { duration: 3000 })
+          else if (r && !r.silent) toast.error(`WhatsApp: ${r.error || 'Failed to send'}`, { duration: 5000 })
+        }
         if (newStatus === 'Preparing') {
           triggerWhatsAppAutoSend(order, user?.id, 'Preparing')
-            .then(r => { if (r?.success) toast.success('WhatsApp: preparing notification sent', { duration: 3000 }) })
-            .catch(err => console.error('[NewOrder] WA preparing-send error:', err.message))
+            .then(r => waNotify(r, 'WhatsApp: preparing notification sent'))
+            .catch(err => toast.error(`WhatsApp error: ${err.message}`, { duration: 5000 }))
         }
         if (newStatus === 'Ready') {
           triggerWhatsAppAutoSend(order, user?.id, 'Ready')
-            .then(r => { if (r?.success) toast.success('WhatsApp: order ready notification sent', { duration: 3000 }) })
-            .catch(err => console.error('[NewOrder] WA ready-send error:', err.message))
+            .then(r => waNotify(r, 'WhatsApp: order ready notification sent'))
+            .catch(err => toast.error(`WhatsApp error: ${err.message}`, { duration: 5000 }))
         }
         if (newStatus === 'Dispatched') {
           triggerWhatsAppAutoSend(order, user?.id, 'Dispatched')
-            .then(r => { if (r?.success) toast.success('WhatsApp: dispatch notification sent', { duration: 3000 }) })
-            .catch(err => console.error('[NewOrder] WA dispatch-send error:', err.message))
+            .then(r => waNotify(r, 'WhatsApp: dispatch notification sent'))
+            .catch(err => toast.error(`WhatsApp error: ${err.message}`, { duration: 5000 }))
         }
         setOrdersRefreshTrigger(prev => prev + 1)
       }
@@ -1482,20 +1486,65 @@ export default function NewOrderPage() {
       if (action === 'pay_complete') {
         const total = order.total_amount
         const cash = parseFloat(cashReceived) || total
+
+        // Fetch order items for receipt printing
+        let orderItems = []
+        if (order.id && cacheManager.checkOnlineStatus()) {
+          const { data } = await supabase.from('order_items').select('*').eq('order_id', order.id)
+          orderItems = data || []
+        }
+        if (!orderItems.length) {
+          orderItems = order.order_items || order.items || []
+          if (!orderItems.length && order.id) {
+            const cached = (cacheManager.getAllOrders?.() || []).find(o => o.id === order.id)
+            orderItems = cached?.order_items || cached?.items || []
+          }
+        }
+
+        const cart = orderItems.map(item => {
+          if (item.is_deal) {
+            let dealProducts = []
+            try {
+              if (item.deal_products) {
+                const parsed = typeof item.deal_products === 'string' ? JSON.parse(item.deal_products) : item.deal_products
+                dealProducts = parsed.map(p => ({
+                  name: p.name || p.product_name || p.productName || 'Unknown',
+                  quantity: p.quantity || 1,
+                  variant: p.variant || p.variant_name || p.variantName || null,
+                  flavor: p.flavor || null
+                }))
+              }
+            } catch { dealProducts = [] }
+            return { id: item.id, isDeal: true, dealId: item.deal_id, dealName: item.product_name || 'Deal', dealProducts, quantity: item.quantity, finalPrice: item.final_price, totalPrice: item.total_price }
+          }
+          return { id: item.id, isDeal: false, productId: item.product_id, productName: item.product_name, variantId: item.variant_id, variantName: item.variant_name, quantity: item.quantity, finalPrice: item.final_price, totalPrice: item.total_price }
+        })
+
+        const discountAmount = parseFloat(order.discount_amount || 0)
+        const scAmount       = parseFloat(order.service_charge_amount || 0)
+        const delivCharges   = parseFloat(order.delivery_charges || 0)
+        const subtotal       = parseFloat(order.subtotal) > 0
+          ? parseFloat(order.subtotal)
+          : Math.max(0, total + discountAmount - scAmount - delivCharges)
+
         setCompletedOrderData({
-          orderNumber: order.order_number || order.daily_serial_number,
-          total: total,
-          paymentMethod: paymentMethod || order.payment_method || 'Cash',
-          orderType: order.order_type || 'walkin',
-          discountAmount: parseFloat(order.discount_amount || 0),
-          changeAmount: Math.max(0, cash - total),
-          deliveryCharges: order.delivery_charges || 0,
-          deliveryAddress: order.delivery_address || null,
-          delivery_boy_name: order.delivery_boys?.name ||
+          orderNumber:        order.order_number || order.daily_serial_number,
+          dailySerial:        order.daily_serial || null,
+          total,
+          subtotal,
+          paymentMethod:      paymentMethod || order.payment_method || 'Cash',
+          orderType:          order.order_type || 'walkin',
+          discountAmount,
+          serviceChargeAmount: scAmount,
+          changeAmount:       Math.max(0, cash - total),
+          deliveryCharges:    delivCharges,
+          deliveryAddress:    order.delivery_address || null,
+          delivery_boy_name:  order.delivery_boys?.name ||
             (order.delivery_boy_id
               ? (cacheManager.getAllDeliveryBoys?.().find(b => b.id === order.delivery_boy_id)?.name || null)
               : null),
-          order: order,
+          cart,
+          order,
         })
         setShowSuccessModal(true)
       }

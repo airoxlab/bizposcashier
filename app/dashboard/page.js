@@ -224,8 +224,9 @@ export default function Dashboard() {
       }
     }
 
-    // Start background sync
+    // Start background sync and preload menu/catalog data so order pages open instantly
     cacheManager.startBackgroundSync()
+    initializeCache()
 
     // Clock — updates currentTime every second
     const timer = setInterval(() => setCurrentTime(new Date()), 1000)
