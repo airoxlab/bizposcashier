@@ -974,6 +974,8 @@ export default function DeliveryPage() {
               payment_method: 'Split',
               payment_status: 'Paid',
               amount_paid: totalPaid,
+              order_status: 'Completed',
+              order_taker_id: order.order_taker_id || null,
               updated_at: new Date().toISOString()
             })
             .eq('id', order.id)
@@ -1004,6 +1006,8 @@ export default function DeliveryPage() {
               payment_method: 'Split',
               payment_status: 'Paid',
               amount_paid: totalPaid,
+              order_status: 'Completed',
+              order_taker_id: order.order_taker_id || null,
               updated_at: new Date().toISOString(),
               _isSynced: false
             }
@@ -2314,7 +2318,9 @@ export default function DeliveryPage() {
       originalPaymentStatus: localStorage.getItem('delivery_original_payment_status'),
       originalAmountPaid: parseFloat(localStorage.getItem('delivery_original_amount_paid')) || 0,
       originalPaymentMethod: localStorage.getItem('delivery_original_payment_method'),
-      originalOrderStatus: localStorage.getItem('delivery_original_order_status') || null
+      originalOrderStatus: localStorage.getItem('delivery_original_order_status') || null,
+      orderTakerId: localStorage.getItem('delivery_order_taker_id') || null,
+      orderTakerName: localStorage.getItem('delivery_order_taker_name') || null
     }
 
     console.log('🔵 [Delivery] Order data prepared:', orderPayload)

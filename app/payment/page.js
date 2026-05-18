@@ -881,6 +881,7 @@ const processOrder = async () => {
         delivery_time: deliveryTimeForDB,
         takeaway_time: takeawayTimeForDB,
         customer_id: orderData.customer?.id || null,
+        order_taker_id: orderData.orderTakerId || null,
       }
 
       const p_items = orderItems.map(i => ({
@@ -1403,6 +1404,10 @@ const processOrder = async () => {
     localStorage.removeItem('takeaway_original_payment_method')
     localStorage.removeItem('takeaway_can_decrease_qty')
     localStorage.removeItem('takeaway_reopened')
+    localStorage.removeItem('takeaway_order_taker_id')
+    localStorage.removeItem('takeaway_order_taker_name')
+    localStorage.removeItem('delivery_order_taker_id')
+    localStorage.removeItem('delivery_order_taker_name')
 
     // Clear new-order page shared cart/customer/instructions
     if (orderData?.sourcePage === 'new-order') {
@@ -2153,6 +2158,10 @@ const handlePrintKitchenToken = async () => {
       localStorage.removeItem('takeaway_original_payment_method')
       localStorage.removeItem('takeaway_can_decrease_qty')
       localStorage.removeItem('takeaway_reopened')
+      localStorage.removeItem('takeaway_order_taker_id')
+      localStorage.removeItem('takeaway_order_taker_name')
+      localStorage.removeItem('delivery_order_taker_id')
+      localStorage.removeItem('delivery_order_taker_name')
 
       // Clear new-order page shared cart/customer/instructions
       if (orderData?.sourcePage === 'new-order') {

@@ -1,5 +1,5 @@
-const net = require('net');
 const { generateKitchenTokenESCPOS } = require('./usbPrinter');
+const { sendRawToIPPrinter } = require('./receiptPrinter');
 
 /**
  * IP Kitchen Token Printer
@@ -7,45 +7,12 @@ const { generateKitchenTokenESCPOS } = require('./usbPrinter');
  * Generates the SAME ESC/POS binary as the USB kitchen token printer
  * (via generateKitchenTokenESCPOS) and sends it over a raw TCP socket.
  *
- * This guarantees pixel-perfect identical kitchen tokens for both USB and IP printers.
+ * This guarantees pixel-perfect identical kitchen tokens for both USB and IP
+ * printers, and shares the robust chunked sender used for receipts — the old
+ * fire-and-forget impl here (write() with no callback, then socket.destroy()
+ * after a hard 300ms) killed the socket before the data left the kernel on
+ * slow networks, so kitchen tokens silently failed to print.
  */
-
-// Send a raw ESC/POS buffer to an IP thermal printer via TCP
-function sendRawToIPPrinter(ip, port, buffer) {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const settle = (fn, val) => { if (!settled) { settled = true; fn(val); } };
-
-    const socket = new net.Socket();
-    socket.setTimeout(10000);
-
-    socket.connect(parseInt(port), ip, () => {
-      // Hand data to the kernel synchronously. For small ESC/POS buffers this
-      // effectively delivers the job to the printer.
-      socket.write(buffer);
-      // Mark settled IMMEDIATELY after write() is called — before any async
-      // event (ECONNRESET, error) can fire. Thermal printers often send RST
-      // right after receiving data, which can race with the write callback and
-      // cause a false failure. Setting settled=true here guarantees that any
-      // subsequent socket error is ignored once the data is in-flight.
-      settled = true;
-      setTimeout(() => {
-        socket.destroy();
-        resolve({ success: true });
-      }, 300);
-    });
-
-    socket.on('error', (err) => {
-      socket.destroy();
-      settle(reject, err);
-    });
-
-    socket.on('timeout', () => {
-      socket.destroy();
-      settle(reject, new Error('Connection timeout after 10s'));
-    });
-  });
-}
 
 async function printKitchenToken(ip, port, orderData, userProfile) {
   console.log(`🍳 [IP Kitchen] Connecting to ${ip}:${port}`);
@@ -53,9 +20,22 @@ async function printKitchenToken(ip, port, orderData, userProfile) {
   // Generate the exact same ESC/POS buffer as the USB kitchen token printer
   const buffer = await generateKitchenTokenESCPOS(orderData, userProfile);
 
-  // Send over TCP
-  await sendRawToIPPrinter(ip, parseInt(port), buffer);
-  console.log('✅ [IP Kitchen] Kitchen token sent successfully');
+  // Send over TCP — retry once on failure. Every rejection from
+  // sendRawToIPPrinter happens before the job reaches the printer, so a retry
+  // can never cause a double print.
+  let lastErr;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      await sendRawToIPPrinter(ip, parseInt(port), buffer);
+      console.log(`✅ [IP Kitchen] Kitchen token sent successfully${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
+      return;
+    } catch (err) {
+      lastErr = err;
+      console.warn(`⚠️  [IP Kitchen] Attempt ${attempt}/2 failed: ${err.message}`);
+      if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+  throw lastErr;
 }
 
 module.exports = { printKitchenToken };

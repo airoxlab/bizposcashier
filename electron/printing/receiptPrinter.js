@@ -11,48 +11,78 @@ const { generateReceiptESCPOS } = require('./usbPrinter');
  * This guarantees pixel-perfect identical receipts for both USB and IP printers.
  */
 
-// Send a raw ESC/POS buffer to an IP thermal printer via TCP
+// Per-write chunk size + inter-chunk delay. Cheap network thermal printers
+// (the common Xprinter / Black Copper / generic-ESC-POS units) have very small
+// TCP receive buffers. A single large socket.write() burst — a receipt is tens
+// of KB once a logo + QR raster is included — overruns that buffer: the printer
+// drops bytes (garbled / blank output) or stops ACKing entirely (we then hit
+// the idle timeout and report "timeout"). Streaming the job in small chunks
+// with a short gap lets the printer's firmware drain between writes.
+const CHUNK_SIZE = 2048;
+const CHUNK_DELAY_MS = 20;
+// Grace period after the last byte before sending FIN. Some cheap printers
+// stop processing the moment they see FIN and truncate the tail of the job.
+const PRE_FIN_GRACE_MS = 400;
+
+// Send a raw ESC/POS buffer to an IP thermal printer via TCP.
 //
-// Correctness contract (replaces the old fire-and-forget 300ms-timer impl):
-//   1. Connect to ip:port.
-//   2. socket.write(buffer, cb) — cb fires only after the kernel has accepted
-//      every byte. For large receipts (logo + QR images) this can take well
-//      over 300ms on slow networks; the old impl destroyed the socket too
-//      early and printed truncated receipts.
-//   3. socket.end() — sends FIN, the canonical "end of job" signal for port
-//      9100 raw printing. The kernel drains any remaining data first.
+// Correctness contract:
+//   1. Connect to ip:port (dedicated 8s connect timeout).
+//   2. Stream the buffer in CHUNK_SIZE pieces; await each write() callback and
+//      pause CHUNK_DELAY_MS between chunks so a slow printer never overruns.
+//   3. After the last byte, wait PRE_FIN_GRACE_MS, then socket.end() — FIN is
+//      the canonical "end of job" signal for port-9100 raw printing.
 //   4. Resolve on 'close' (clean shutdown) or on an ECONNRESET/EPIPE that
 //      arrives *after* the write completed — many thermal printers send RST
 //      the instant they're done consuming the job; that's success, not failure.
 //   5. If the printer keeps the socket open and we hit the idle timeout after
-//      the write was acknowledged, treat as success and force-close ourselves.
-//   6. Anything before the write callback fires is a real failure (reject).
+//      the write finished, treat as success and force-close ourselves.
+//   6. Anything before the last chunk is acknowledged is a real failure (reject).
 function sendRawToIPPrinter(ip, port, buffer) {
   return new Promise((resolve, reject) => {
     let writeDone = false;
     let settled = false;
+    let connected = false;
     const settle = (fn, val) => { if (!settled) { settled = true; fn(val); } };
 
     const socket = new net.Socket();
-    // Idle timeout — applies to inactivity, not total duration. 15s gives slow
-    // networks + heavy image payloads enough headroom.
-    socket.setTimeout(15000);
+    socket.setNoDelay(true);          // push each chunk out immediately (no Nagle batching)
+    socket.setTimeout(20000);         // idle timeout — inactivity, not total duration
+
+    // Dedicated connect timeout — an unreachable printer fails in 8s instead of
+    // hanging for the full idle window.
+    const connectTimer = setTimeout(() => {
+      if (!connected) {
+        socket.destroy();
+        settle(reject, new Error(`Could not connect to ${ip}:${port} within 8s`));
+      }
+    }, 8000);
+
+    const writeChunk = (offset) => {
+      if (settled) return;
+      if (offset >= buffer.length) {
+        writeDone = true;
+        console.log(`✅ [IP Receipt] All ${buffer.length} bytes flushed to kernel`);
+        // Let a slow printer process the tail before FIN.
+        setTimeout(() => { if (!settled) socket.end(); }, PRE_FIN_GRACE_MS);
+        return;
+      }
+      const slice = buffer.subarray(offset, offset + CHUNK_SIZE);
+      socket.write(slice, (err) => {
+        if (err) { socket.destroy(); return settle(reject, err); }
+        setTimeout(() => writeChunk(offset + CHUNK_SIZE), CHUNK_DELAY_MS);
+      });
+    };
 
     socket.connect(parseInt(port), ip, () => {
-      console.log(`🔌 [IP Receipt] Connected to ${ip}:${port}, writing ${buffer.length} bytes`);
-      socket.write(buffer, (err) => {
-        if (err) {
-          socket.destroy();
-          return settle(reject, err);
-        }
-        writeDone = true;
-        console.log(`✅ [IP Receipt] ${buffer.length} bytes flushed to kernel`);
-        // Graceful close — kernel sends FIN after the send buffer drains.
-        socket.end();
-      });
+      connected = true;
+      clearTimeout(connectTimer);
+      console.log(`🔌 [IP Receipt] Connected to ${ip}:${port}, streaming ${buffer.length} bytes`);
+      writeChunk(0);
     });
 
     socket.on('close', () => {
+      clearTimeout(connectTimer);
       if (writeDone) {
         settle(resolve, { success: true });
       } else {
@@ -61,6 +91,7 @@ function sendRawToIPPrinter(ip, port, buffer) {
     });
 
     socket.on('error', (err) => {
+      clearTimeout(connectTimer);
       // Printer-side RST after consuming the job is the common pattern for
       // port-9100 thermal printers. If our write already completed, the data
       // is already on paper — ignore the RST.
@@ -83,7 +114,7 @@ function sendRawToIPPrinter(ip, port, buffer) {
         return settle(resolve, { success: true });
       }
       socket.destroy();
-      settle(reject, new Error(`No activity from ${ip}:${port} for 15s`));
+      settle(reject, new Error(`No activity from ${ip}:${port} for 20s`));
     });
   });
 }
@@ -103,9 +134,22 @@ async function printReceipt(ip, port, orderData, userProfile) {
   // Generate the exact same ESC/POS buffer as the USB printer
   const buffer = await generateReceiptESCPOS(orderData, userProfile, assets);
 
-  // Send over TCP
-  await sendRawToIPPrinter(ip, port, buffer);
-  console.log('✅ [IP Receipt] Print job sent successfully');
+  // Send over TCP — retry once on failure. Every rejection from
+  // sendRawToIPPrinter happens BEFORE the job reaches the printer (post-write
+  // states resolve as success), so a retry can never cause a double print.
+  let lastErr;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      await sendRawToIPPrinter(ip, port, buffer);
+      console.log(`✅ [IP Receipt] Print job sent successfully${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
+      return;
+    } catch (err) {
+      lastErr = err;
+      console.warn(`⚠️  [IP Receipt] Attempt ${attempt}/2 failed: ${err.message}`);
+      if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
+    }
+  }
+  throw lastErr;
 }
 
 function registerReceiptPrinter(ipcMain) {
@@ -150,4 +194,4 @@ function registerReceiptPrinter(ipcMain) {
   });
 }
 
-module.exports = { registerReceiptPrinter, printReceipt };
+module.exports = { registerReceiptPrinter, printReceipt, sendRawToIPPrinter };

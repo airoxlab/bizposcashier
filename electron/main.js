@@ -258,8 +258,22 @@ function createWindow() {
     if (whatsappAutoConnectDone) return; // only once per window lifetime
     whatsappAutoConnectDone = true;
 
-    const sessionPath = path.join(app.getPath('userData'), 'whatsapp-session', 'session');
-    if (fs.existsSync(sessionPath)) {
+    // Baileys persists its session under whatsapp-baileys-auth/creds.json.
+    // A paired session has registered:true (or a `me` id) — that's what we
+    // auto-connect from. (The old whatsapp-session/session path belonged to
+    // the retired Puppeteer client and never exists on fresh installs.)
+    const credsPath = path.join(app.getPath('userData'), 'whatsapp-baileys-auth', 'creds.json');
+    let hasValidSession = false;
+    try {
+      if (fs.existsSync(credsPath)) {
+        const creds = JSON.parse(fs.readFileSync(credsPath, 'utf8'));
+        hasValidSession = creds?.registered === true || !!creds?.me?.id;
+      }
+    } catch (e) {
+      log.warn(`[WhatsApp] Could not read creds.json: ${e.message}`);
+    }
+
+    if (hasValidSession) {
       if (whatsAppClient.wasManuallyDisconnected()) {
         log.info('[WhatsApp] Saved session found but user manually disconnected — skipping auto-connect');
         return;

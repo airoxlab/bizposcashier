@@ -1646,12 +1646,23 @@ export default function OrdersPage() {
       order.daily_serial?.toString() || ''
     );
     // Save order taker so it is restored when the page loads
-    if (order.order_type === 'walkin' && order.order_taker_id) {
-      const takerName = order.order_takers?.name ||
-        cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null;
-      localStorage.setItem('walkin_order_taker', JSON.stringify({ id: order.order_taker_id, name: takerName }));
-    } else if (order.order_type === 'walkin') {
-      localStorage.removeItem('walkin_order_taker');
+    const takerName = order.order_taker_id
+      ? (order.order_takers?.name || cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null)
+      : null;
+    if (order.order_type === 'walkin') {
+      if (order.order_taker_id) {
+        localStorage.setItem('walkin_order_taker', JSON.stringify({ id: order.order_taker_id, name: takerName }));
+      } else {
+        localStorage.removeItem('walkin_order_taker');
+      }
+    } else if (order.order_type === 'takeaway' || order.order_type === 'delivery') {
+      if (order.order_taker_id) {
+        localStorage.setItem(`${orderTypePrefix}_order_taker_id`, order.order_taker_id);
+        localStorage.setItem(`${orderTypePrefix}_order_taker_name`, takerName || '');
+      } else {
+        localStorage.removeItem(`${orderTypePrefix}_order_taker_id`);
+        localStorage.removeItem(`${orderTypePrefix}_order_taker_name`);
+      }
     }
     localStorage.setItem(
       `${orderTypePrefix}_original_state`,

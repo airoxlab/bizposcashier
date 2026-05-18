@@ -14,6 +14,14 @@ const { app, BrowserWindow } = require('electron');
 const log = require('electron-log');
 const { printReceipt } = require('./receiptPrinter');
 const { printKitchenToken } = require('./kitchenTokenPrinter');
+const {
+  generateReceiptESCPOS,
+  generateKitchenTokenESCPOS,
+  printReceiptToUSB,
+  printKitchenTokenToUSB,
+  sendToWindowsPrinter,
+} = require('./usbPrinter');
+const { ensureAssets } = require('../handlers/onDemandAssetDownload');
 
 const MOBILE_PRINT_PORT = 3940;
 const PRINTERS_FILE = path.join(app.getPath('userData'), 'printers.json');
@@ -39,6 +47,95 @@ async function loadMappings() {
 
 function getDefaultPrinter(printers) {
   return printers.find(p => p.isDefault || p.is_default) || printers[0] || null;
+}
+
+// printers.json can accumulate printers from MULTIPLE BizPOS accounts that have
+// used this PC. A mobile print must only ever go to printers owned by the
+// requesting store — otherwise it tries another store's (offline) printer and
+// reports a false "some printers failed". Filter by the user_id on the order's
+// userProfile; if nothing is tagged for that user, fall back to all (older
+// configs saved printers without a user_id).
+function filterPrintersForUser(printers, userProfile) {
+  const uid = userProfile?.id || userProfile?.user_id;
+  if (!uid) return printers;
+  const owned = printers.filter(p => p.user_id === uid);
+  return owned.length > 0 ? owned : printers;
+}
+
+// ========================================
+// PRINTER ROUTING — IP and USB
+// The mobile relay must reach whatever printer the desktop has configured:
+// a network (IP) printer, a Windows USB Printer Class device, or a COM-port
+// printer. resolvePrinterType() normalizes the saved config (same logic the
+// desktop's checkPrinterConnection uses) and printReceiptToAny/printKitchenToAny
+// dispatch to the matching transport.
+// ========================================
+function resolvePrinterType(config) {
+  const usbPort = config.usb_device_path || config.usb_port || '';
+  const ipAddress = config.ip_address || config.ip || '';
+  let type = config.connection_type || config.printer_type || '';
+  // A "WINUSB:" prefix on the port encodes a Windows USB Printer Class device;
+  // the part after the prefix is the actual Windows printer name.
+  const winFromPort = usbPort && usbPort.startsWith('WINUSB:') ? usbPort.replace(/^WINUSB:/, '') : null;
+  const winName = config.usb_printer_name || winFromPort;
+
+  if (type === 'ethernet' || type === 'network') type = 'ip';
+
+  // A Windows USB Printer Class device MUST go through the spooler — never
+  // `copy /b` to a COM port. The WINUSB: prefix (or a usb_printer_name) marks
+  // it as such, and that overrides a stale `connection_type: 'usb'` which
+  // older configs were saved with even for spooler printers.
+  if (winFromPort || (type === 'usb' && winName)) {
+    type = 'windows_usb';
+  } else if (!type || type === 'thermal') {
+    if (winName) type = 'windows_usb';
+    else if (usbPort) type = 'usb';
+    else if (ipAddress) type = 'ip';
+  }
+  return { type, ipAddress, port: parseInt(config.port || '9100'), usbPort, winName };
+}
+
+async function printReceiptToAny(config, orderData, userProfile) {
+  const r = resolvePrinterType(config);
+  if (r.type === 'ip') {
+    if (!r.ipAddress) throw new Error('Network printer has no IP address configured.');
+    await printReceipt(r.ipAddress, r.port, orderData, userProfile);
+    return;
+  }
+  if (r.type === 'windows_usb') {
+    if (!r.winName) throw new Error('USB printer has no Windows printer name configured.');
+    const assets = await ensureAssets(userProfile?.store_logo, userProfile?.qr_code);
+    const buffer = await generateReceiptESCPOS(orderData, userProfile, assets);
+    await sendToWindowsPrinter(r.winName, buffer);
+    return;
+  }
+  if (r.type === 'usb') {
+    if (!r.usbPort) throw new Error('USB printer has no COM port configured.');
+    await printReceiptToUSB(r.usbPort, orderData, userProfile);
+    return;
+  }
+  throw new Error('Printer connection type is not set. Re-add the printer in BizPOS Settings.');
+}
+
+async function printKitchenToAny(config, orderData, userProfile) {
+  const r = resolvePrinterType(config);
+  if (r.type === 'ip') {
+    if (!r.ipAddress) throw new Error('Network printer has no IP address configured.');
+    await printKitchenToken(r.ipAddress, r.port, orderData, userProfile);
+    return;
+  }
+  if (r.type === 'windows_usb') {
+    if (!r.winName) throw new Error('USB printer has no Windows printer name configured.');
+    const buffer = await generateKitchenTokenESCPOS(orderData, userProfile);
+    await sendToWindowsPrinter(r.winName, buffer);
+    return;
+  }
+  if (r.type === 'usb') {
+    if (!r.usbPort) throw new Error('USB printer has no COM port configured.');
+    await printKitchenTokenToUSB(r.usbPort, orderData, userProfile);
+    return;
+  }
+  throw new Error('Printer connection type is not set. Re-add the printer in BizPOS Settings.');
 }
 
 /**
@@ -205,6 +302,41 @@ function registerMobilePrintServer() {
       return;
     }
 
+    // POST /api/print/test — prints a small confirmation receipt so staff can
+    // verify the printer works end-to-end from the mobile app.
+    if (method === 'POST' && url === '/api/print/test') {
+      try {
+        const body = await parseBody(req).catch(() => ({}));
+        let config = body.printerConfig;
+        if (!config) {
+          const printers = filterPrintersForUser(await loadPrinters(), body.userProfile);
+          config = getDefaultPrinter(printers);
+          if (!config) {
+            sendJson(res, 404, { success: false, error: 'No printer configured on desktop. Add a printer in BizPOS Settings.' });
+            return;
+          }
+        }
+        const testOrder = {
+          orderNumber: 'TEST',
+          orderType: 'walkin',
+          cart: [{ isDeal: false, productName: 'Test Print Item', quantity: 1, finalPrice: 100, totalPrice: 100 }],
+          subtotal: 100,
+          paymentMethod: 'Cash',
+        };
+        try {
+          await printReceiptToAny(config, testOrder, body.userProfile || {});
+          log.info('[MobilePrint] Test receipt printed');
+          sendJson(res, 200, { success: true });
+        } catch (printErr) {
+          log.error('[MobilePrint] Test print failed:', printErr.message);
+          sendJson(res, 502, { success: false, error: `Printer error: ${printErr.message}` });
+        }
+      } catch (error) {
+        sendJson(res, 500, { success: false, error: error.message });
+      }
+      return;
+    }
+
     // POST /api/print/receipt
     if (method === 'POST' && url === '/api/print/receipt') {
       try {
@@ -212,7 +344,7 @@ function registerMobilePrintServer() {
 
         let config = printerConfig;
         if (!config) {
-          const printers = await loadPrinters();
+          const printers = filterPrintersForUser(await loadPrinters(), userProfile);
           config = getDefaultPrinter(printers);
           if (!config) {
             sendJson(res, 404, { success: false, error: 'No printer configured on desktop. Add a printer in BizPOS Settings.' });
@@ -220,21 +352,19 @@ function registerMobilePrintServer() {
           }
         }
 
-        const ip = config.ip_address || config.ip;
-        const port = parseInt(config.port || '9100');
-
-        if (!ip) {
-          sendJson(res, 400, { success: false, error: 'Printer has no IP address configured.' });
-          return;
+        // Await the actual print so the mobile app receives a TRUTHFUL result:
+        // success only after the printer accepted the job, an error otherwise.
+        // (Previously this responded 200 before printing — a print could fail
+        // silently while the app still showed "printed successfully".)
+        // Routes to IP, Windows USB, or COM-port printers transparently.
+        try {
+          await printReceiptToAny(config, orderData, userProfile);
+          log.info('[MobilePrint] Receipt printed for order:', orderData?.order_number || orderData?.orderNumber);
+          sendJson(res, 200, { success: true });
+        } catch (printErr) {
+          log.error('[MobilePrint] Receipt print failed:', printErr.message);
+          sendJson(res, 502, { success: false, error: `Printer error: ${printErr.message}` });
         }
-
-        // Respond immediately — printer TCP connection can take a few seconds
-        // (printer waking from sleep, WiFi reconnect). Fire-and-forget so the
-        // mobile app gets instant feedback rather than timing out.
-        sendJson(res, 200, { success: true });
-        printReceipt(ip, port, orderData, userProfile)
-          .then(() => log.info('[MobilePrint] Receipt printed for order:', orderData?.order_number || orderData?.orderNumber))
-          .catch(e => log.error('[MobilePrint] Receipt print error (background):', e.message));
       } catch (error) {
         log.error('[MobilePrint] Receipt parse error:', error.message);
         sendJson(res, 500, { success: false, error: error.message });
@@ -247,7 +377,7 @@ function registerMobilePrintServer() {
       try {
         const { orderData, userProfile, printerConfig } = await parseBody(req);
 
-        const printers = await loadPrinters();
+        const printers = filterPrintersForUser(await loadPrinters(), userProfile);
         const mappings = await loadMappings();
         const items = orderData.items || [];
 
@@ -260,36 +390,58 @@ function registerMobilePrintServer() {
             sendJson(res, 404, { success: false, error: 'No printer configured on desktop.' });
             return;
           }
-          const ip = config.ip_address || config.ip;
-          const port = parseInt(config.port || '9100');
-          if (!ip) {
-            sendJson(res, 400, { success: false, error: 'Printer has no IP address configured.' });
-            return;
+          // Await the print so the mobile app gets a truthful success/failure.
+          // Routes to IP, Windows USB, or COM-port printers transparently.
+          try {
+            await printKitchenToAny(config, orderData, userProfile);
+            log.info('[MobilePrint] Kitchen token printed for order:', orderData?.order_number || orderData?.orderNumber);
+            sendJson(res, 200, { success: true });
+          } catch (printErr) {
+            log.error('[MobilePrint] Kitchen token failed:', printErr.message);
+            sendJson(res, 502, { success: false, error: `Printer error: ${printErr.message}` });
           }
-          // Respond immediately — print in background
-          sendJson(res, 200, { success: true });
-          printKitchenToken(ip, port, orderData, userProfile)
-            .then(() => log.info('[MobilePrint] Kitchen token printed for order:', orderData?.order_number || orderData?.orderNumber))
-            .catch(e => log.error('[MobilePrint] Kitchen token error (background):', e.message));
           return;
         }
 
         // Route items to printers using category/deal mappings
         const groups = groupItemsByPrinter(items, mappings, printers);
         if (groups.length === 0) {
-          sendJson(res, 404, { success: false, error: 'No printer configured on desktop.' });
+          // Routing mappings exist, but none of them point at THIS store's
+          // printers (stale config, or a newly-added printer that isn't mapped
+          // yet). Don't fail — fall back to the kitchen / default printer so
+          // the token still prints.
+          const fallback = printers.find(p => p.is_kitchen || p.isKitchen)
+            || getDefaultPrinter(printers);
+          if (!fallback) {
+            sendJson(res, 404, { success: false, error: 'No printer configured on desktop.' });
+            return;
+          }
+          try {
+            await printKitchenToAny(fallback, orderData, userProfile);
+            log.info('[MobilePrint] Kitchen token printed (routing fallback) for order:', orderData?.order_number || orderData?.orderNumber);
+            sendJson(res, 200, { success: true });
+          } catch (printErr) {
+            log.error('[MobilePrint] Kitchen token failed (fallback):', printErr.message);
+            sendJson(res, 502, { success: false, error: `Printer error: ${printErr.message}` });
+          }
           return;
         }
 
-        // Respond immediately — all printer groups fire in background
-        sendJson(res, 200, { success: true });
-        for (const { printerConfig: cfg, items: groupItems } of groups) {
-          const ip = cfg.ip_address || cfg.ip;
-          const port = parseInt(cfg.port || '9100');
-          if (!ip) continue;
-          printKitchenToken(ip, port, { ...orderData, items: groupItems }, userProfile)
-            .then(() => log.info(`[MobilePrint] Kitchen token sent to "${cfg.name}" (${ip}:${port}) — ${groupItems.length} item(s)`))
-            .catch(e => log.error(`[MobilePrint] Kitchen token failed for printer "${cfg.name}":`, e.message));
+        // Await every printer group, then report a truthful aggregate result.
+        const results = await Promise.allSettled(
+          groups.map(({ printerConfig: cfg, items: groupItems }) =>
+            printKitchenToAny(cfg, { ...orderData, items: groupItems }, userProfile)
+              .then(() => log.info(`[MobilePrint] Kitchen token sent to "${cfg.name}" — ${groupItems.length} item(s)`))
+          )
+        );
+        const failed = results.filter(r => r.status === 'rejected');
+        if (failed.length === 0) {
+          sendJson(res, 200, { success: true });
+        } else if (failed.length < results.length) {
+          sendJson(res, 200, { success: true, partial: true, error: `${failed.length} of ${results.length} printers failed` });
+        } else {
+          log.error('[MobilePrint] All kitchen printers failed:', failed[0].reason?.message);
+          sendJson(res, 502, { success: false, error: failed[0].reason?.message || 'All printers failed' });
         }
       } catch (error) {
         log.error('[MobilePrint] Kitchen parse error:', error.message);

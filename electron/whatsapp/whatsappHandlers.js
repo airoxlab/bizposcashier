@@ -3,10 +3,28 @@
  * Registers all whatsapp-related ipcMain handlers.
  */
 
+const { app } = require('electron');
+const fs = require('fs');
+const path = require('path');
 const log = require('electron-log');
 const whatsAppClient = require('./whatsappClient');
 const { formatPhoneForWhatsApp } = require('./phoneFormatter');
 const { generateReceiptImage, generateBalanceImage } = require('./receiptImageGenerator');
+
+function getConfigPath() {
+  return path.join(app.getPath('userData'), 'bizpos-config.json');
+}
+function readConfig() {
+  try {
+    const p = getConfigPath();
+    if (fs.existsSync(p)) return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch {}
+  return {};
+}
+function writeConfig(cfg) {
+  try { fs.writeFileSync(getConfigPath(), JSON.stringify(cfg, null, 2), 'utf8'); }
+  catch (e) { log.warn('[WA Handler] Could not write config:', e.message); }
+}
 
 // Errors that mean the socket is dead — trigger immediate reconnect
 function isConnectionDead(err) {
@@ -58,6 +76,30 @@ function registerWhatsAppHandlers(ipcMain, getMainWindow) {
       return { success: true };
     } catch (err) {
       log.error('[WA Handler] disconnect error:', err.message);
+      return { success: false, error: err.message };
+    }
+  });
+
+  // Called on every login to disconnect WhatsApp only when the restaurant changes
+  ipcMain.handle('whatsapp:on-user-login', async (_event, { restaurantId }) => {
+    try {
+      const cfg = readConfig();
+      const lastId = cfg.lastRestaurantId;
+      let disconnected = false;
+
+      if (lastId && lastId !== restaurantId) {
+        log.info(`[WA Handler] Restaurant changed (${lastId} → ${restaurantId}) — disconnecting WhatsApp`);
+        await whatsAppClient.disconnect();
+        disconnected = true;
+      } else {
+        log.info(`[WA Handler] Same restaurant (${restaurantId}) — keeping WhatsApp connected`);
+      }
+
+      cfg.lastRestaurantId = restaurantId;
+      writeConfig(cfg);
+      return { success: true, disconnected };
+    } catch (err) {
+      log.error('[WA Handler] on-user-login error:', err.message);
       return { success: false, error: err.message };
     }
   });

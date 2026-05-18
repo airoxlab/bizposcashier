@@ -232,7 +232,11 @@ async function checkPrinterConnection(printerConfig) {
     return { connected: r.ok, type: 'usb', status: r.ok ? 'ready' : 'offline', error: r.err };
   }
   if (connectionType === 'ip') {
-    const r = await probeTcp(ipAddress, printerConfig.port || 9100, 2000);
+    // Two probes with a forgiving timeout — congested WiFi drops the occasional
+    // TCP SYN, and a single 2s miss should not flip the badge to "offline".
+    const prt = printerConfig.port || 9100;
+    let r = await probeTcp(ipAddress, prt, 4000);
+    if (!r.ok) r = await probeTcp(ipAddress, prt, 4000);
     return { connected: r.ok, type: 'ip', status: r.ok ? 'ready' : 'offline', error: r.err };
   }
   return { connected: false, type: connectionType || 'unknown', error: 'unknown connection type' };

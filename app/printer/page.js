@@ -137,6 +137,30 @@ useEffect(() => {
     if (window.electronAPI?.getLocalIP) {
       const ip = await window.electronAPI.getLocalIP()
       setLocalIP(ip || '')
+
+      // Keep the published print-server IP fresh. A PC's LAN IP changes when it
+      // switches networks or the router reassigns DHCP leases. The IP was only
+      // ever published when "I am Server" was first toggled on — so re-publish
+      // here whenever it has drifted, otherwise the mobile app keeps trying the
+      // old (now unreachable) address.
+      if (ip && ip !== '127.0.0.1' && localStorage.getItem('is_print_server') === 'true') {
+        try {
+          const { data: row } = await supabase
+            .from('users')
+            .select('print_server_ip')
+            .eq('id', userData.id)
+            .single()
+          if (row && row.print_server_ip !== ip) {
+            await supabase
+              .from('users')
+              .update({ print_server_ip: ip })
+              .eq('id', userData.id)
+            console.log(`🖨️ [Printer] Print server IP re-published: ${row.print_server_ip || 'none'} → ${ip}`)
+          }
+        } catch (e) {
+          console.warn('⚠️ [Printer] Failed to refresh print server IP:', e.message)
+        }
+      }
     }
   }
 

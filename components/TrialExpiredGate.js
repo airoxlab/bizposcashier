@@ -36,8 +36,10 @@ function PlanCard({ plan }) {
 }
 
 export default function TrialExpiredGate({ children }) {
+  // Full-screen lock only AFTER the grace period (expiry + grace_days). During
+  // grace, order taking is blocked but the app stays usable (+ a banner).
   const [expired, setExpired] = useState(() =>
-    planManager.isLoaded && planManager.getStatus() === "expired"
+    planManager.isLoaded && planManager.isAppBlocked()
   );
   const [planInfo, setPlanInfo] = useState(null);
   const [plans, setPlans]       = useState([]);
@@ -46,7 +48,7 @@ export default function TrialExpiredGate({ children }) {
   useEffect(() => {
     const check = () => {
       if (!planManager.isLoaded) return;
-      const isExp = planManager.getStatus() === "expired";
+      const isExp = planManager.isAppBlocked();
       setExpired(isExp);
       if (isExp) setPlanInfo(planManager.getPlan());
     };
@@ -86,10 +88,10 @@ export default function TrialExpiredGate({ children }) {
       </div>
 
       {/* Heading */}
-      <h1 className="text-3xl font-extrabold text-gray-900 tracking-tight">Trial Expired</h1>
+      <h1 className="text-3xl font-extrabold text-gray-900 tracking-tight">Subscription Expired</h1>
       <p className="mt-2 text-gray-500 text-center max-w-sm">
-        Your <span className="font-semibold text-gray-700">{planInfo?.name || "trial"}</span> period has ended.
-        Upgrade to keep using BizPOS without interruption.
+        Your <span className="font-semibold text-gray-700">{planInfo?.name || "BizPOS"}</span> subscription
+        has lapsed and the grace period has ended. Please renew to continue using BizPOS.
       </p>
 
       {/* Plan cards */}

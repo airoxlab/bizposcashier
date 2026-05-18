@@ -846,6 +846,8 @@ export default function TakeawayPage() {
               payment_method: 'Split',
               payment_status: 'Paid',
               amount_paid: totalPaid,
+              order_status: 'Completed',
+              order_taker_id: order.order_taker_id || null,
               updated_at: new Date().toISOString()
             })
             .eq('id', order.id)
@@ -876,6 +878,8 @@ export default function TakeawayPage() {
               payment_method: 'Split',
               payment_status: 'Paid',
               amount_paid: totalPaid,
+              order_status: 'Completed',
+              order_taker_id: order.order_taker_id || null,
               updated_at: new Date().toISOString(),
               _isSynced: false
             }
@@ -2147,7 +2151,9 @@ export default function TakeawayPage() {
       // 🆕 Include original payment information for modified order payment calculation
       originalPaymentStatus: localStorage.getItem('takeaway_original_payment_status'),
       originalAmountPaid: parseFloat(localStorage.getItem('takeaway_original_amount_paid')) || 0,
-      originalPaymentMethod: localStorage.getItem('takeaway_original_payment_method')
+      originalPaymentMethod: localStorage.getItem('takeaway_original_payment_method'),
+      orderTakerId: localStorage.getItem('takeaway_order_taker_id') || null,
+      orderTakerName: localStorage.getItem('takeaway_order_taker_name') || null
     }
 
     console.log('🔵 [Takeaway] Order data prepared:', orderData)

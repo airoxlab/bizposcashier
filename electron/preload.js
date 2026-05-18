@@ -118,6 +118,7 @@ const api = {
     sendReceiptImage: (data) => ipcRenderer.invoke('whatsapp:send-receipt-image', data),
     sendBalanceImage: (data) => ipcRenderer.invoke('whatsapp:send-balance-image', data),
     checkNumber: (data) => ipcRenderer.invoke('whatsapp:check-number', data),
+    onUserLogin: (data) => ipcRenderer.invoke('whatsapp:on-user-login', data),
 
     onQR: (cb) => ipcRenderer.on('whatsapp:qr', (_e, d) => cb(d)),
     onStatus: (cb) => ipcRenderer.on('whatsapp:status', (_e, d) => cb(d)),

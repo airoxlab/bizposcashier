@@ -37,6 +37,37 @@ const CMD = {
 // ========================================
 const PAPER_WIDTH = 42;
 
+// ========================================
+// FIELD NORMALIZATION HELPERS
+// Print payloads reach this renderer from three sources — the desktop POS, the
+// mobile app, and order-history reprints — each with slightly different field
+// names and shapes (camelCase vs snake_case, deal_products as a JSON string vs
+// an array). These helpers make the renderer tolerant so a payload variation
+// can never print "undefined" or iterate a string character-by-character.
+// ========================================
+function normalizeDealProducts(dp) {
+  if (!dp) return [];
+  if (Array.isArray(dp)) return dp;
+  if (typeof dp === 'string') {
+    try {
+      const parsed = JSON.parse(dp);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+function dealProductName(product) {
+  return String(product?.name || product?.product_name || product?.productName || 'Item').trim();
+}
+
+function dealProductQty(product) {
+  const q = product?.quantity ?? product?.qty ?? 1;
+  return parseInt(q) || 1;
+}
+
 // Helper: Text to buffer
 function text(str) {
   return Buffer.from(str, 'utf8');
@@ -351,43 +382,56 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
   commands.push(CMD.BOLD_OFF);
   commands.push(drawLine('-'));
 
-  if (orderData.cart && orderData.cart.length > 0) {
-    for (const item of orderData.cart) {
+  // Receipt line items normally arrive in `cart`. Fall back to `items` so a
+  // payload that was built for the kitchen path still renders something rather
+  // than printing an empty ITEMS section.
+  const receiptItems = (orderData.cart && orderData.cart.length > 0)
+    ? orderData.cart
+    : (Array.isArray(orderData.items) ? orderData.items : []);
+
+  if (receiptItems.length > 0) {
+    for (const item of receiptItems) {
 
       if (item.isDeal) {
-        const dealName = `${item.quantity}x ${item.dealName || 'Deal'}`;
-        const price = `Rs ${parseFloat(item.totalPrice || 0).toFixed(0)}`;
+        const qty = parseInt(item.quantity) || 1;
+        const dealLabel = String(item.dealName || item.productName || item.product_name || item.name || 'Deal').trim();
+        const dealName = `${qty}x ${dealLabel}`;
+        const price = `Rs ${parseFloat(item.totalPrice ?? item.total_price ?? 0).toFixed(0)}`;
         commands.push(leftRight(dealName, price));
 
-        if (item.dealProducts && item.dealProducts.length > 0) {
-          for (const product of item.dealProducts) {
-            let productLine = `  - ${product.quantity}x ${product.name}`;
-            // Check for variant or flavor
-            const variantName = product.variant ||
-              (product.flavor ?
-                (typeof product.flavor === 'object' ? (product.flavor.flavor_name || product.flavor.name) : product.flavor)
-                : null);
-            if (variantName) {
-              productLine += ` - ${variantName}`;
-            }
-            // Pad to PAPER_WIDTH so the sub-item lines occupy the same horizontal
-            // span as the leftRight rows above/below and remain visually aligned
-            // under the printer's inherited alignment state (no ALIGN_LEFT toggle).
-            commands.push(padToWidth(productLine));
+        const dealProducts = normalizeDealProducts(item.dealProducts ?? item.deal_products);
+        for (const product of dealProducts) {
+          let productLine = `  - ${dealProductQty(product)}x ${dealProductName(product)}`;
+          // Check for variant or flavor
+          const variantName = product.variant ||
+            (product.flavor ?
+              (typeof product.flavor === 'object' ? (product.flavor.flavor_name || product.flavor.name) : product.flavor)
+              : null);
+          if (variantName) {
+            productLine += ` - ${variantName}`;
           }
+          // Pad to PAPER_WIDTH so the sub-item lines occupy the same horizontal
+          // span as the leftRight rows above/below and remain visually aligned
+          // under the printer's inherited alignment state (no ALIGN_LEFT toggle).
+          commands.push(padToWidth(productLine));
         }
       } else {
-        let itemName = `${item.quantity}x ${item.productName}`;
-        if (item.variantName) itemName += ` (${item.variantName})`;
+        const qty = parseInt(item.quantity) || 1;
+        const prodName = String(item.productName || item.product_name || item.name || 'Item').trim();
+        let itemName = `${qty}x ${prodName}`;
+        const variantName = item.variantName || item.variant_name;
+        if (variantName) itemName += ` (${variantName})`;
 
-        const gross = parseFloat(item.finalPrice) * item.quantity;
+        const finalPrice = parseFloat(item.finalPrice ?? item.final_price ?? 0);
+        const totalPrice = parseFloat(item.totalPrice ?? item.total_price ?? 0);
+        const gross = finalPrice * qty;
         const discAmt = parseFloat(item.itemDiscountAmount) > 0
           ? parseFloat(item.itemDiscountAmount)
-          : Math.max(0, gross - parseFloat(item.totalPrice));
-        const hasDiscount = discAmt >= 0.01;
+          : Math.max(0, gross - totalPrice);
+        const hasDiscount = discAmt >= 0.01 && gross > 0;
 
         // Show original gross so the discount deduction line below makes math clear
-        commands.push(leftRight(itemName, `Rs ${(hasDiscount ? gross : item.totalPrice).toFixed(0)}`));
+        commands.push(leftRight(itemName, `Rs ${(hasDiscount ? gross : totalPrice).toFixed(0)}`));
 
         if (hasDiscount) {
           const pct = (discAmt / gross * 100).toFixed(0);
@@ -409,7 +453,15 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
   // ========================================
   // TOTALS SECTION (NO LINE ABOVE SUBTOTAL)
   // ========================================
-  const subtotal = parseFloat(orderData.subtotal || 0);
+  // Subtotal normally arrives on the payload, but reprints / quick-order
+  // payloads sometimes omit it. Derive it from the line items as a safety net
+  // so the receipt never prints "Subtotal: Rs 0" when items are present.
+  let subtotal = parseFloat(orderData.subtotal || 0);
+  if (subtotal <= 0 && receiptItems.length > 0) {
+    subtotal = receiptItems.reduce(
+      (s, it) => s + parseFloat(it.totalPrice ?? it.total_price ?? 0), 0
+    );
+  }
   const deliveryCharges = parseFloat(orderData.deliveryCharges || 0);
   const discountAmount = parseFloat(orderData.discountAmount || 0); // Smart discount only
   const loyaltyDiscountAmount = parseFloat(orderData.loyaltyDiscountAmount || 0);
@@ -664,17 +716,16 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
       let itemName = (item.name || 'Deal').trim();
       if (itemName.length > maxNameLength) itemName = itemName.substring(0, maxNameLength);
       commands.push(leftRight(`${prefix}${itemName}`, String(item.quantity)));
-      if (item.dealProducts && item.dealProducts.length > 0) {
-        for (const product of item.dealProducts) {
-          const variantName = product.variant ||
-            (product.flavor ?
-              (typeof product.flavor === 'object' ? (product.flavor.flavor_name || product.flavor.name) : product.flavor)
-              : null);
-          const cleanName = (product.name || '').trim();
-          let productLine = `  ${product.quantity}x ${cleanName}`;
-          if (variantName) productLine += ` - ${String(variantName).trim()}`;
-          commands.push(padToWidth(productLine));
-        }
+      const kitchenDealProducts = normalizeDealProducts(item.dealProducts ?? item.deal_products);
+      for (const product of kitchenDealProducts) {
+        const variantName = product.variant ||
+          (product.flavor ?
+            (typeof product.flavor === 'object' ? (product.flavor.flavor_name || product.flavor.name) : product.flavor)
+            : null);
+        const cleanName = dealProductName(product);
+        let productLine = `  ${dealProductQty(product)}x ${cleanName}`;
+        if (variantName) productLine += ` - ${String(variantName).trim()}`;
+        commands.push(padToWidth(productLine));
       }
       if (item.instructions) {
         commands.push(padToWidth(`  * ${String(item.instructions).trim()}`));
@@ -1226,6 +1277,8 @@ module.exports = {
   registerUSBPrinter,
   printReceiptToUSB,
   printKitchenTokenToUSB,
+  sendToWindowsPrinter,
+  sendToUSBPort,
   generateReceiptESCPOS,
   generateKitchenTokenESCPOS
 };

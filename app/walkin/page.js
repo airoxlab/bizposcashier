@@ -1146,6 +1146,8 @@ export default function WalkInPage() {
               payment_method: 'Split',
               payment_status: 'Paid',
               amount_paid: totalPaid,
+              order_status: 'Completed',
+              order_taker_id: order.order_taker_id || null,
               updated_at: new Date().toISOString()
             })
             .eq('id', order.id)
@@ -1176,6 +1178,8 @@ export default function WalkInPage() {
               payment_method: 'Split',
               payment_status: 'Paid',
               amount_paid: totalPaid,
+              order_status: 'Completed',
+              order_taker_id: order.order_taker_id || null,
               updated_at: new Date().toISOString(),
               _isSynced: false
             }
