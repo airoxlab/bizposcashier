@@ -60,7 +60,7 @@ function registerImageHandlers(ipcMain) {
     if (!fs.existsSync(imgDir)) fs.mkdirSync(imgDir, { recursive: true });
 
     const mapping = {};
-    const CONCURRENCY = 4;
+    const CONCURRENCY = 12;
 
     for (let i = 0; i < items.length; i += CONCURRENCY) {
       await Promise.all(

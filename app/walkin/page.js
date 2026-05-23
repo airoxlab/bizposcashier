@@ -2162,14 +2162,21 @@ export default function WalkInPage() {
         return
       }
 
-      // Fetch order items if not available
-      let orderItems = order.order_items || []
-      if (!orderItems.length && order.id) {
-        const { data } = await cacheManager.supabase
+      // Fetch order items — gate supabase on online status, fall back to cache when offline
+      let orderItems = []
+      if (order.id && cacheManager.checkOnlineStatus()) {
+        const { data } = await supabase
           .from('order_items')
           .select('*')
           .eq('order_id', order.id)
         orderItems = data || []
+      }
+      if (!orderItems.length) {
+        orderItems = order.order_items || order.items || []
+        if (!orderItems.length && order.id) {
+          const cached = (cacheManager.getAllOrders?.() || []).find(o => o.id === order.id)
+          orderItems = cached?.order_items || cached?.items || []
+        }
       }
 
       // Fetch loyalty redemption for this order

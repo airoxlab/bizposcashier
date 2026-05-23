@@ -1725,16 +1725,23 @@ export default function TakeawayPage() {
         return
       }
 
-      // Fetch order items if not already available
-      let orderItems = order.items || order.order_items || []
-      if (orderItems.length === 0 && order.id) {
-        const { data: items, error } = await cacheManager.supabase
+      // Fetch order items — gate supabase on online status, fall back to cache when offline
+      let orderItems = []
+      if (order.id && cacheManager.checkOnlineStatus()) {
+        const { data: items, error } = await supabase
           .from('order_items')
           .select('*')
           .eq('order_id', order.id)
 
         if (!error && items) {
           orderItems = items
+        }
+      }
+      if (!orderItems.length) {
+        orderItems = order.items || order.order_items || []
+        if (!orderItems.length && order.id) {
+          const cached = (cacheManager.getAllOrders?.() || []).find(o => o.id === order.id)
+          orderItems = cached?.order_items || cached?.items || []
         }
       }
 

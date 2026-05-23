@@ -157,7 +157,9 @@ function createWindow() {
           const ext   = path.extname(filename).toLowerCase();
           const mimes = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif' };
           res.setHeader('Content-Type', mimes[ext] || 'image/jpeg');
-          res.setHeader('Cache-Control', 'public, max-age=86400');
+          // Local files are keyed by product id — content never changes for a given URL,
+          // so tell the browser to cache forever and skip revalidation.
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
           fs.createReadStream(imgPath).pipe(res);
         } else {
           res.writeHead(404); res.end('Not found');

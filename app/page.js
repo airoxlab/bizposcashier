@@ -277,7 +277,7 @@ export default function LoginPage() {
             
             <div className="text-center">
               <p className="text-xs text-gray-500">
-                BizPOS v2.0 | Powered by <span className="font-semibold">Anvirosoft.com</span>
+                BizPOS v{process.env.NEXT_PUBLIC_APP_VERSION} | Powered by <span className="font-semibold">Anvirosoft.com</span>
               </p>
             </div>
           </div>

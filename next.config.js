@@ -1,7 +1,12 @@
 /** @type {import('next').NextConfig} */
 const isDev = process.env.NODE_ENV !== 'production'
+const { version: appVersion } = require('./package.json')
 
 const nextConfig = {
+  env: {
+    NEXT_PUBLIC_APP_VERSION: appVersion,
+  },
+
   images: {
     domains: ['gmmjefeojrpazhacqihk.supabase.co'],
     unoptimized: true,

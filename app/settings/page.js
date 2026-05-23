@@ -37,6 +37,9 @@ const SIDEBAR_ITEMS = [
   { id: 'plan',              name: 'Plan & Billing',      icon: Zap,           description: 'Subscription & features' },
 ]
 
+// Tabs whose panels make direct supabase reads/writes and will fail when offline.
+const OFFLINE_UNSAFE_TABS = new Set(['personal', 'customers', 'whatsapp', 'customer-account'])
+
 const PANEL_TITLES = {
   personal:         { title: 'Personal Profile',      sub: 'Manage your account information and store details' },
   appearance:       { title: 'Appearance Settings',   sub: 'Customize your interface theme and appearance' },
@@ -84,6 +87,9 @@ function SettingsContent() {
     setForceOfflineState(next)
   }
 
+  const effectiveOffline = forceOffline || !isOnline
+  const isActiveTabBlocked = effectiveOffline && OFFLINE_UNSAFE_TABS.has(activeTab)
+
   const { title, sub } = PANEL_TITLES[activeTab] || PANEL_TITLES.personal
 
   return (
@@ -112,9 +118,9 @@ function SettingsContent() {
                   <p className={`text-[10px] ${classes.textSecondary}`}>Customize your POS</p>
                 </div>
               </div>
-              {isOnline
-                ? <Wifi className="w-3.5 h-3.5 text-green-500" />
-                : <WifiOff className="w-3.5 h-3.5 text-red-500" />}
+              {effectiveOffline
+                ? <WifiOff className="w-3.5 h-3.5 text-red-500" />
+                : <Wifi className="w-3.5 h-3.5 text-green-500" />}
             </div>
           </div>
 
@@ -125,15 +131,21 @@ function SettingsContent() {
               {SIDEBAR_ITEMS.map((item) => {
                 const IconComponent = item.icon
                 const isActive = activeTab === item.id
+                const isDisabled = effectiveOffline && OFFLINE_UNSAFE_TABS.has(item.id)
                 return (
                   <motion.button
                     key={item.id}
-                    whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
-                    onClick={() => setActiveTab(item.id)}
+                    whileHover={isDisabled ? undefined : { scale: 1.02 }}
+                    whileTap={isDisabled ? undefined : { scale: 0.98 }}
+                    onClick={() => { if (!isDisabled) setActiveTab(item.id) }}
+                    disabled={isDisabled}
+                    title={isDisabled ? 'Requires internet connection' : undefined}
                     className={`w-full text-left p-2 rounded-lg transition-all duration-300 group ${
-                      isActive
-                        ? `${isDark ? 'bg-purple-900/20 border-purple-700/30' : 'bg-purple-100 border-purple-200'} border`
-                        : `${isDark ? 'bg-gray-700/50 hover:bg-purple-900/10' : 'bg-gray-50 hover:bg-purple-50'}`
+                      isDisabled
+                        ? 'opacity-50 cursor-not-allowed'
+                        : isActive
+                          ? `${isDark ? 'bg-purple-900/20 border-purple-700/30' : 'bg-purple-100 border-purple-200'} border`
+                          : `${isDark ? 'bg-gray-700/50 hover:bg-purple-900/10' : 'bg-gray-50 hover:bg-purple-50'}`
                     }`}
                   >
                     <div className="flex items-center">
@@ -144,7 +156,9 @@ function SettingsContent() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className={`font-semibold truncate text-xs ${classes.textPrimary}`}>{item.name}</div>
-                        <div className={`text-[10px] ${classes.textSecondary}`}>{item.description}</div>
+                        <div className={`text-[10px] ${classes.textSecondary}`}>
+                          {isDisabled ? 'Requires connection' : item.description}
+                        </div>
                       </div>
                     </div>
                   </motion.button>
@@ -203,24 +217,45 @@ function SettingsContent() {
           {/* Panel Content */}
           <div className="flex-1 overflow-y-auto p-6">
             <AnimatePresence mode="wait">
-              {activeTab === 'personal'         && <PersonalPanel key="personal" />}
-              {activeTab === 'appearance'        && <AppearancePanel key="appearance" />}
-              {activeTab === 'themes'            && <ThemesPanel key="themes" />}
-              {activeTab === 'customers'         && <CustomersPanel key="customers" />}
-              {activeTab === 'whatsapp'          && (
-                <motion.div key="whatsapp" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} transition={{ duration: 0.3 }} className="max-w-5xl mx-auto">
-                  <WhatsAppPanel />
+              {isActiveTabBlocked ? (
+                <motion.div
+                  key="offline-blocked"
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  transition={{ duration: 0.25 }}
+                  className="max-w-md mx-auto mt-16 text-center"
+                >
+                  <div className={`w-16 h-16 mx-auto mb-4 rounded-full flex items-center justify-center ${isDark ? 'bg-red-500/10' : 'bg-red-50'}`}>
+                    <WifiOff className="w-8 h-8 text-red-500" />
+                  </div>
+                  <h3 className={`text-lg font-semibold mb-2 ${classes.textPrimary}`}>This section requires internet</h3>
+                  <p className={`text-sm ${classes.textSecondary}`}>
+                    {title} loads and saves data from the server. {forceOffline ? 'Turn off Simulate Offline' : 'Reconnect to the internet'} to use it.
+                  </p>
                 </motion.div>
+              ) : (
+                <>
+                  {activeTab === 'personal'         && <PersonalPanel key="personal" />}
+                  {activeTab === 'appearance'        && <AppearancePanel key="appearance" />}
+                  {activeTab === 'themes'            && <ThemesPanel key="themes" />}
+                  {activeTab === 'customers'         && <CustomersPanel key="customers" />}
+                  {activeTab === 'whatsapp'          && (
+                    <motion.div key="whatsapp" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} transition={{ duration: 0.3 }} className="max-w-5xl mx-auto">
+                      <WhatsAppPanel />
+                    </motion.div>
+                  )}
+                  {activeTab === 'customer-account' && (
+                    <motion.div key="customer-account" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} transition={{ duration: 0.3 }} className="max-w-5xl mx-auto">
+                      <CustomerAccountPanel />
+                    </motion.div>
+                  )}
+                  {activeTab === 'mobile'            && <MobilePanel key="mobile" />}
+                  {activeTab === 'updates'           && <UpdatesPanel key="updates" />}
+                  {activeTab === 'backup'            && <BackupPanel key="backup" />}
+                  {activeTab === 'plan'              && <PlanPanel key="plan" />}
+                </>
               )}
-              {activeTab === 'customer-account' && (
-                <motion.div key="customer-account" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} transition={{ duration: 0.3 }} className="max-w-5xl mx-auto">
-                  <CustomerAccountPanel />
-                </motion.div>
-              )}
-              {activeTab === 'mobile'            && <MobilePanel key="mobile" />}
-              {activeTab === 'updates'           && <UpdatesPanel key="updates" />}
-              {activeTab === 'backup'            && <BackupPanel key="backup" />}
-              {activeTab === 'plan'              && <PlanPanel key="plan" />}
             </AnimatePresence>
           </div>
         </div>

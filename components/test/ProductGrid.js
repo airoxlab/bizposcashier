@@ -263,7 +263,7 @@ const ProductGrid = forwardRef(({
                           src={cacheManager.getImageUrl(product.image_url)}
                           alt={product.name}
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                          loading="lazy"
+                          decoding="async"
                         />
                       ) : (
                         <div className={`flex items-center justify-center h-full p-2 ${isDark ? 'bg-gradient-to-br from-gray-700 to-gray-600' : 'bg-gradient-to-br from-gray-200 to-gray-300'}`}>
@@ -325,7 +325,7 @@ const ProductGrid = forwardRef(({
                           src={cacheManager.getImageUrl(deal.image_url)}
                           alt={deal.name}
                           className={`w-full h-full object-cover ${!deal.isOutOfTime && 'group-hover:scale-105'} transition-transform duration-300 ${deal.isOutOfTime ? 'grayscale' : ''}`}
-                          loading="lazy"
+                          decoding="async"
                         />
                       ) : (
                         <div className={`flex items-center justify-center h-full p-2 ${isDark ? 'bg-gradient-to-br from-gray-700 to-gray-600' : 'bg-gradient-to-br from-gray-200 to-gray-300'}`}>
@@ -401,7 +401,7 @@ const ProductGrid = forwardRef(({
                               src={cacheManager.getImageUrl(product.image_url)}
                               alt={product.name}
                               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                              loading="lazy"
+                              decoding="async"
                             />
                           ) : (
                             <div className={`flex items-center justify-center h-full p-2 ${isDark ? 'bg-gradient-to-br from-gray-700 to-gray-600' : 'bg-gradient-to-br from-gray-200 to-gray-300'}`}>
@@ -483,7 +483,7 @@ const ProductGrid = forwardRef(({
                             src={cacheManager.getImageUrl(deal.image_url)}
                             alt={deal.name}
                             className={`w-full h-full object-cover ${!deal.isOutOfTime && 'group-hover:scale-105'} transition-transform duration-300 ${deal.isOutOfTime ? 'grayscale' : ''}`}
-                            loading="lazy"
+                            decoding="async"
                           />
                         ) : (
                           <div className={`flex items-center justify-center h-full p-2 ${isDark ? 'bg-gradient-to-br from-gray-700 to-gray-600' : 'bg-gradient-to-br from-gray-200 to-gray-300'}`}>
