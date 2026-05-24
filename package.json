@@ -1,6 +1,6 @@
 {
   "name": "BizPOS",
-  "version": "2.3.2",
+  "version": "2.3.3",
   "description": "Modern POS Software - BizPOS",
   "main": "electron/main.js",
   "homepage": "./",
@@ -76,7 +76,7 @@
       {
         "provider": "github",
         "owner": "airoxlab",
-        "repo": "erprepo"
+        "repo": "bizposcashier"
       }
     ],
     "asar": true,
