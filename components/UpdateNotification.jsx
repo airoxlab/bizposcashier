@@ -51,7 +51,13 @@ export default function UpdateNotification() {
         setState(s => ({ ...s, phase: 'downloaded', version: d?.version || s.version, percent: 100 }))),
 
       window.electronAPI.onUpdateError((d) =>
-        setState(s => (s.phase === 'downloaded' ? s : { ...s, phase: 'error', error: d?.message || 'Update failed' }))),
+        setState(s => {
+          if (s.phase === 'downloaded') return s;
+          const msg = (d?.message || '').toLowerCase();
+          // "No published versions on GitHub" just means there's nothing to update — not a real error.
+          if (msg.includes('no published versions') || msg.includes('latest.yml') || msg.includes('no releases')) return s;
+          return { ...s, phase: 'error', error: d?.message || 'Update failed' };
+        })),
     ].filter(fn => typeof fn === 'function');
 
     return () => disposers.forEach(dispose => dispose());

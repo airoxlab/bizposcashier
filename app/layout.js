@@ -5,6 +5,7 @@ import GlobalPrintListener from '../components/GlobalPrintListener'
 import TrialBanner from '../components/TrialBanner'
 import TrialExpiredGate from '../components/TrialExpiredGate'
 import UpdateNotification from '../components/UpdateNotification'
+import NavigationLoader from '../components/NavigationLoader'
 
 export const metadata = {
   title: 'BizPOS - Point of Sale System',
@@ -40,7 +41,8 @@ export default function RootLayout({ children }) {
         <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
         <Script id="theme-init" strategy="beforeInteractive" dangerouslySetInnerHTML={{ __html: setInitialThemeScript }} />
       </head>
-      <body className="font-sans" suppressHydrationWarning>
+      <body className="font-sans overflow-x-hidden" suppressHydrationWarning>
+        <NavigationLoader />
         <UpdateNotification />
         <TrialBanner />
         <GlobalPrintListener />

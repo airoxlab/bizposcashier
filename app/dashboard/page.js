@@ -88,6 +88,19 @@ const localDateStr = (d = new Date()) => {
   return `${y}-${m}-${day}`
 }
 
+// Format millisecond duration as compact human-readable string (minutes only).
+function fmtDuration(ms) {
+  const abs       = Math.abs(ms)
+  const totalMins = Math.floor(abs / 60000)
+  const days  = Math.floor(totalMins / 1440)
+  const hours = Math.floor((totalMins % 1440) / 60)
+  const mins  = totalMins % 60
+  if (days >= 1)  return `${days}d`
+  if (hours >= 1) return `${hours}h ${mins}m`
+  if (mins >= 1)  return `${mins}m`
+  return '<1m'
+}
+
 // Returns the required plan display name if current plan cannot access route, else null.
 function getRoutePlanLock(route, currentSlug) {
   for (const [slug, plan] of Object.entries(CASHIER_PLANS)) {
@@ -703,26 +716,79 @@ export default function Dashboard() {
                   </div>
                 </div>
 
-                  {/* Plan Badge */}
-                  {(() => {
-                    const colors = planManager.getPlanColors()
-                    const planName = planManager.getPlanName()
-                    const expired = planManager.isExpired()
-                    return (
-                      <button
-                        onClick={() => router.push('/settings?tab=plan')}
-                        title={`Your plan: ${planName}`}
-                        className={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-xs font-semibold transition-all ${
-                          expired
-                            ? isDark ? 'bg-red-500/15 border-red-500/30 text-red-400' : 'bg-red-50 border-red-200 text-red-700'
-                            : isDark ? `bg-purple-500/15 border-purple-500/30 text-purple-400` : `${colors.bg} ${colors.border} border ${colors.text}`
-                        }`}
-                      >
-                        <Zap className="w-3 h-3 flex-shrink-0" />
-                        {expired ? 'Expired' : planName}
-                      </button>
-                    )
-                  })()}
+                  {/* Plan + Invoice status row */}
+                  <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                    {/* Plan Badge */}
+                    {(() => {
+                      const colors   = planManager.getPlanColors()
+                      const planName = planManager.getPlanName()
+                      const expired  = planManager.isExpired()
+
+                      // If expired but there's an unpaid invoice not yet due,
+                      // don't show "Expired" — the "Due Xd" badge already tells
+                      // the user about the payment. Show plan name normally.
+                      const invoiceDueMs      = planManager.getInvoiceDueMs()
+                      const hasPendingInvoice = planManager.getInvoice()?.status === 'unpaid'
+                                                && invoiceDueMs !== null && invoiceDueMs > 0
+                      const showExpired = expired && !hasPendingInvoice
+
+                      return (
+                        <button
+                          onClick={() => router.push('/settings?tab=plan')}
+                          title={`Your plan: ${planName}${expired ? ' (expired)' : ''}`}
+                          className={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-xs font-semibold transition-all ${
+                            showExpired
+                              ? isDark ? 'bg-red-500/15 border-red-500/30 text-red-400' : 'bg-red-50 border-red-200 text-red-700'
+                              : isDark ? 'bg-purple-500/15 border-purple-500/30 text-purple-400' : `${colors.bg} ${colors.border} border ${colors.text}`
+                          }`}
+                        >
+                          <Zap className="w-3 h-3 flex-shrink-0" />
+                          {showExpired ? 'Expired' : planName}
+                        </button>
+                      )
+                    })()}
+
+                    {/* Invoice Due Badge — updates every second via currentTime re-render */}
+                    {planReady && (() => {
+                      const invoice = planManager.getInvoice()
+                      if (!invoice || invoice.status !== 'unpaid') return null
+
+                      // Compute ms remaining using currentTime so the badge ticks live
+                      const hasDueAt = !!invoice.due_at
+                      const ms = hasDueAt
+                        ? new Date(invoice.due_at) - currentTime
+                        : (() => {
+                            if (!invoice.due_date) return null
+                            const s = String(invoice.due_date).split('T')[0]
+                            const [y, mo, d] = s.split('-').map(Number)
+                            return new Date(y, mo - 1, d, 23, 59, 59) - currentTime
+                          })()
+                      if (ms === null) return null
+
+                      const isOvd = ms < 0
+                      const dur   = fmtDuration(ms)
+                      const label = isOvd ? `Overdue ${dur}` : `Due ${dur}`
+                      const title = isOvd
+                        ? `Invoice overdue by ${dur}`
+                        : `Invoice due in ${dur}`
+
+                      return (
+                        <span
+                          title={title}
+                          className={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-xs font-semibold ${
+                            isOvd
+                              ? isDark ? 'bg-red-500/15 border-red-500/30 text-red-400' : 'bg-red-50 border-red-200 text-red-700'
+                              : ms < 3600000
+                              ? isDark ? 'bg-red-500/15 border-red-500/30 text-red-400'   : 'bg-red-50 border-red-200 text-red-700'
+                              : isDark ? 'bg-amber-500/15 border-amber-500/30 text-amber-400' : 'bg-amber-50 border-amber-200 text-amber-700'
+                          }`}
+                        >
+                          <Clock className="w-3 h-3 flex-shrink-0" />
+                          {label}
+                        </span>
+                      )
+                    })()}
+                  </div>
               </div>
             </div>
 
@@ -946,7 +1012,7 @@ export default function Dashboard() {
                 transition={{ delay: 0.3 }}
                 whileHover={{ y: -10, scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
-                onClick={() => router.push('/new-order')}
+                onClick={() => { window.dispatchEvent(new CustomEvent('page-navigating')); router.push('/new-order') }}
                 className="cursor-pointer group relative w-full max-w-sm flex-shrink-0"
               >
                 <div className="relative overflow-hidden rounded-3xl shadow-xl hover:shadow-2xl transition-all duration-300 h-full">
@@ -1101,12 +1167,12 @@ export default function Dashboard() {
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: 0.3 + index * 0.1 }}
-                  whileHover={hasPermission ? { y: -10, scale: 1.02 } : {}}
+                  whileHover={hasPermission ? { y: -10, scale: 1.02, transition: { duration: 0.1, type: 'tween', ease: 'easeOut' } } : {}}
                   whileTap={hasPermission ? { scale: 0.98 } : {}}
                   onClick={() => handleNavigation(card.route, card.permissionKey)}
                   className={`${hasPermission ? 'cursor-pointer' : 'cursor-not-allowed'} group relative`}
                 >
-                  <div className={`relative overflow-hidden rounded-3xl shadow-xl ${hasPermission ? 'hover:shadow-2xl' : 'opacity-60'} transition-all duration-300`}>
+                  <div className={`relative overflow-hidden rounded-3xl shadow-xl ${hasPermission ? 'hover:shadow-2xl' : 'opacity-60'} transition-all duration-100`}>
                     <div className={`absolute inset-0 bg-gradient-to-br ${card.gradient} ${!hasPermission ? 'opacity-50' : 'opacity-90'}`}></div>
                     {!hasPermission && (
                       <div className="absolute top-3 right-3 z-20">
@@ -1160,7 +1226,7 @@ export default function Dashboard() {
                     initial={{ opacity: 0, scale: 0.8 }}
                     animate={{ opacity: 1, scale: 1 }}
                     transition={{ delay: 0.7 + index * 0.05 }}
-                    whileHover={!locked ? { y: -5, scale: 1.05 } : {}}
+                    whileHover={!locked ? { y: -5, scale: 1.05, transition: { duration: 0.1, type: 'tween', ease: 'easeOut' } } : {}}
                     whileTap={!locked ? { scale: 0.95 } : {}}
                     onClick={() => {
                       if (locked) return
@@ -1168,7 +1234,7 @@ export default function Dashboard() {
                     }}
                     className={`${locked ? 'cursor-not-allowed' : 'cursor-pointer'} w-full`}
                   >
-                    <div className={`${themeClasses.card} rounded-2xl p-4 ${themeClasses.shadow} ${!locked ? 'hover:shadow-xl' : ''} transition-all duration-300 ${themeClasses.border} border relative h-full flex flex-col items-center justify-center`}>
+                    <div className={`${themeClasses.card} rounded-2xl p-4 ${themeClasses.shadow} ${!locked ? 'hover:shadow-xl' : ''} transition-all duration-100 ${themeClasses.border} border relative h-full flex flex-col items-center justify-center`}>
                       {!hasPermission ? (
                         <div className="absolute -top-2 -right-2 z-20">
                           <div className="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-md">
@@ -1216,12 +1282,12 @@ export default function Dashboard() {
                   initial={{ opacity: 0, scale: 0.8 }}
                   animate={{ opacity: 1, scale: 1 }}
                   transition={{ delay: 0.7 + visibleMainItems.length * 0.05 }}
-                  whileHover={{ y: -5, scale: 1.05 }}
+                  whileHover={{ y: -5, scale: 1.05, transition: { duration: 0.1, type: 'tween', ease: 'easeOut' } }}
                   whileTap={{ scale: 0.95 }}
                   onClick={() => setShowOthersFolder(true)}
                   className="cursor-pointer w-full"
                 >
-                  <div className={`${themeClasses.card} rounded-2xl p-4 ${themeClasses.shadow} hover:shadow-xl transition-all duration-300 ${themeClasses.border} border relative h-full flex flex-col items-center justify-center`}>
+                  <div className={`${themeClasses.card} rounded-2xl p-4 ${themeClasses.shadow} hover:shadow-xl transition-all duration-100 ${themeClasses.border} border relative h-full flex flex-col items-center justify-center`}>
                     {/* iOS-style folder: 2×2 grid of mini gradient swatches */}
                     <div className={`w-10 h-10 mb-3 ${isDark ? 'bg-gray-700' : 'bg-gray-200'} rounded-xl flex items-center justify-center shadow-lg`}>
                       <div className="grid grid-cols-2 gap-1">
@@ -1282,7 +1348,7 @@ export default function Dashboard() {
                           initial={{ opacity: 0, scale: 0.8 }}
                           animate={{ opacity: 1, scale: 1 }}
                           transition={{ delay: index * 0.05 }}
-                          whileHover={!locked ? { y: -5, scale: 1.05 } : {}}
+                          whileHover={!locked ? { y: -5, scale: 1.05, transition: { duration: 0.1, type: 'tween', ease: 'easeOut' } } : {}}
                           whileTap={!locked ? { scale: 0.95 } : {}}
                           onClick={() => {
                             if (locked) return
@@ -1291,7 +1357,7 @@ export default function Dashboard() {
                           }}
                           className={`${locked ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                         >
-                          <div className={`${themeClasses.card} rounded-2xl p-4 ${themeClasses.shadow} ${!locked ? 'hover:shadow-xl' : ''} transition-all duration-300 ${themeClasses.border} border relative h-full flex flex-col items-center`}>
+                          <div className={`${themeClasses.card} rounded-2xl p-4 ${themeClasses.shadow} ${!locked ? 'hover:shadow-xl' : ''} transition-all duration-100 ${themeClasses.border} border relative h-full flex flex-col items-center`}>
                             {!hasPermission ? (
                               <div className="absolute -top-2 -right-2 z-20">
                                 <div className="bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-md">

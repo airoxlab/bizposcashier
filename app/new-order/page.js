@@ -554,6 +554,7 @@ export default function NewOrderPage() {
     if (cart.length > 0) {
       setShowExitModal(true)
     } else {
+      window.dispatchEvent(new CustomEvent('page-navigating'))
       router.push('/dashboard/')
     }
   }
@@ -575,6 +576,7 @@ export default function NewOrderPage() {
     setSelectedOrderTaker(null)
     clearModificationState()
     notify.info('Order discarded')
+    window.dispatchEvent(new CustomEvent('page-navigating'))
     router.push('/dashboard/')
   }
 
@@ -810,7 +812,14 @@ export default function NewOrderPage() {
   const activeTab = ORDER_TABS.find(t => t.id === activeOrderType)
 
   if (isLoading || !isDataReady) {
-    return <div className={`h-screen w-screen ${classes.background}`} />
+    return (
+      <div className={`h-screen w-screen flex items-center justify-center ${classes.background}`}>
+        <div className="flex flex-col items-center gap-3">
+          <div className="animate-spin rounded-full h-10 w-10 border-4 border-emerald-200 border-t-emerald-500" />
+          <p className={`text-sm font-medium ${classes.textSecondary}`}>Loading menu...</p>
+        </div>
+      </div>
+    )
   }
 
   const tabBar = (

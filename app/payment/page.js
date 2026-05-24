@@ -909,8 +909,17 @@ const processOrder = async () => {
       // (order_not_found / order_locked / etc.) propagate so the cashier sees them.
       let rpcResult = null
       let rpcError = null
-      let usedFallback = false
-      try {
+      // Offline-created orders have temp IDs like "order_1779644317952_abc" — not
+      // real UUIDs. Passing them to modify_order_atomic causes a PostgreSQL UUID
+      // parse error that is NOT caught as a network error. Skip the RPC entirely
+      // for temp IDs and go straight to the cacheManager path (which finds the
+      // order by order_number in local cache and queues the update for sync).
+      const isRealUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orderData.existingOrderId)
+      let usedFallback = !isRealUUID
+      if (usedFallback) {
+        console.log('⚠️ [Payment] existingOrderId is a temp offline ID — skipping RPC, using cacheManager directly')
+      }
+      if (!usedFallback) try {
         const { data, error } = await supabase
           .rpc('modify_order_atomic', {
             p_order_id:              orderData.existingOrderId,
