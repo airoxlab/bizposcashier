@@ -2678,7 +2678,12 @@ export default function OrdersPage() {
             {/* Show payment view if payment is pending and user clicked complete */}
             {showPaymentView && selectedOrder.payment_status === 'Pending' ? (
               <InlinePaymentSection
-                order={selectedOrder}
+                order={{
+                  ...selectedOrder,
+                  // Orders page keeps items in a separate `orderItems` state;
+                  // InlinePaymentSection reads `order.order_items`, so merge them in.
+                  order_items: selectedOrder.order_items?.length ? selectedOrder.order_items : orderItems,
+                }}
                 orderType={selectedOrder?.order_type}
                 defaultServiceCharge={(() => { try { return JSON.parse(localStorage.getItem('pos_default_service_charge') || '{}') } catch(e) { return null } })()}
                 onPaymentComplete={handlePaymentComplete}
