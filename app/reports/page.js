@@ -769,19 +769,19 @@ const fetchCOGS = async (completedOrders = []) => {
 
   // Orders by type - only count non-cancelled orders
   const ordersByType = [
-    { 
-      name: 'Walk-in', 
-      value: validOrders.filter(o => o.order_type === 'walkin').length,
+    {
+      name: 'Walk-in',
+      value: revenueOrders.filter(o => o.order_type === 'walkin').length,
       revenue: revenueOrders.filter(o => o.order_type === 'walkin').reduce((sum, o) => sum + parseFloat(o.total_amount || 0), 0)
     },
     {
       name: 'Takeaway',
-      value: validOrders.filter(o => o.order_type === 'takeaway').length,
+      value: revenueOrders.filter(o => o.order_type === 'takeaway').length,
       revenue: revenueOrders.filter(o => o.order_type === 'takeaway').reduce((sum, o) => sum + parseFloat(o.total_amount || 0), 0)
     },
     {
       name: 'Delivery',
-      value: validOrders.filter(o => o.order_type === 'delivery').length,
+      value: revenueOrders.filter(o => o.order_type === 'delivery').length,
       revenue: revenueOrders.filter(o => o.order_type === 'delivery').reduce((sum, o) => sum + parseFloat(o.total_amount || 0), 0)
     }
   ].filter(type => type.value > 0)

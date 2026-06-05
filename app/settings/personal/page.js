@@ -10,7 +10,7 @@ import {
 import themeManager from '../../../lib/themeManager'
 import { authManager } from '../../../lib/authManager'
 import { profileManager } from '../../../lib/profileManager'
-import { supabase } from '../../../lib/supabaseClient'
+import { supabase } from '../../../lib/supabase'
 import { notify } from '../../../components/ui/NotificationSystem'
 
 function ModernToggle({ checked, onChange, label, description, disabled = false }) {

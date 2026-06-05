@@ -14,13 +14,13 @@ import { getOrderItemsWithChanges } from '../../lib/utils/orderChangesTracker'
 import Modal from '../../components/ui/Modal'
 import { printerManager } from '../../lib/printerManager'
 import DeliveryCustomerForm from '../../components/pos/DeliveryCustomerForm'
-import CategorySidebar from '../../components/test/CategorySidebar'
-import ProductGrid from '../../components/test/ProductGrid'
-import VariantSelectionScreen from '../../components/test/VariantSelectionScreen'
-import DealFlavorSelectionScreen from '../../components/test/DealFlavorSelectionScreen'
-import CartSidebar from '../../components/test/CartSidebar'
-import WalkinOrdersSidebar from '../../components/test/WalkinOrdersSidebar'
-import WalkinOrderDetails from '../../components/test/WalkinOrderDetails'
+import CategorySidebar from '../../components/order/CategorySidebar'
+import ProductGrid from '../../components/order/ProductGrid'
+import VariantSelectionScreen from '../../components/order/VariantSelectionScreen'
+import DealFlavorSelectionScreen from '../../components/order/DealFlavorSelectionScreen'
+import CartSidebar from '../../components/order/CartSidebar'
+import WalkinOrdersSidebar from '../../components/order/WalkinOrdersSidebar'
+import WalkinOrderDetails from '../../components/order/WalkinOrderDetails'
 import { FileText, Check, Printer } from 'lucide-react'
 import toast from 'react-hot-toast'
 import PosToaster from '@/components/ui/PosToaster'
@@ -48,18 +48,17 @@ export default function DeliveryPage() {
   const [orderInstructions, setOrderInstructions] = useState('')
   const [deliveryTime, setDeliveryTime] = useState('')
   const getDefaultDeliveryCharge = () => {
-    // Read directly from localStorage first (same pattern as pos_default_service_charge)
-    // so the value is available instantly regardless of cacheManager init state.
+    // Resolve via cacheManager so BOTH fixed and percentage defaults are honoured.
+    // Percentage is computed against the current cart subtotal (0 if the cart is
+    // still empty — the percentage-recompute effect below fills it in once items
+    // are added). cacheManager reads its in-memory cache (eagerly restored from
+    // localStorage on construction) then localStorage, so this works offline too.
     try {
-      const raw = localStorage.getItem('pos_default_delivery_charge')
-      if (raw) {
-        const parsed = JSON.parse(raw)
-        if (parsed?.type === 'fixed' && parsed?.value > 0) return parsed.value
-      }
-    } catch {}
-    // Fallback to cacheManager in-memory value
-    const dc = cacheManager.getDefaultDeliveryCharge()
-    return (dc.type === 'fixed' && dc.value > 0) ? dc.value : 0
+      const subtotal = cart.reduce((s, i) => s + (i.totalPrice || 0), 0)
+      return cacheManager.resolveDeliveryChargeAmount(subtotal)
+    } catch {
+      return 0
+    }
   }
   const [deliveryCharges, setDeliveryCharges] = useState(getDefaultDeliveryCharge)
   const [networkStatus, setNetworkStatus] = useState({ isOnline: true, unsyncedOrders: 0 })
@@ -100,6 +99,10 @@ export default function DeliveryPage() {
   // Load require_customer_delivery flag on mount (cached by cacheManager).
   // If cache is missing, preserve legacy default (customer required).
   useEffect(() => {
+    // Independently refresh charge defaults (single-row query, resilient to the
+    // big-cache fetch failing). The 'pos-charge-settings-updated' event it emits
+    // re-applies the new default via reconcileDeliveryCharge above.
+    cacheManager.syncChargeSettings()
     try {
       const raw = localStorage.getItem('pos_require_customer')
       if (raw !== null) {
@@ -137,6 +140,44 @@ export default function DeliveryPage() {
     }
   }, [orderData.deliveryCharges])
 
+  // Tracks the last delivery charge we auto-applied. Seeded with the initial
+  // default so a later manual edit can be distinguished from our own value.
+  const autoDeliveryRef = useRef(getDefaultDeliveryCharge())
+
+  // Apply the admin default to the (non-manually-edited) delivery charge.
+  // Used both for live percentage recompute (cart changes) and for settings
+  // updates (header refresh / background sync). Never touches a reopened order
+  // or a value the cashier has manually changed.
+  const reconcileDeliveryCharge = () => {
+    if (isReopenedOrder) return
+    const current = parseFloat(deliveryCharges) || 0
+    const isManual = autoDeliveryRef.current !== null &&
+                     Math.abs(current - autoDeliveryRef.current) > 0.001
+    if (isManual) return
+    const subtotal = cart.reduce((s, i) => s + (i.totalPrice || 0), 0)
+    const computed = cacheManager.resolveDeliveryChargeAmount(subtotal)
+    autoDeliveryRef.current = computed
+    if (current !== computed) {
+      setDeliveryCharges(computed)
+      setOrderData(prev => ({ ...prev, deliveryCharges: computed }))
+    }
+  }
+
+  // Live recompute for PERCENTAGE delivery charges as the cart subtotal changes.
+  useEffect(() => {
+    const dc = cacheManager.getDefaultDeliveryCharge()
+    if (dc?.type !== 'percentage' || !(dc?.value > 0)) return
+    reconcileDeliveryCharge()
+  }, [cart, isReopenedOrder])
+
+  // Re-apply defaults (fixed OR percentage) when charge settings change — fired
+  // by the header refresh button and by background settings sync.
+  useEffect(() => {
+    const onChargeUpdate = () => reconcileDeliveryCharge()
+    window.addEventListener('pos-charge-settings-updated', onChargeUpdate)
+    return () => window.removeEventListener('pos-charge-settings-updated', onChargeUpdate)
+  }, [cart, deliveryCharges, isReopenedOrder])
+
   useEffect(() => {
     if (orderData.deliveryTime) {
       setDeliveryTime(orderData.deliveryTime)
@@ -170,9 +211,13 @@ export default function DeliveryPage() {
       const savedModifyingOrderId = localStorage.getItem('delivery_modifying_order')
 
       if (savedCart) {
-        const parsedCart = JSON.parse(savedCart)
-        console.log('🛒 [Delivery] Reloading cart from localStorage:', parsedCart)
-        setCart(parsedCart)
+        try {
+          const parsedCart = JSON.parse(savedCart)
+          console.log('🛒 [Delivery] Reloading cart from localStorage:', parsedCart)
+          setCart(parsedCart)
+        } catch (e) {
+          console.warn('⚠️ [Delivery] Corrupted cart data in localStorage, resetting:', e)
+        }
       }
       // Safe JSON parsing to prevent crashes from undefined values
       if (savedCustomer && savedCustomer !== 'undefined') {
@@ -272,9 +317,13 @@ export default function DeliveryPage() {
       })
 
       if (savedCart) {
-        const parsedCart = JSON.parse(savedCart)
-        console.log('📦 [Delivery] Loading cart from localStorage:', parsedCart)
-        setCart(parsedCart)
+        try {
+          const parsedCart = JSON.parse(savedCart)
+          console.log('📦 [Delivery] Loading cart from localStorage:', parsedCart)
+          setCart(parsedCart)
+        } catch (e) {
+          console.warn('⚠️ [Delivery] Corrupted cart data in localStorage, resetting:', e)
+        }
       }
       // Safe JSON parsing to prevent crashes from undefined values
       if (savedCustomer && savedCustomer !== 'undefined') {

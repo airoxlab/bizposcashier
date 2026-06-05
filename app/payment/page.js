@@ -301,6 +301,9 @@ useEffect(() => {
   setCashAmount(calculatedAmountDue.toString())
   setChangeAmount(0)
 
+  // Keep charge defaults fresh for subsequent orders (resilient single-row sync).
+  cacheManager.syncChargeSettings()
+
   // Pre-populate service charge (walkin orders only):
   // - If modifying and order already has service charge → restore it
   // - Otherwise apply the admin default (works for new orders AND reopened orders with no SC)
@@ -313,8 +316,10 @@ useEffect(() => {
         setServiceChargeValue(existingSCPct > 0 ? existingSCPct : existingSC)
         setShowServiceChargeSection(true)
       } else if (!parsedOrderData.isModifying) {
-        // New order only: apply global default if no SC on the order
-        const defaultSC = JSON.parse(localStorage.getItem('pos_default_service_charge') || '{}')
+        // New order only: apply global default if no SC on the order.
+        // Use cacheManager getter (in-memory cache eagerly restored on construction,
+        // with localStorage fallback) so the default survives the startup fetch race.
+        const defaultSC = cacheManager.getDefaultServiceCharge()
         if (defaultSC.value > 0) {
           setServiceChargeType(defaultSC.type || 'percentage')
           setServiceChargeValue(defaultSC.value)
@@ -1241,8 +1246,8 @@ const processOrder = async () => {
             orderType: orderData.orderType,
             subtotal: orderData.subtotal,
             items: orderData.cart.map(item => ({
-              product_id: item.product_id,
-              category_id: item.category_id,
+              product_id: item.productId || item.product_id || null,
+              category_id: item.category_id || null,
               quantity: item.quantity,
               price: item.finalPrice
             })),

@@ -77,11 +77,14 @@ function AutoSendLogPage() {
   }
 
   async function loadSummary() {
-    const { data } = await supabase
+    let query = supabase
       .from('whatsapp_auto_send_logs')
       .select('status')
       .eq('user_id', userId)
+    if (statusFilter !== 'all') query = query.eq('status', statusFilter)
+    if (orderTypeFilter !== 'all') query = query.eq('order_type', orderTypeFilter)
 
+    const { data } = await query
     if (data) {
       const counts = { sent: 0, failed: 0, skipped: 0, total: data.length }
       data.forEach(r => { if (counts[r.status] !== undefined) counts[r.status]++ })

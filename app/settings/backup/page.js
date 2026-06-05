@@ -46,9 +46,9 @@ export function BackupPanel() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const pendingChanges = JSON.parse(localStorage.getItem('pending_order_changes_sync') || '[]')
-    const orderChanges = JSON.parse(localStorage.getItem('order_changes') || '{}')
-    const posCache = JSON.parse(localStorage.getItem('pos_cache') || '{}')
+    const pendingChanges = (() => { try { return JSON.parse(localStorage.getItem('pending_order_changes_sync') || '[]') } catch { return [] } })()
+    const orderChanges = (() => { try { return JSON.parse(localStorage.getItem('order_changes') || '{}') } catch { return {} } })()
+    const posCache = (() => { try { return JSON.parse(localStorage.getItem('pos_cache') || '{}') } catch { return {} } })()
     const offlineOrders = posCache?.orders?.filter(o => !o._isSynced) || []
     setDataSummary({
       offlineOrders: offlineOrders.length,

@@ -6,7 +6,7 @@ import { themeManager } from '../../lib/themeManager'
 import { cacheManager } from '../../lib/cacheManager'
 import { authManager } from '../../lib/authManager'
 import { notify } from '../ui/NotificationSystem'
-import { supabase } from '../../lib/supabaseClient'
+import { supabase } from '../../lib/supabase'
 
 export default function DeliveryCustomerForm({
   isOpen,

@@ -190,11 +190,11 @@ function CampaignPage() {
       .select('id')
       .single()
 
-    if (campErr) return notify.error('Failed to create campaign')
+    if (campErr || !campaign?.id) return notify.error('Failed to create campaign')
     const campaignId = campaign.id
 
     // Insert pending rows
-    await supabase.from('whatsapp_campaign_messages').insert(
+    const { error: msgInsertErr } = await supabase.from('whatsapp_campaign_messages').insert(
       recipients.map(c => ({
         user_id: userId,
         campaign_id: campaignId,
@@ -204,6 +204,11 @@ function CampaignPage() {
         status: 'pending',
       }))
     )
+    if (msgInsertErr) {
+      notify.error('Failed to create campaign records')
+      await supabase.from('whatsapp_campaigns').delete().eq('id', campaignId)
+      return
+    }
 
     // Start sending loop
     setIsSending(true)

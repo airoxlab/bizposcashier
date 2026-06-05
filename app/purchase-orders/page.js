@@ -17,6 +17,7 @@ import ViewPurchaseOrderPanel from '../../components/inventory/ViewPurchaseOrder
 import EditPurchaseOrderPanel from '../../components/inventory/EditPurchaseOrderPanel'
 import PurchaseReturnsTab from '../../components/inventory/PurchaseReturnsTab'
 import StockTransactionsTab from '../../components/inventory/StockTransactionsTab'
+import DateRangeFilter, { resolveDateRange } from '../../components/ui/DateRangeFilter'
 import themeManager from '../../lib/themeManager'
 import { poDraft } from '../../lib/poDraft'
 
@@ -65,6 +66,8 @@ export default function PurchaseOrdersPage() {
   const [sortOrder, setSortOrder]               = useState('desc')  // 'asc' | 'desc'
   const [showSortMenu, setShowSortMenu]         = useState(false)
   const [selectedPaymentStatus, setSelectedPaymentStatus] = useState('all')
+  const [dateRange, setDateRange]               = useState(() => ({ preset: 'today', ...resolveDateRange('today') }))
+  const [dateCustom, setDateCustom]             = useState(false)
   const [showDraftPrompt, setShowDraftPrompt]   = useState(false)
   const [restoreDraft, setRestoreDraft]         = useState(false)
   const [draftMeta, setDraftMeta]               = useState(null)  // { savedAt, itemCount }
@@ -113,6 +116,17 @@ export default function PurchaseOrdersPage() {
     // Payment status filter
     if (selectedPaymentStatus !== 'all') list = list.filter(po => po.payment_status === selectedPaymentStatus)
 
+    // Date range filter (po_date is a DATE → 'YYYY-MM-DD'; string compare is safe)
+    if (dateRange?.from || dateRange?.to) {
+      list = list.filter(po => {
+        if (!po.po_date) return false
+        const d = String(po.po_date).slice(0, 10)
+        if (dateRange.from && d < dateRange.from) return false
+        if (dateRange.to   && d > dateRange.to)   return false
+        return true
+      })
+    }
+
     // Sorting
     list.sort((a, b) => {
       let aVal, bVal, result
@@ -143,7 +157,7 @@ export default function PurchaseOrdersPage() {
     })
 
     setFilteredOrders(list)
-  }, [searchTerm, selectedStatus, selectedPaymentStatus, purchaseOrders, sortBy, sortOrder])
+  }, [searchTerm, selectedStatus, selectedPaymentStatus, dateRange, purchaseOrders, sortBy, sortOrder])
 
   useEffect(() => {
     if (selectedPO) {
@@ -303,16 +317,80 @@ export default function PurchaseOrdersPage() {
                   </div>
                 </div>
 
-                {/* Status & Payment filters + Sort */}
+                {/* Filters — one single-line, horizontally scrollable row each */}
                 <div className={`flex flex-col gap-2 px-3 py-2.5 flex-shrink-0 border-b ${isDark ? 'border-gray-700 bg-gray-800/50' : 'border-gray-100 bg-gray-50'}`}>
-                  {/* PO Status filters */}
-                  <div className="flex gap-1.5 flex-wrap items-center">
-                    <span className={`text-xs font-semibold ${themeClasses.textSecondary}`}>Status:</span>
+                  {/* Row 1 — Date range (+ Sort, hidden while custom range is open) */}
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 min-w-0">
+                      <DateRangeFilter
+                        isDark={isDark}
+                        onChange={setDateRange}
+                        onCustomToggle={setDateCustom}
+                        defaultPreset="today"
+                        label="Date"
+                      />
+                    </div>
+
+                    {!dateCustom && (
+                      <div className="relative flex-shrink-0">
+                        <button
+                          onClick={() => setShowSortMenu(!showSortMenu)}
+                          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                            showSortMenu
+                              ? isDark ? 'bg-gray-600 text-white' : 'bg-gray-200 text-gray-700'
+                              : isDark ? 'bg-gray-700 text-gray-400 hover:bg-gray-600' : 'bg-white text-gray-500 hover:bg-gray-100 border border-gray-200'
+                          }`}
+                        >
+                          <ArrowUpDown className="w-3.5 h-3.5" />
+                          <span>Sort</span>
+                        </button>
+
+                        {showSortMenu && (
+                          <div className={`absolute top-full right-0 mt-1 z-30 rounded-lg shadow-lg border overflow-hidden min-w-[180px] ${
+                            isDark ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'
+                          }`}>
+                            {[
+                              { value: 'date', label: 'Date (Newest)' },
+                              { value: 'po_number', label: 'PO Number' },
+                              { value: 'amount', label: 'Amount' },
+                            ].map(opt => (
+                              <button
+                                key={opt.value}
+                                onClick={() => {
+                                  if (sortBy === opt.value) {
+                                    setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')
+                                  } else {
+                                    setSortBy(opt.value)
+                                    setSortOrder('desc')
+                                  }
+                                  setShowSortMenu(false)
+                                }}
+                                className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium text-left transition-colors ${
+                                  sortBy === opt.value
+                                    ? isDark ? 'bg-indigo-900/40 text-indigo-300' : 'bg-indigo-50 text-indigo-700'
+                                    : isDark ? 'hover:bg-gray-700 text-gray-200' : 'hover:bg-gray-50 text-gray-700'
+                                }`}
+                              >
+                                <span>{opt.label}</span>
+                                {sortBy === opt.value && (
+                                  <span className="text-xs">{sortOrder === 'desc' ? '↓' : '↑'}</span>
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Row 2 — PO Status */}
+                  <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+                    <span className={`text-xs font-semibold whitespace-nowrap shrink-0 ${themeClasses.textSecondary}`}>Status:</span>
                     {['all', 'draft', 'sent', 'received', 'partial', 'cancelled'].map(status => (
                       <button
                         key={status}
                         onClick={() => setSelectedStatus(status)}
-                        className={`px-2.5 py-1 rounded-full text-xs font-semibold transition-all ${
+                        className={`px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 transition-all ${
                           selectedStatus === status
                             ? 'bg-indigo-600 text-white shadow-sm'
                             : isDark
@@ -325,78 +403,24 @@ export default function PurchaseOrdersPage() {
                     ))}
                   </div>
 
-                  {/* Payment Status & Sort */}
-                  <div className="flex gap-2 flex-wrap items-center">
-                    <div className="flex gap-1.5 items-center">
-                      <span className={`text-xs font-semibold ${themeClasses.textSecondary}`}>Payment:</span>
-                      {['all', 'paid', 'partial', 'unpaid'].map(status => (
-                        <button
-                          key={status}
-                          onClick={() => setSelectedPaymentStatus(status)}
-                          className={`px-2.5 py-1 rounded-full text-xs font-semibold transition-all ${
-                            selectedPaymentStatus === status
-                              ? 'bg-blue-600 text-white shadow-sm'
-                              : isDark
-                                ? 'bg-gray-700 text-gray-400 hover:bg-gray-600'
-                                : 'bg-white text-gray-500 hover:bg-gray-100 border border-gray-200'
-                          }`}
-                        >
-                          {status.charAt(0).toUpperCase() + status.slice(1)}
-                        </button>
-                      ))}
-                    </div>
-
-                    {/* Sort Menu */}
-                    <div className="relative ml-auto">
+                  {/* Row 3 — Payment status */}
+                  <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+                    <span className={`text-xs font-semibold whitespace-nowrap shrink-0 ${themeClasses.textSecondary}`}>Payment:</span>
+                    {['all', 'paid', 'partial', 'unpaid'].map(status => (
                       <button
-                        onClick={() => setShowSortMenu(!showSortMenu)}
-                        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold transition-all ${
-                          showSortMenu
-                            ? isDark ? 'bg-gray-600 text-white' : 'bg-gray-200 text-gray-700'
-                            : isDark ? 'bg-gray-700 text-gray-400 hover:bg-gray-600' : 'bg-white text-gray-500 hover:bg-gray-100 border border-gray-200'
+                        key={status}
+                        onClick={() => setSelectedPaymentStatus(status)}
+                        className={`px-2.5 py-1 rounded-full text-xs font-semibold whitespace-nowrap shrink-0 transition-all ${
+                          selectedPaymentStatus === status
+                            ? 'bg-blue-600 text-white shadow-sm'
+                            : isDark
+                              ? 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+                              : 'bg-white text-gray-500 hover:bg-gray-100 border border-gray-200'
                         }`}
                       >
-                        <ArrowUpDown className="w-3.5 h-3.5" />
-                        <span>Sort</span>
+                        {status.charAt(0).toUpperCase() + status.slice(1)}
                       </button>
-
-                      {showSortMenu && (
-                        <div className={`absolute top-full right-0 mt-1 z-20 rounded-lg shadow-lg border overflow-hidden min-w-[180px] ${
-                          isDark ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'
-                        }`}>
-                          {[
-                            { value: 'date', label: 'Date (Newest)' },
-                            { value: 'po_number', label: 'PO Number' },
-                            { value: 'amount', label: 'Amount' },
-                          ].map(opt => (
-                            <button
-                              key={opt.value}
-                              onClick={() => {
-                                if (sortBy === opt.value) {
-                                  setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc')
-                                } else {
-                                  setSortBy(opt.value)
-                                  setSortOrder('desc')
-                                }
-                                setShowSortMenu(false)
-                              }}
-                              className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium text-left transition-colors ${
-                                sortBy === opt.value
-                                  ? isDark ? 'bg-indigo-900/40 text-indigo-300' : 'bg-indigo-50 text-indigo-700'
-                                  : isDark ? 'hover:bg-gray-700 text-gray-200' : 'hover:bg-gray-50 text-gray-700'
-                              }`}
-                            >
-                              <span>{opt.label}</span>
-                              {sortBy === opt.value && (
-                                <span className="text-xs">
-                                  {sortOrder === 'desc' ? '↓' : '↑'}
-                                </span>
-                              )}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                    ))}
                   </div>
                 </div>
 
@@ -411,7 +435,8 @@ export default function PurchaseOrdersPage() {
                       <ShoppingCart className="w-10 h-10 mb-3 opacity-30" />
                       <p className="text-sm font-medium">No purchase orders</p>
                       <p className="text-xs mt-1 opacity-70">
-                        {selectedStatus !== 'all' ? 'Try a different filter' : 'Create your first PO'}
+                        {(selectedStatus !== 'all' || selectedPaymentStatus !== 'all' || dateRange?.preset !== 'all' || searchTerm.trim())
+                          ? 'Try a different filter' : 'Create your first PO'}
                       </p>
                     </div>
                   ) : (

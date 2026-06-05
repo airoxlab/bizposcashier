@@ -14,13 +14,13 @@ import { getOrderItemsWithChanges } from '../../lib/utils/orderChangesTracker'
 import Modal from '../../components/ui/Modal'
 import { printerManager } from '../../lib/printerManager'
 import TakeawayCustomerForm from '../../components/pos/TakeawayCustomerForm'
-import CategorySidebar from '../../components/test/CategorySidebar'
-import ProductGrid from '../../components/test/ProductGrid'
-import VariantSelectionScreen from '../../components/test/VariantSelectionScreen'
-import DealFlavorSelectionScreen from '../../components/test/DealFlavorSelectionScreen'
-import CartSidebar from '../../components/test/CartSidebar'
-import WalkinOrdersSidebar from '../../components/test/WalkinOrdersSidebar'
-import WalkinOrderDetails from '../../components/test/WalkinOrderDetails'
+import CategorySidebar from '../../components/order/CategorySidebar'
+import ProductGrid from '../../components/order/ProductGrid'
+import VariantSelectionScreen from '../../components/order/VariantSelectionScreen'
+import DealFlavorSelectionScreen from '../../components/order/DealFlavorSelectionScreen'
+import CartSidebar from '../../components/order/CartSidebar'
+import WalkinOrdersSidebar from '../../components/order/WalkinOrdersSidebar'
+import WalkinOrderDetails from '../../components/order/WalkinOrderDetails'
 import { FileText, Check, Printer } from 'lucide-react'
 import toast from 'react-hot-toast'
 import PosToaster from '@/components/ui/PosToaster'
@@ -124,9 +124,13 @@ export default function TakeawayPage() {
       const savedModifyingOrderId = localStorage.getItem('takeaway_modifying_order')
 
       if (savedCart) {
-        const parsedCart = JSON.parse(savedCart)
-        console.log('🛒 [Takeaway] Reloading cart from localStorage:', parsedCart)
-        setCart(parsedCart)
+        try {
+          const parsedCart = JSON.parse(savedCart)
+          console.log('🛒 [Takeaway] Reloading cart from localStorage:', parsedCart)
+          setCart(parsedCart)
+        } catch (e) {
+          console.warn('⚠️ [Takeaway] Corrupted cart data in localStorage, resetting:', e)
+        }
       }
       // Safe JSON parsing to prevent crashes from undefined values
       if (savedCustomer && savedCustomer !== 'undefined') {
@@ -160,16 +164,20 @@ export default function TakeawayPage() {
 
     console.log('🔄 [Takeaway] Loading order data from localStorage:', {
       hasCart: !!savedCart,
-      cartItemsCount: savedCart ? JSON.parse(savedCart).length : 0,
+      cartItemsCount: savedCart ? (() => { try { return JSON.parse(savedCart).length } catch { return 0 } })() : 0,
       hasModifyingOrder: !!savedModifyingOrderId,
       modifyingOrderId: savedModifyingOrderId,
       orderNumber: savedOriginalOrderNumber
     })
 
     if (savedCart) {
-      const parsedCart = JSON.parse(savedCart)
-      console.log('📦 [Takeaway] Loading cart from localStorage:', parsedCart)
-      setCart(parsedCart)
+      try {
+        const parsedCart = JSON.parse(savedCart)
+        console.log('📦 [Takeaway] Loading cart from localStorage:', parsedCart)
+        setCart(parsedCart)
+      } catch (e) {
+        console.warn('⚠️ [Takeaway] Corrupted cart data in localStorage, resetting:', e)
+      }
     }
     // Safe JSON parsing to prevent crashes from undefined values
     if (savedCustomer && savedCustomer !== 'undefined') {
@@ -2168,21 +2176,22 @@ export default function TakeawayPage() {
     if (isReopenedOrder && originalOrderId) {
       const originalStateStr = localStorage.getItem('takeaway_original_state')
       if (originalStateStr) {
+        try {
         const originalState = JSON.parse(originalStateStr)
 
         const changes = {
           itemsAdded: [],
           itemsRemoved: [],
           itemsModified: [],
-          oldSubtotal: originalState.subtotal,
+          oldSubtotal: originalState?.subtotal || 0,
           newSubtotal: orderData.subtotal,
-          oldTotal: originalState.total,
+          oldTotal: originalState?.total || 0,
           newTotal: orderData.total,
-          oldItemCount: originalState.itemCount,
+          oldItemCount: originalState?.itemCount || 0,
           newItemCount: cart.length
         }
 
-        originalState.items.forEach(oldItem => {
+        ;(originalState?.items || []).forEach(oldItem => {
           const itemName = oldItem.isDeal ? oldItem.dealName : oldItem.productName
           const itemVariant = oldItem.isDeal ? null : oldItem.variantName
 
@@ -2236,6 +2245,9 @@ export default function TakeawayPage() {
         })
 
         orderData.detailedChanges = changes
+        } catch (e) {
+          console.error('[Takeaway] Failed to parse takeaway_original_state:', e)
+        }
       }
     }
 

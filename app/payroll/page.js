@@ -116,9 +116,11 @@ function PayrollPageInner() {
     if (!amount || isNaN(amount) || amount <= 0) return notify.error('Enter a valid amount')
     if (!form.reason.trim()) return notify.error('Reason is required')
     if (!form.payment_account_id) return notify.error('Select a payment account')
-    if (form.repayment_type === 'installments' &&
-        (!form.installment_amount || isNaN(parseFloat(form.installment_amount)))) {
-      return notify.error('Enter installment amount')
+    if (form.repayment_type === 'installments') {
+      const installAmt = parseFloat(form.installment_amount)
+      if (!form.installment_amount || isNaN(installAmt) || installAmt <= 0) {
+        return notify.error('Installment amount must be a positive number')
+      }
     }
 
     setSaving(true)

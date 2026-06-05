@@ -10,7 +10,7 @@ import {
 import * as XLSX from 'xlsx'
 import themeManager from '../../../lib/themeManager'
 import { authManager } from '../../../lib/authManager'
-import { supabase } from '../../../lib/supabaseClient'
+import { supabase } from '../../../lib/supabase'
 import { notify } from '../../../components/ui/NotificationSystem'
 
 const blankForm = { full_name: '', phone: '', email: '', addressline: '', credit_limit: 0 }
@@ -61,7 +61,7 @@ function validateCsvRows(rows) {
     const [full_name = '', phone = '', email = '', addressline = '', credit_limit_raw = ''] = row
 
     if (!full_name.trim() && !phone.trim()) errors.push('Full Name or Phone is required')
-    if (credit_limit_raw.trim() && isNaN(parseFloat(credit_limit_raw))) errors.push('Credit Limit must be a number')
+    if (credit_limit_raw.trim() && (isNaN(parseFloat(credit_limit_raw)) || parseFloat(credit_limit_raw) < 0)) errors.push('Credit Limit must be a positive number')
 
     parsed.push({
       rowNum: i + 1,

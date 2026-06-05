@@ -11,13 +11,13 @@ import { printerManager } from '../../lib/printerManager'
 import { supabase } from '../../lib/supabase'
 import { notify } from '../../components/ui/NotificationSystem'
 import Modal from '../../components/ui/Modal'
-import ProductGrid from '../../components/test/ProductGrid'
-import VariantSelectionScreen from '../../components/test/VariantSelectionScreen'
-import DealFlavorSelectionScreen from '../../components/test/DealFlavorSelectionScreen'
-import CartSidebar from '../../components/test/CartSidebar'
-import WalkinOrdersSidebar from '../../components/test/WalkinOrdersSidebar'
-import WalkinOrderDetails from '../../components/test/WalkinOrderDetails'
-import TableSelectionPanel from '../../components/test/TableSelectionPanel'
+import ProductGrid from '../../components/order/ProductGrid'
+import VariantSelectionScreen from '../../components/order/VariantSelectionScreen'
+import DealFlavorSelectionScreen from '../../components/order/DealFlavorSelectionScreen'
+import CartSidebar from '../../components/order/CartSidebar'
+import WalkinOrdersSidebar from '../../components/order/WalkinOrdersSidebar'
+import WalkinOrderDetails from '../../components/order/WalkinOrderDetails'
+import TableSelectionPanel from '../../components/order/TableSelectionPanel'
 import loyaltyManager from '../../lib/loyaltyManager'
 import { webOrderNotificationManager } from '../../lib/webOrderNotification'
 import { usePermissions } from '../../lib/permissionManager'
@@ -97,6 +97,9 @@ export default function NewOrderPage() {
   const [customer, setCustomer] = useState(null)
   const [orderInstructions, setOrderInstructions] = useState('')
   const [orderExtras, setOrderExtras] = useState({ walkin: {}, takeaway: {}, delivery: {} })
+  // Last delivery charge we auto-applied (seeded on mount). Lets us distinguish a
+  // cashier's manual edit from our own value so we never overwrite a manual charge.
+  const deliveryChargeAutoRef = useRef(null)
 
   // View state
   const [currentView, setCurrentView] = useState('products')
@@ -234,6 +237,10 @@ export default function NewOrderPage() {
     setTheme(themeManager.currentTheme)
     themeManager.applyTheme()
 
+    // Independently refresh charge defaults (resilient to the big cache fetch
+    // failing). Emits 'pos-charge-settings-updated' → reconcileDeliveryCharge.
+    cacheManager.syncChargeSettings()
+
     // Restore shared cart/customer/instructions and per-tab extras from localStorage
     const savedCart = localStorage.getItem('new_order_cart')
     const savedCustomer = localStorage.getItem('new_order_customer')
@@ -247,25 +254,20 @@ export default function NewOrderPage() {
       const savedExtras = localStorage.getItem(`${tab.storageKey}_extras`)
       if (savedExtras) try { restoredExtras[tab.id] = JSON.parse(savedExtras) } catch {}
     })
-    // Seed default delivery charge immediately (same pattern as delivery page)
-    // so the total is correct before the user opens InlineCustomerPanel
+    // Seed default delivery charge immediately (fixed OR percentage) so the total
+    // is correct before the user opens InlineCustomerPanel. Percentage is resolved
+    // against the restored cart subtotal; the recompute effect below keeps it in
+    // sync as the cart changes.
     if (!restoredExtras.delivery.deliveryCharges) {
+      let seedSubtotal = 0
       try {
-        const raw = localStorage.getItem('pos_default_delivery_charge')
-        if (raw) {
-          const parsed = JSON.parse(raw)
-          if (parsed?.type === 'fixed' && parsed?.value > 0) {
-            restoredExtras.delivery.deliveryCharges = parsed.value
-          }
-        }
+        const c = savedCart ? JSON.parse(savedCart) : []
+        seedSubtotal = c.reduce((s, i) => s + (i.totalPrice || 0), 0)
       } catch {}
-      if (!restoredExtras.delivery.deliveryCharges) {
-        const dc = cacheManager.getDefaultDeliveryCharge?.()
-        if (dc?.type === 'fixed' && dc?.value > 0) {
-          restoredExtras.delivery.deliveryCharges = dc.value
-        }
-      }
+      const seeded = cacheManager.resolveDeliveryChargeAmount(seedSubtotal)
+      if (seeded > 0) restoredExtras.delivery.deliveryCharges = seeded
     }
+    deliveryChargeAutoRef.current = parseFloat(restoredExtras.delivery.deliveryCharges) || 0
 
     const savedTable = localStorage.getItem('new_order_walkin_table')
     if (savedTable) try { setSelectedTable(JSON.parse(savedTable)) } catch {}
@@ -543,6 +545,38 @@ export default function NewOrderPage() {
     }
     return subtotal
   }
+
+  // Re-apply the admin default delivery charge (fixed OR percentage) to the
+  // delivery tab, unless it's a reopened order or the cashier manually edited it.
+  // Percentage is computed against the live cart subtotal.
+  const reconcileDeliveryCharge = () => {
+    if (isReopenedOrder) return
+    const current = parseFloat(orderExtras.delivery?.deliveryCharges) || 0
+    const isManual = deliveryChargeAutoRef.current !== null &&
+                     Math.abs(current - deliveryChargeAutoRef.current) > 0.001
+    if (isManual) return
+    const subtotal = cart.reduce((s, i) => s + (i.totalPrice || 0), 0)
+    const computed = cacheManager.resolveDeliveryChargeAmount(subtotal)
+    deliveryChargeAutoRef.current = computed
+    if (current !== computed) {
+      setOrderExtras(prev => ({ ...prev, delivery: { ...prev.delivery, deliveryCharges: computed } }))
+    }
+  }
+
+  // Live recompute for PERCENTAGE delivery charges as the cart subtotal changes.
+  useEffect(() => {
+    const dc = cacheManager.getDefaultDeliveryCharge()
+    if (dc?.type !== 'percentage' || !(dc?.value > 0)) return
+    reconcileDeliveryCharge()
+  }, [cart, isReopenedOrder])
+
+  // Re-apply defaults (fixed OR percentage) when charge settings change — fired by
+  // the header refresh button and background settings sync.
+  useEffect(() => {
+    const onChargeUpdate = () => reconcileDeliveryCharge()
+    window.addEventListener('pos-charge-settings-updated', onChargeUpdate)
+    return () => window.removeEventListener('pos-charge-settings-updated', onChargeUpdate)
+  }, [cart, isReopenedOrder, orderExtras.delivery?.deliveryCharges])
 
   const handleBackClick = () => {
     if (currentView !== 'products') {

@@ -186,7 +186,8 @@ export function WhatsAppPanel() {
   // ── Listen to Electron WhatsApp events ───────────────────
   useEffect(() => {
     if (!isElectron) return
-    const wa = window.electronAPI.whatsapp
+    const wa = window.electronAPI?.whatsapp
+    if (!wa) return
 
     wa.onStatus(({ status }) => setWaStatus(status))
     wa.onQR(async ({ qr }) => {
@@ -212,7 +213,9 @@ export function WhatsAppPanel() {
     })
 
     // Get current status on mount
-    wa.getStatus().then(({ status }) => setWaStatus(status))
+    wa.getStatus()
+      .then(({ status }) => setWaStatus(status))
+      .catch(e => console.error('Failed to get WA status:', e))
 
     return () => wa.removeListeners()
   }, [isElectron])
@@ -259,7 +262,14 @@ export function WhatsAppPanel() {
     if (!isElectron) return notify.error('WhatsApp only works in the desktop app')
     setIsConnecting(true)
     setWaStatus('connecting')
-    await window.electronAPI.whatsapp.connect()
+    try {
+      await window.electronAPI.whatsapp.connect()
+    } catch (e) {
+      console.error('WhatsApp connect error:', e)
+      setIsConnecting(false)
+      setWaStatus('failed')
+      notify.error('Failed to start WhatsApp connection')
+    }
   }
 
   async function handleDisconnect() {

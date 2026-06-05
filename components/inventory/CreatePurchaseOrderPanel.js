@@ -355,8 +355,7 @@ export default function CreatePurchaseOrderPanel({ onClose, onCreated, restoreDr
       const primarySupplierId = validRows.find(r => r.supplier_id)?.supplier_id || ''
 
       const { data: po, error } = await supabase.rpc('create_purchase_order', {
-        p_user_id:    userId,
-        p_cashier_id: isAdmin ? null : (cashier?.id ?? null),
+        p_user_id: userId,
         p_header: {
           po_date: header.po_date, supplier_id: primarySupplierId, notes: header.notes,
           delivery_charges: parseFloat(header.delivery_charges) || 0,

@@ -14,14 +14,14 @@ import { notify } from '../../components/ui/NotificationSystem'
 import { getOrderItemsWithChanges, saveChangesOffline } from '../../lib/utils/orderChangesTracker'
 import Modal from '../../components/ui/Modal'
 import WalkInCustomerForm from '../../components/pos/WalkInCustomerForm'
-import CategorySidebar from '../../components/test/CategorySidebar'
-import ProductGrid from '../../components/test/ProductGrid'
-import VariantSelectionScreen from '../../components/test/VariantSelectionScreen'
-import DealFlavorSelectionScreen from '../../components/test/DealFlavorSelectionScreen'
-import CartSidebar from '../../components/test/CartSidebar'
-import TableSelectionPanel from '../../components/test/TableSelectionPanel'
-import WalkinOrdersSidebar from '../../components/test/WalkinOrdersSidebar'
-import WalkinOrderDetails from '../../components/test/WalkinOrderDetails'
+import CategorySidebar from '../../components/order/CategorySidebar'
+import ProductGrid from '../../components/order/ProductGrid'
+import VariantSelectionScreen from '../../components/order/VariantSelectionScreen'
+import DealFlavorSelectionScreen from '../../components/order/DealFlavorSelectionScreen'
+import CartSidebar from '../../components/order/CartSidebar'
+import TableSelectionPanel from '../../components/order/TableSelectionPanel'
+import WalkinOrdersSidebar from '../../components/order/WalkinOrdersSidebar'
+import WalkinOrderDetails from '../../components/order/WalkinOrderDetails'
 import SplitPaymentModal from '../../components/pos/SplitPaymentModal'
 import { FileText, Check, Eye, Printer } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -107,9 +107,13 @@ export default function WalkInPage() {
       const savedTable = localStorage.getItem('walkin_table')
 
       if (savedCart) {
-        const parsedCart = JSON.parse(savedCart)
-        console.log('✅ Reloaded cart from localStorage:', parsedCart.length, 'items')
-        setCart(parsedCart)
+        try {
+          const parsedCart = JSON.parse(savedCart)
+          console.log('✅ Reloaded cart from localStorage:', parsedCart.length, 'items')
+          setCart(parsedCart)
+        } catch (e) {
+          console.warn('⚠️ [Walkin] Corrupted cart data in localStorage, resetting:', e)
+        }
       }
 
       // Safe JSON parsing with error handling
@@ -219,7 +223,7 @@ export default function WalkInPage() {
 
       console.log('🔄 [Walkin] Loading order data from localStorage:', {
         hasCart: !!savedCart,
-        cartItemsCount: savedCart ? JSON.parse(savedCart).length : 0,
+        cartItemsCount: savedCart ? (() => { try { return JSON.parse(savedCart).length } catch { return 0 } })() : 0,
         hasModifyingOrder: !!savedModifyingOrderId,
         modifyingOrderId: savedModifyingOrderId,
         orderNumber: savedOriginalOrderNumber,
@@ -1644,7 +1648,7 @@ export default function WalkInPage() {
           const { data: redemption } = await supabase
             .from('loyalty_redemptions')
             .select('points_used, discount_applied')
-            .eq('order_id', order.order_number)
+            .eq('order_id', order.id)
             .maybeSingle()
 
           if (redemption) {
@@ -1939,7 +1943,7 @@ export default function WalkInPage() {
           const { data: redemption } = await supabase
             .from('loyalty_redemptions')
             .select('points_used, discount_applied')
-            .eq('order_id', order.order_number)
+            .eq('order_id', order.id)
             .maybeSingle()
 
           if (redemption) {
@@ -2777,21 +2781,22 @@ export default function WalkInPage() {
     if (isReopenedOrder && originalOrderId) {
       const originalStateStr = localStorage.getItem('walkin_original_state')
       if (originalStateStr) {
+        try {
         const originalState = JSON.parse(originalStateStr)
 
         const changes = {
           itemsAdded: [],
           itemsRemoved: [],
           itemsModified: [],
-          oldSubtotal: originalState.subtotal,
+          oldSubtotal: originalState?.subtotal || 0,
           newSubtotal: orderData.subtotal,
-          oldTotal: originalState.total,
+          oldTotal: originalState?.total || 0,
           newTotal: orderData.total,
-          oldItemCount: originalState.itemCount,
+          oldItemCount: originalState?.itemCount || 0,
           newItemCount: cart.length
         }
 
-        originalState.items.forEach(oldItem => {
+        ;(originalState?.items || []).forEach(oldItem => {
           const itemName = oldItem.isDeal ? oldItem.dealName : oldItem.productName
           const itemVariant = oldItem.isDeal ? null : oldItem.variantName
 
@@ -2845,6 +2850,9 @@ export default function WalkInPage() {
         })
 
         orderData.detailedChanges = changes
+        } catch (e) {
+          console.error('[Walkin] Failed to parse walkin_original_state:', e)
+        }
       }
     }
 

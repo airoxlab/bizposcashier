@@ -837,14 +837,14 @@ export default function OrdersPage() {
     }
   };
 
-  const fetchLoyaltyRedemption = async (orderNumber) => {
+  const fetchLoyaltyRedemption = async (orderId, orderNumber) => {
     try {
       // Check if we're offline
       if (!cacheManager.checkOnlineStatus()) {
         console.log("📴 Offline: Checking cache for loyalty redemption");
 
         // Try to get loyalty redemption from localStorage/cache
-        const cachedOrder = cacheManager.getOrders().find(o => o.order_number === orderNumber);
+        const cachedOrder = (cacheManager.getOrders() || []).find(o => o.order_number === orderNumber);
 
         if (cachedOrder) {
           // Check if loyalty redemption data is stored in the order
@@ -868,7 +868,7 @@ export default function OrdersPage() {
       const { data, error } = await supabase
         .from("loyalty_redemptions")
         .select("points_used, discount_applied")
-        .eq("order_id", orderNumber)
+        .eq("order_id", orderId)
         .single();
 
       if (error) {
@@ -941,7 +941,7 @@ export default function OrdersPage() {
     await fetchOrderItems(order.id);
     await fetchOrderHistory(order.id);
     await fetchOrderLoyaltyPoints(order.order_number);
-    await fetchLoyaltyRedemption(order.order_number);
+    await fetchLoyaltyRedemption(order.id, order.order_number);
 
     // Fetch payment transactions if split payment
     if (order.payment_method === 'Split') {
@@ -1647,7 +1647,7 @@ export default function OrdersPage() {
     );
     // Save order taker so it is restored when the page loads
     const takerName = order.order_taker_id
-      ? (order.order_takers?.name || cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null)
+      ? (order.order_takers?.name || (cacheManager.getOrderTakers?.() || []).find(t => t.id === order.order_taker_id)?.name || null)
       : null;
     if (order.order_type === 'walkin') {
       if (order.order_taker_id) {

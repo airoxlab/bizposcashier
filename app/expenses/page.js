@@ -330,6 +330,7 @@ export default function ExpensesPage() {
         supabase.from('expense_subcategories').select('id, name, category_id').eq('user_id', user.id).order('name')
       ])
 
+      if (expensesResult.error) notify.error(`Failed to fetch expenses: ${expensesResult.error.message}`)
       if (categoriesResult.error) notify.error(`Failed to fetch categories: ${categoriesResult.error.message}`)
 
       const sorted = (expensesResult.data || []).sort((a, b) => {
@@ -563,7 +564,7 @@ export default function ExpensesPage() {
           const balanceAfter  = balanceBefore + totalAmount
 
           const selectedCat = categories.find(c => c.id === expenseForm.categoryId)
-          await supabase.from('supplier_ledger').insert({
+          const { error: ledgerError } = await supabase.from('supplier_ledger').insert({
             user_id:          user.id,
             supplier_id:      expenseForm.supplierId,
             transaction_type: 'debit',
@@ -574,6 +575,7 @@ export default function ExpensesPage() {
             description:      expenseForm.description || `Expense: ${selectedCat?.name || 'Uncategorized'}`,
             created_by:       user.id,
           })
+          if (ledgerError) throw ledgerError
         }
       }
       setShowAddExpense(false)
