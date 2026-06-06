@@ -1,1 +1,4 @@
-gh release create v2.2.1 "dist\BizPOS-Setup-2.2.1.exe" "dist\BizPOS-Setup-2.2.1.exe.blockmap" "dist\latest.yml" --title "BizPOS v2.2.1" --notes "Bug fixes and improvements"
+gh release create v2.3.6 "dist\BizPOS-Setup-2.3.6.exe" "dist\BizPOS-Setup-2.3.6.exe.blockmap" "dist\latest.yml" --title "BizPOS v2.3.6" --notes "Bug fixes and improvements"
+
+
+

@@ -354,7 +354,7 @@ export default function TakeawayPage() {
     }
   }
 
-  const handleDealClick = (deal) => {
+  const handleDealClick = async (deal) => {
     if (deal?.scrollToDeals) {
       if (currentView !== 'products') {
         setCurrentView('products')
@@ -371,6 +371,7 @@ export default function TakeawayPage() {
       return
     }
 
+    await cacheManager.ensureDealProducts(deal.id)
     setSelectedDeal(deal)
     const products = cacheManager.getDealProducts(deal.id)
     setDealProducts(products)

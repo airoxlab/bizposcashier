@@ -268,6 +268,9 @@ useEffect(() => {
     if (matched) {
       setSelectedPaymentMethod(matched)
     }
+  } else {
+    // New order: default to Unpaid — user can complete in one tap or switch if needed
+    setSelectedPaymentMethod({ id: 'unpaid', name: 'Unpaid', icon: Clock, color: 'from-gray-500 to-gray-600', requiresAmount: false, logo: null })
   }
 
   // 🆕 CRITICAL FIX: Calculate amount due for modified PAID orders
@@ -1209,10 +1212,17 @@ const processOrder = async () => {
         }
       }
 
-      // Update table status to occupied for walkin orders
+      // Update table status for walkin orders
+      // If order was placed as Completed immediately (PLACE_AND_COMPLETE_ORDER),
+      // don't occupy the table — it should stay/become available right away.
       if (orderData.orderType === 'walkin' && orderData.tableId) {
-        await cacheManager.updateTableStatus(orderData.tableId, 'occupied')
-        console.log(`✅ Table ${orderData.tableId} marked as occupied`)
+        if (wasPlacedAsCompleted) {
+          await cacheManager.updateTableStatus(orderData.tableId, 'available')
+          console.log(`✅ Table ${orderData.tableId} kept available (order placed as Completed)`)
+        } else {
+          await cacheManager.updateTableStatus(orderData.tableId, 'occupied')
+          console.log(`✅ Table ${orderData.tableId} marked as occupied`)
+        }
       }
 
       // Handle loyalty redemption if applied

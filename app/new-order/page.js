@@ -448,7 +448,7 @@ export default function NewOrderPage() {
     }
   }
 
-  const handleDealClick = (deal) => {
+  const handleDealClick = async (deal) => {
     if (deal?.scrollToDeals) {
       if (currentView !== 'products') {
         setCurrentView('products')
@@ -458,6 +458,7 @@ export default function NewOrderPage() {
       setTimeout(() => { if (productGridRef.current) productGridRef.current.scrollToDeals() }, 100)
       return
     }
+    await cacheManager.ensureDealProducts(deal.id)
     setSelectedDeal(deal)
     setDealProducts(cacheManager.getDealProducts(deal.id))
     setCurrentView('deal')
@@ -1055,11 +1056,11 @@ export default function NewOrderPage() {
       const result = await cacheManager.updateOrderStatus(order.id, newStatus, additionalData)
       if (!result.success) throw new Error(result.message || 'Failed to update order status')
 
-      // Free the table when a walkin order is completed
-      if (newStatus === 'Completed' && order.order_type === 'walkin' && order.table_id) {
+      // Free the table when a walkin order is completed or cancelled
+      if ((newStatus === 'Completed' || newStatus === 'Cancelled') && order.order_type === 'walkin' && order.table_id) {
         await cacheManager.updateTableStatus(order.table_id, 'available')
-        console.log(`✅ [NewOrder] Table ${order.table_id} freed after order completion`)
-        setSelectedTable(null)
+        console.log(`✅ [NewOrder] Table ${order.table_id} freed after order ${newStatus}`)
+        if (newStatus === 'Completed') setSelectedTable(null)
       }
 
       // ================================================================

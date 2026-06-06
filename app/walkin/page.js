@@ -429,7 +429,7 @@ export default function WalkInPage() {
     }
   }
 
-  const handleDealClick = (deal) => {
+  const handleDealClick = async (deal) => {
     // Check if this is a scroll-to-deals request
     if (deal?.scrollToDeals) {
       // Close any open modals first
@@ -450,6 +450,7 @@ export default function WalkInPage() {
     }
 
     // Otherwise, it's a regular deal click
+    await cacheManager.ensureDealProducts(deal.id)
     setSelectedDeal(deal)
     const products = cacheManager.getDealProducts(deal.id)
     setDealProducts(products)
@@ -1087,10 +1088,10 @@ export default function WalkInPage() {
           .catch(err => toast.error(`WhatsApp error: ${err.message}`, { duration: 5000 }))
       }
 
-      // If order is completed, free up the table
-      if (newStatus === 'Completed' && order.table_id) {
+      // Free the table when a walkin order is completed or cancelled
+      if ((newStatus === 'Completed' || newStatus === 'Cancelled') && order.order_type === 'walkin' && order.table_id) {
         await cacheManager.updateTableStatus(order.table_id, 'available')
-        console.log(`✅ [Walkin] Table ${order.table_id} freed after order completion`)
+        console.log(`✅ [Walkin] Table ${order.table_id} freed after order ${newStatus}`)
       }
 
       // If order is completed, close the order details and refresh orders list

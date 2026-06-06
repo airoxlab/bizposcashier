@@ -213,6 +213,9 @@ export default function OrdersPage() {
   const [showConvertToDeliveryModal, setShowConvertToDeliveryModal] = useState(false);
   const [showConvertToTakeawayModal, setShowConvertToTakeawayModal] = useState(false);
   const [showDispatchButton, setShowDispatchButton] = useState(true);
+  const [showCustomerEditModal, setShowCustomerEditModal] = useState(false);
+  const [customerEditForm, setCustomerEditForm] = useState({ name: '', phone: '', address: '' });
+  const [savingCustomerEdit, setSavingCustomerEdit] = useState(false);
 
   const cancellationReasons = [
     "Customer requested cancellation",
@@ -1497,10 +1500,10 @@ export default function OrdersPage() {
         );
       }
 
-      // If order is completed and it's a walkin order with a table, free up the table
-      if (newStatus === 'Completed' && selectedOrder?.order_type === 'walkin' && selectedOrder?.table_id) {
+      // Free the table when a walkin order is completed or cancelled
+      if ((newStatus === 'Completed' || newStatus === 'Cancelled') && selectedOrder?.order_type === 'walkin' && selectedOrder?.table_id) {
         await cacheManager.updateTableStatus(selectedOrder.table_id, 'available');
-        console.log(`✅ [Orders] Table ${selectedOrder.table_id} freed after order completion`);
+        console.log(`✅ [Orders] Table ${selectedOrder.table_id} freed after order ${newStatus}`);
       }
 
       fetchOrders();
@@ -1527,6 +1530,42 @@ export default function OrdersPage() {
   const handleCancelOrder = () => {
     setShowCancelModal(true);
     setShowActionMenu(null);
+  };
+
+  const handleSaveCustomerEdit = async () => {
+    setSavingCustomerEdit(true);
+    try {
+      if (selectedOrder.customer_id) {
+        const { error } = await supabase
+          .from('customers')
+          .update({ full_name: customerEditForm.name, phone: customerEditForm.phone })
+          .eq('id', selectedOrder.customer_id);
+        if (error) throw error;
+      }
+      if (selectedOrder.order_type === 'delivery') {
+        const { error } = await supabase
+          .from('orders')
+          .update({ delivery_address: customerEditForm.address })
+          .eq('id', selectedOrder.id);
+        if (error) throw error;
+      }
+      setSelectedOrder(prev => ({
+        ...prev,
+        delivery_address: customerEditForm.address,
+        customers: { ...prev.customers, full_name: customerEditForm.name, phone: customerEditForm.phone },
+      }));
+      setOrders(prev => prev.map(o => o.id === selectedOrder.id ? {
+        ...o,
+        delivery_address: customerEditForm.address,
+        customers: { ...o.customers, full_name: customerEditForm.name, phone: customerEditForm.phone },
+      } : o));
+      setShowCustomerEditModal(false);
+      notify.success('Customer info updated');
+    } catch (err) {
+      notify.error('Failed to update: ' + err.message);
+    } finally {
+      setSavingCustomerEdit(false);
+    }
   };
 
   const confirmCancelOrder = () => {
@@ -3268,16 +3307,34 @@ export default function OrdersPage() {
                         isDark
                           ? "bg-blue-900/20 border-blue-700/30"
                           : "bg-blue-50 border-blue-200"
-                      } rounded-xl p-4 border`}
+                      } rounded-xl p-4 border group relative`}
                     >
-                      <h4
-                        className={`font-semibold ${
-                          isDark ? "text-blue-300" : "text-blue-900"
-                        } mb-3 flex items-center`}
-                      >
-                        <User className="w-5 h-5 mr-2" />
-                        Customer Information
-                      </h4>
+                      <div className="flex items-start justify-between">
+                        <h4
+                          className={`font-semibold ${
+                            isDark ? "text-blue-300" : "text-blue-900"
+                          } mb-3 flex items-center`}
+                        >
+                          <User className="w-5 h-5 mr-2" />
+                          Customer Information
+                        </h4>
+                        <button
+                          onClick={() => {
+                            setCustomerEditForm({
+                              name: selectedOrder.customers.full_name || '',
+                              phone: selectedOrder.customers.phone || '',
+                              address: selectedOrder.delivery_address || selectedOrder.customers.addressline || '',
+                            });
+                            setShowCustomerEditModal(true);
+                          }}
+                          className={`opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md ${
+                            isDark ? "hover:bg-blue-800/50 text-blue-400" : "hover:bg-blue-100 text-blue-600"
+                          }`}
+                          title="Edit customer info"
+                        >
+                          <Edit3 className="w-4 h-4" />
+                        </button>
+                      </div>
                       <div className="space-y-2">
                         <p
                           className={`${
@@ -3294,6 +3351,16 @@ export default function OrdersPage() {
                           >
                             <Phone className="w-4 h-4 mr-2" />
                             {selectedOrder.customers.phone}
+                          </p>
+                        )}
+                        {selectedOrder.order_type === "delivery" && (selectedOrder.delivery_address || selectedOrder.customers.addressline) && (
+                          <p
+                            className={`${
+                              isDark ? "text-blue-300" : "text-blue-700"
+                            } flex items-start text-sm`}
+                          >
+                            <MapPin className="w-4 h-4 mr-2 mt-0.5 flex-shrink-0" />
+                            {selectedOrder.delivery_address || selectedOrder.customers.addressline}
                           </p>
                         )}
                         {selectedOrder.customers.email && (
@@ -4473,6 +4540,70 @@ export default function OrdersPage() {
         />
       )}
 
+
+      {/* Customer Quick Edit Modal */}
+      {showCustomerEditModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50" onClick={() => setShowCustomerEditModal(false)} />
+          <div className={`relative w-full max-w-sm rounded-2xl shadow-2xl p-6 ${isDark ? "bg-gray-800 border border-gray-700" : "bg-white border border-gray-200"}`}>
+            <div className="flex items-center justify-between mb-5">
+              <h3 className={`font-bold text-lg ${isDark ? "text-white" : "text-gray-900"}`}>Edit Customer Info</h3>
+              <button onClick={() => setShowCustomerEditModal(false)} className={`p-1 rounded-lg ${isDark ? "hover:bg-gray-700 text-gray-400" : "hover:bg-gray-100 text-gray-500"}`}>
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className={`block text-sm font-medium mb-1 ${isDark ? "text-gray-300" : "text-gray-700"}`}>Name</label>
+                <input
+                  type="text"
+                  value={customerEditForm.name}
+                  onChange={e => setCustomerEditForm(prev => ({ ...prev, name: e.target.value }))}
+                  className={`w-full px-3 py-2 rounded-lg border text-sm ${isDark ? "bg-gray-700 border-gray-600 text-white placeholder-gray-400" : "bg-white border-gray-300 text-gray-900"} focus:outline-none focus:ring-2 focus:ring-blue-500`}
+                  placeholder="Customer name"
+                />
+              </div>
+              <div>
+                <label className={`block text-sm font-medium mb-1 ${isDark ? "text-gray-300" : "text-gray-700"}`}>Phone</label>
+                <input
+                  type="text"
+                  value={customerEditForm.phone}
+                  onChange={e => setCustomerEditForm(prev => ({ ...prev, phone: e.target.value }))}
+                  className={`w-full px-3 py-2 rounded-lg border text-sm ${isDark ? "bg-gray-700 border-gray-600 text-white placeholder-gray-400" : "bg-white border-gray-300 text-gray-900"} focus:outline-none focus:ring-2 focus:ring-blue-500`}
+                  placeholder="Phone number"
+                />
+              </div>
+              {selectedOrder?.order_type === 'delivery' && (
+                <div>
+                  <label className={`block text-sm font-medium mb-1 ${isDark ? "text-gray-300" : "text-gray-700"}`}>Delivery Address</label>
+                  <textarea
+                    value={customerEditForm.address}
+                    onChange={e => setCustomerEditForm(prev => ({ ...prev, address: e.target.value }))}
+                    rows={3}
+                    className={`w-full px-3 py-2 rounded-lg border text-sm resize-none ${isDark ? "bg-gray-700 border-gray-600 text-white placeholder-gray-400" : "bg-white border-gray-300 text-gray-900"} focus:outline-none focus:ring-2 focus:ring-blue-500`}
+                    placeholder="Delivery address"
+                  />
+                </div>
+              )}
+            </div>
+            <div className="flex gap-3 mt-6">
+              <button
+                onClick={() => setShowCustomerEditModal(false)}
+                className={`flex-1 py-2 rounded-lg text-sm font-medium ${isDark ? "bg-gray-700 hover:bg-gray-600 text-gray-300" : "bg-gray-100 hover:bg-gray-200 text-gray-700"}`}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveCustomerEdit}
+                disabled={savingCustomerEdit}
+                className="flex-1 py-2 rounded-lg text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-60"
+              >
+                {savingCustomerEdit ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Notification System */}
       <NotificationSystem />

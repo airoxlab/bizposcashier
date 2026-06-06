@@ -404,6 +404,7 @@ export default function KDSPage() {
                 variant_name,
                 quantity,
                 is_deal,
+                deal_id,
                 deal_products,
                 item_instructions
               ),
@@ -1099,6 +1100,13 @@ export default function KDSPage() {
                       : item.deal_products
                   } catch (e) {}
                 }
+                // Fallback: stored deal_products was "[]" (stale cache at order time) — use live cache
+                if (item.is_deal && dealProducts.length === 0 && item.deal_id) {
+                  const cached = cacheManager.getDealProducts(item.deal_id)
+                  if (cached.length > 0) {
+                    dealProducts = cached.map(p => ({ name: p.name, quantity: p.quantity || 1, variant: p.variantName || null }))
+                  }
+                }
                 return (
                   <div key={index}>
                     <div className={`text-xs ${classes.textPrimary} flex items-start`}>
@@ -1259,6 +1267,12 @@ export default function KDSPage() {
                               ? JSON.parse(item.deal_products)
                               : item.deal_products
                           } catch (e) {}
+                        }
+                        if (item.is_deal && dealProducts.length === 0 && item.deal_id) {
+                          const cached = cacheManager.getDealProducts(item.deal_id)
+                          if (cached.length > 0) {
+                            dealProducts = cached.map(p => ({ name: p.name, quantity: p.quantity || 1, variant: p.variantName || null }))
+                          }
                         }
                         return (
                           <div key={index} className="px-2 py-1.5">
@@ -1748,6 +1762,12 @@ export default function KDSPage() {
                           : item.deal_products
                       } catch (e) {
                         console.error('Failed to parse deal_products:', e)
+                      }
+                    }
+                    if (item.is_deal && dealProducts.length === 0 && item.deal_id) {
+                      const cached = cacheManager.getDealProducts(item.deal_id)
+                      if (cached.length > 0) {
+                        dealProducts = cached.map(p => ({ name: p.name, quantity: p.quantity || 1, variant: p.variantName || null }))
                       }
                     }
                     return (

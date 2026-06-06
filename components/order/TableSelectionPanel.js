@@ -62,7 +62,12 @@ export default function TableSelectionPanel({
     const occupiedTableIds = new Set(activeOrders.map(o => o.table_id))
     return tableList.map(t => ({
       ...t,
-      status: occupiedTableIds.has(t.id) ? 'occupied' : t.status
+      // If DB says occupied but no active order exists for this table today,
+      // treat it as available — this auto-heals tables stuck by the old bug.
+      // reserved/maintenance are left untouched since they're not order-driven.
+      status: occupiedTableIds.has(t.id)
+        ? 'occupied'
+        : t.status === 'occupied' ? 'available' : t.status
     }))
   }
 
@@ -83,7 +88,17 @@ export default function TableSelectionPanel({
       if (navigator.onLine !== false) {
         await cacheManager.fetchRecentOrders()
         const refreshedTables = await cacheManager.refreshTables()
-        setTables(applyActiveOrderOccupancy(refreshedTables || []))
+        const healed = applyActiveOrderOccupancy(refreshedTables || [])
+        setTables(healed)
+
+        // Silently fix any tables that were stuck as 'occupied' in the DB
+        // but have no active order — heals legacy data from the previous bug.
+        const stuckTables = (refreshedTables || []).filter(
+          t => t.status === 'occupied' && healed.find(h => h.id === t.id)?.status === 'available'
+        )
+        for (const t of stuckTables) {
+          cacheManager.updateTableStatus(t.id, 'available').catch(() => {})
+        }
       }
     } catch (err) {
       console.error('Error fetching tables:', err)
