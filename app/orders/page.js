@@ -62,7 +62,7 @@ import SplitPaymentModal from "../../components/pos/SplitPaymentModal";
 import ConvertToDeliveryModal from "../../components/delivery/ConvertToDeliveryModal";
 import ConvertToTakeawayModal from "../../components/delivery/ConvertToTakeawayModal";
 import NotificationSystem, { notify } from "../../components/ui/NotificationSystem";
-import { getOrderItemsWithChanges } from '../../lib/utils/orderChangesTracker';
+import { getOrderItemsWithChanges, getOrderChanges, getCurrentUpdateVersion } from '../../lib/utils/orderChangesTracker';
 import SendBillButton from '../../components/pos/SendBillButton';
 
 const OrderSkeleton = ({ isDark }) => {
@@ -175,6 +175,7 @@ export default function OrdersPage() {
   const [userRole, setUserRole] = useState(null);
   const [orders, setOrders] = useState([]);
   const [selectedOrder, setSelectedOrder] = useState(null);
+  const [orderHasChanges, setOrderHasChanges] = useState(false);
   const selectedOrderRef = useRef(null);
   const [orderItems, setOrderItems] = useState([]);
   const [orderHistory, setOrderHistory] = useState([]);
@@ -288,6 +289,14 @@ export default function OrdersPage() {
   useEffect(() => {
     fetchOrders();
   }, [activeTab, statusFilter, dateFrom, dateTo, searchTerm, cashierFilter, deliveryBoyFilter, displayLimit]);
+
+  // Detect whether the selected order has modifications so we can show/hide the Update Token button
+  useEffect(() => {
+    if (!selectedOrder?.id) { setOrderHasChanges(false); return }
+    getOrderChanges(selectedOrder.id)
+      .then(r => setOrderHasChanges(r.hasChanges))
+      .catch(() => setOrderHasChanges(false))
+  }, [selectedOrder?.id]);
 
   // Mobile order notification: preload.js bridges IPC → CustomEvent 'bizpos:new-order'
   useEffect(() => {
@@ -2002,7 +2011,9 @@ export default function OrdersPage() {
     }
   };
 
-  const handlePrintKitchenToken = async () => {
+
+  const handlePrintKitchenToken = async (options = {}) => {
+    const { changesOnly = false, updateVersion = null } = options
     if (!selectedOrder) return;
 
     try {
@@ -2102,14 +2113,16 @@ export default function OrdersPage() {
         };
       })
 
-      // 🆕 Check for order changes using order_item_changes table
-      if (printOrder.id) {
+      // For update prints: apply change markers so the printer shows what changed.
+      // For normal full-order prints: skip change detection so items print clean.
+      if (changesOnly && printOrder.id) {
         mappedItems = await getOrderItemsWithChanges(printOrder.id, mappedItems)
       }
 
       const orderData = {
         orderNumber: printOrder.order_number,
         dailySerial: printOrder.daily_serial || null,
+        updateVersion: updateVersion || null,
         orderType: printOrder.order_type,
         customerName: printOrder.customers?.full_name || "",
         customerPhone: printOrder.customers?.phone || "",
@@ -2796,17 +2809,31 @@ export default function OrdersPage() {
                     <span>{isPrinting ? "Printing..." : "Print"}</span>
                   </motion.button>
 
-                  {/* Print Kitchen Token Button */}
+                  {/* Print Kitchen Token Button — prints full current order (clean, no change markers) */}
                   <motion.button
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
-                    onClick={handlePrintKitchenToken}
+                    onClick={() => handlePrintKitchenToken()}
                     disabled={isPrinting}
                     className="flex items-center space-x-1.5 px-3 py-2 bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white rounded-lg transition-all font-medium text-sm"
                   >
                     <Package className="w-3.5 h-3.5" />
                     <span>{isPrinting ? "Printing..." : "Print Token"}</span>
                   </motion.button>
+
+                  {/* Print Update Token — only visible for modified orders, prints only the changes */}
+                  {orderHasChanges && (
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => handlePrintKitchenToken({ changesOnly: true, updateVersion: getCurrentUpdateVersion(selectedOrder.id) })}
+                      disabled={isPrinting}
+                      className="flex items-center space-x-1.5 px-3 py-2 bg-orange-500 hover:bg-orange-600 disabled:bg-gray-400 text-white rounded-lg transition-all font-medium text-sm"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>{isPrinting ? "Printing..." : "Print Update"}</span>
+                    </motion.button>
+                  )}
 
                   {/* Send Bill via WhatsApp (Customer Account only) */}
                   <SendBillButton order={selectedOrder} size="md" />

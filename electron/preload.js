@@ -118,6 +118,10 @@ const api = {
     sendReceiptImage: (data) => ipcRenderer.invoke('whatsapp:send-receipt-image', data),
     sendBalanceImage: (data) => ipcRenderer.invoke('whatsapp:send-balance-image', data),
     checkNumber: (data) => ipcRenderer.invoke('whatsapp:check-number', data),
+    // Centralized sender: render images locally (no send) + read files for upload
+    renderReceiptImage: (data) => ipcRenderer.invoke('whatsapp:render-receipt-image', data),
+    renderBalanceImage: (data) => ipcRenderer.invoke('whatsapp:render-balance-image', data),
+    readFileBase64: (data) => ipcRenderer.invoke('whatsapp:read-file-base64', data),
     onUserLogin: (data) => ipcRenderer.invoke('whatsapp:on-user-login', data),
 
     onQR: (cb) => ipcRenderer.on('whatsapp:qr', (_e, d) => cb(d)),
@@ -154,6 +158,9 @@ const api = {
     // Data Recovery — scan all past localStorage port origins in Chromium's LevelDB
     scanAllPorts: () => ipcRenderer.invoke('backup:scan-all-ports'),
   },
+
+  // Fingerprint template comparison via dpfj.dll
+  compareFingerprints: (storedB64, liveB64) => ipcRenderer.invoke('fingerprint:compare', storedB64, liveB64),
 
   platform: process.platform,
   isElectron: true

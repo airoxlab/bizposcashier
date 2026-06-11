@@ -21,7 +21,7 @@ import DealFlavorSelectionScreen from '../../components/order/DealFlavorSelectio
 import CartSidebar from '../../components/order/CartSidebar'
 import WalkinOrdersSidebar from '../../components/order/WalkinOrdersSidebar'
 import WalkinOrderDetails from '../../components/order/WalkinOrderDetails'
-import { FileText, Check, Printer } from 'lucide-react'
+import { FileText, Check, Printer, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 import PosToaster from '@/components/ui/PosToaster'
 import { supabase } from '../../lib/supabase'
@@ -89,6 +89,16 @@ export default function DeliveryPage() {
   const [showExitModal, setShowExitModal] = useState(false)
   const [showSuccessModal, setShowSuccessModal] = useState(false)
   const [completedOrderData, setCompletedOrderData] = useState(null)
+  const successTimerRef = useRef(null)
+  useEffect(() => {
+    if (showSuccessModal) {
+      clearTimeout(successTimerRef.current)
+      successTimerRef.current = setTimeout(() => setShowSuccessModal(false), 3000)
+    } else {
+      clearTimeout(successTimerRef.current)
+    }
+    return () => clearTimeout(successTimerRef.current)
+  }, [showSuccessModal])
   const [isPrinting, setIsPrinting] = useState(false)
 
   // POS order behavior settings
@@ -2665,8 +2675,26 @@ export default function DeliveryPage() {
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
-              className={`${classes.card} rounded-3xl ${classes.shadow} shadow-2xl p-8 max-w-md w-full text-center ${classes.border} border`}
+              className={`${classes.card} rounded-3xl ${classes.shadow} shadow-2xl p-8 max-w-md w-full text-center ${classes.border} border relative overflow-hidden`}
             >
+              {/* Mini X close button */}
+              <button
+                onClick={() => setShowSuccessModal(false)}
+                className="absolute top-3 right-3 z-10 w-5 h-5 rounded-full bg-black/25 hover:bg-black/45 flex items-center justify-center transition-colors"
+              >
+                <X className="w-2.5 h-2.5 text-white" />
+              </button>
+
+              {/* 3-second auto-close progress bar */}
+              <div className="absolute top-0 left-0 right-0 h-0.5 bg-transparent">
+                <div
+                  key={String(showSuccessModal)}
+                  className="h-full bg-blue-500"
+                  style={{ animation: 'success-shrink 3s linear forwards' }}
+                />
+              </div>
+              <style>{`@keyframes success-shrink { from { width:100% } to { width:0% } }`}</style>
+
               <motion.div
                 initial={{ scale: 0 }}
                 animate={{ scale: 1 }}

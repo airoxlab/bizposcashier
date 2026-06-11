@@ -232,6 +232,47 @@ function registerWhatsAppHandlers(ipcMain, getMainWindow) {
     }
   });
 
+  // ─── Render images WITHOUT sending (centralized sender) ───
+  // The WhatsApp socket now lives on the server. These handlers only generate
+  // the receipt/balance PNG locally and return it as a base64 data URL so the
+  // renderer can upload it to Supabase Storage and enqueue the send.
+
+  ipcMain.handle('whatsapp:render-receipt-image', async (_event, { receiptData }) => {
+    try {
+      const imagePath = await generateReceiptImage(receiptData);
+      const buf = fs.readFileSync(imagePath);
+      try { fs.unlinkSync(imagePath); } catch (_) {}
+      return { success: true, dataUrl: `data:image/png;base64,${buf.toString('base64')}` };
+    } catch (err) {
+      log.error('[WA Handler] render-receipt-image error:', err.message);
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('whatsapp:render-balance-image', async (_event, { balanceData }) => {
+    try {
+      const imagePath = await generateBalanceImage(balanceData);
+      const buf = fs.readFileSync(imagePath);
+      try { fs.unlinkSync(imagePath); } catch (_) {}
+      return { success: true, dataUrl: `data:image/png;base64,${buf.toString('base64')}` };
+    } catch (err) {
+      log.error('[WA Handler] render-balance-image error:', err.message);
+      return { success: false, error: err.message };
+    }
+  });
+
+  // Read an arbitrary local file (e.g. a picked campaign attachment) as base64
+  // so the renderer can upload it to Storage.
+  ipcMain.handle('whatsapp:read-file-base64', async (_event, { path: filePath }) => {
+    try {
+      const buf = fs.readFileSync(filePath);
+      return { success: true, base64: buf.toString('base64') };
+    } catch (err) {
+      log.error('[WA Handler] read-file-base64 error:', err.message);
+      return { success: false, error: err.message };
+    }
+  });
+
   log.info('[WhatsApp] Handlers registered');
 }
 

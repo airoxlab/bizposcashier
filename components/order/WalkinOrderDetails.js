@@ -24,7 +24,8 @@ import {
   RefreshCw,
   CreditCard,
   Table2,
-  UserCheck
+  UserCheck,
+  ChevronDown
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { authManager } from '../../lib/authManager'
@@ -36,7 +37,7 @@ import ConvertToDeliveryModal from '../delivery/ConvertToDeliveryModal'
 import ConvertToTakeawayModal from '../delivery/ConvertToTakeawayModal'
 import { cacheManager } from '../../lib/cacheManager'
 import { useRouter } from 'next/navigation'
-import { getOrderItemsWithChanges } from '../../lib/utils/orderChangesTracker'
+import { getOrderItemsWithChanges, getCurrentUpdateVersion } from '../../lib/utils/orderChangesTracker'
 import SendBillButton from '../pos/SendBillButton'
 import { getBusinessDate } from '../../lib/utils/businessDayUtils'
 
@@ -71,6 +72,7 @@ export default function WalkinOrderDetails({
   // Loading state for the two print buttons — guards against rapid double-clicks
   const [isPrintingReceipt, setIsPrintingReceipt] = useState(false)
   const [isPrintingToken, setIsPrintingToken] = useState(false)
+  const [openPrintDropdown, setOpenPrintDropdown] = useState(null) // 'receipt' | 'token'
   const router = useRouter()
   const permissions = usePermissions()
   const contentRef = useRef(null)
@@ -78,7 +80,8 @@ export default function WalkinOrderDetails({
   // Prevents a slow fetch for order A from overwriting state after order B is selected.
   const fetchOrderIdRef = useRef(null)
 
-  const handlePrintReceipt = async () => {
+  const handlePrintReceipt = async (isUpdated = false) => {
+    setOpenPrintDropdown(null)
     if (isPrintingReceipt) return
     setIsPrintingReceipt(true)
     try {
@@ -98,6 +101,8 @@ export default function WalkinOrderDetails({
       if (!items.length) items = order.order_items || order.items || []
 
       const dailySerial = order.daily_serial || dailySerialManager.getOrCreateSerial(order.order_number) || null
+
+      const updateVersion = isUpdated ? getCurrentUpdateVersion(order.id) : null
 
       const orderData = {
         orderNumber: order.order_number,
@@ -119,6 +124,7 @@ export default function WalkinOrderDetails({
         tableName: order.tables?.table_name || (order.tables?.table_number ? `Table ${order.tables.table_number}` : null) || order.table_name || null,
         paymentMethod: order.payment_method || 'Unpaid',
         paymentTransactions: paymentTransactions.length > 0 ? paymentTransactions : undefined,
+        updateVersion,
         order_taker_name: order.order_takers?.name ||
           (order.order_taker_id ? (cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null) : null),
         cart: items.map(item => item.is_deal
@@ -158,7 +164,8 @@ export default function WalkinOrderDetails({
     }
   }
 
-  const handlePrintToken = async () => {
+  const handlePrintToken = async (isUpdated = false) => {
+    setOpenPrintDropdown(null)
     if (isPrintingToken) return
     setIsPrintingToken(true)
     try {
@@ -188,12 +195,13 @@ export default function WalkinOrderDetails({
         : { isDeal: false, name: item.product_name, size: item.variant_name, quantity: item.quantity, category_id: item.category_id || productCategoryMap[item.product_id] || null, deal_id: null, instructions: item.item_instructions || '' }
       )
 
-      // Enrich items with change markers (added/removed/modified) from order_item_changes
-      if (order.id) {
+      // Enrich items with change markers only when explicitly printing an update
+      if (isUpdated && order.id) {
         mappedItems = await getOrderItemsWithChanges(order.id, mappedItems)
       }
 
       const dailySerial = order.daily_serial || dailySerialManager.getOrCreateSerial(order.order_number) || null
+      const updateVersion = isUpdated ? getCurrentUpdateVersion(order.id) : null
 
       const orderData = {
         orderNumber: order.order_number,
@@ -207,6 +215,8 @@ export default function WalkinOrderDetails({
         order_taker_name: order.order_takers?.name ||
           (order.order_taker_id ? (cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null) : null),
         items: mappedItems,
+        updateVersion,
+        changesOnly: isUpdated,
       }
 
       const userProfileRaw = JSON.parse(localStorage.getItem('user_profile') || localStorage.getItem('user') || '{}')
@@ -921,7 +931,7 @@ export default function WalkinOrderDetails({
     <div className={`flex-1 flex flex-col ${isDark ? 'bg-gray-900' : 'bg-gray-50'} overflow-hidden`}>
       {/* Header */}
       <div className={`${classes.card} ${classes.shadow} shadow-sm ${classes.border} border-b p-3`}>
-        <div className="flex items-center justify-between gap-1 overflow-hidden">
+        <div className="flex items-center justify-between gap-1 overflow-visible">
           <div className="flex items-center gap-1.5 min-w-0 shrink overflow-hidden">
             <div className={`w-6 h-6 rounded-md shrink-0 ${isDark ? 'bg-blue-900/30' : 'bg-blue-100'} flex items-center justify-center`}>
               <Coffee className={`w-3 h-3 ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
@@ -942,31 +952,88 @@ export default function WalkinOrderDetails({
           </div>
 
           {/* Action Buttons — single row */}
-          <div className="flex items-center gap-0.5 shrink-0">
-              <button
-                onClick={handlePrintReceipt}
-                disabled={isPrintingReceipt}
-                className={`flex items-center gap-1 px-1.5 py-1.5 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap ${
-                  isPrintingReceipt
-                    ? 'bg-blue-400 cursor-not-allowed opacity-60'
-                    : 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800'
-                }`}
-              >
-                <Printer className={`w-3 h-3 ${isPrintingReceipt ? 'animate-pulse' : ''}`} />
-                {isPrintingReceipt ? 'Printing…' : 'Print'}
-              </button>
-              <button
-                onClick={handlePrintToken}
-                disabled={isPrintingToken}
-                className={`flex items-center gap-1 px-1.5 py-1.5 text-white rounded-md transition-colors text-xs font-medium whitespace-nowrap ${
-                  isPrintingToken
-                    ? 'bg-orange-300 cursor-not-allowed opacity-60'
-                    : 'bg-orange-500 hover:bg-orange-600 active:bg-orange-700'
-                }`}
-              >
-                <Printer className={`w-3 h-3 ${isPrintingToken ? 'animate-pulse' : ''}`} />
-                {isPrintingToken ? 'Printing…' : 'Token'}
-              </button>
+          <div className="flex items-center gap-0.5 shrink-0" onClick={() => setOpenPrintDropdown(null)}>
+              {/* Print split-dropdown */}
+              <div className="relative" onClick={e => e.stopPropagation()}>
+                <div className={`flex rounded-md overflow-visible ${isPrintingReceipt ? 'opacity-60' : ''}`}>
+                  <button
+                    onClick={() => handlePrintReceipt(false)}
+                    disabled={isPrintingReceipt}
+                    className={`flex items-center gap-1 pl-1.5 pr-1 py-1.5 text-white rounded-l-md transition-colors text-xs font-medium whitespace-nowrap ${
+                      isPrintingReceipt ? 'bg-blue-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800'
+                    }`}
+                  >
+                    <Printer className={`w-3 h-3 ${isPrintingReceipt ? 'animate-pulse' : ''}`} />
+                    {isPrintingReceipt ? 'Printing…' : 'Print'}
+                  </button>
+                  <button
+                    onClick={() => setOpenPrintDropdown(openPrintDropdown === 'receipt' ? null : 'receipt')}
+                    disabled={isPrintingReceipt}
+                    className={`px-1 py-1.5 text-white rounded-r-md border-l border-blue-500 transition-colors ${
+                      isPrintingReceipt ? 'bg-blue-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800'
+                    }`}
+                  >
+                    <ChevronDown className="w-3 h-3" />
+                  </button>
+                </div>
+                {openPrintDropdown === 'receipt' && (
+                  <div className={`absolute top-full left-0 mt-1 rounded-lg border shadow-lg z-50 overflow-hidden min-w-[160px] ${isDark ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-200'}`}>
+                    <button
+                      onClick={() => handlePrintReceipt(false)}
+                      className={`w-full px-3 py-2 text-xs text-left flex items-center gap-2 transition-colors ${isDark ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-50 text-gray-700'}`}
+                    >
+                      <Printer className="w-3 h-3" /> Print Receipt
+                    </button>
+                    <button
+                      onClick={() => handlePrintReceipt(true)}
+                      className={`w-full px-3 py-2 text-xs text-left flex items-center gap-2 transition-colors border-t ${isDark ? 'hover:bg-gray-700 text-orange-400 border-gray-700' : 'hover:bg-orange-50 text-orange-600 border-gray-100'}`}
+                    >
+                      <RefreshCw className="w-3 h-3" /> Print Updated Receipt
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Token split-dropdown */}
+              <div className="relative" onClick={e => e.stopPropagation()}>
+                <div className={`flex rounded-md overflow-visible ${isPrintingToken ? 'opacity-60' : ''}`}>
+                  <button
+                    onClick={() => handlePrintToken(false)}
+                    disabled={isPrintingToken}
+                    className={`flex items-center gap-1 pl-1.5 pr-1 py-1.5 text-white rounded-l-md transition-colors text-xs font-medium whitespace-nowrap ${
+                      isPrintingToken ? 'bg-orange-300 cursor-not-allowed' : 'bg-orange-500 hover:bg-orange-600 active:bg-orange-700'
+                    }`}
+                  >
+                    <Printer className={`w-3 h-3 ${isPrintingToken ? 'animate-pulse' : ''}`} />
+                    {isPrintingToken ? 'Printing…' : 'Token'}
+                  </button>
+                  <button
+                    onClick={() => setOpenPrintDropdown(openPrintDropdown === 'token' ? null : 'token')}
+                    disabled={isPrintingToken}
+                    className={`px-1 py-1.5 text-white rounded-r-md border-l border-orange-400 transition-colors ${
+                      isPrintingToken ? 'bg-orange-300 cursor-not-allowed' : 'bg-orange-500 hover:bg-orange-600 active:bg-orange-700'
+                    }`}
+                  >
+                    <ChevronDown className="w-3 h-3" />
+                  </button>
+                </div>
+                {openPrintDropdown === 'token' && (
+                  <div className={`absolute top-full left-0 mt-1 rounded-lg border shadow-lg z-50 overflow-hidden min-w-[160px] ${isDark ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-200'}`}>
+                    <button
+                      onClick={() => handlePrintToken(false)}
+                      className={`w-full px-3 py-2 text-xs text-left flex items-center gap-2 transition-colors ${isDark ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-50 text-gray-700'}`}
+                    >
+                      <Printer className="w-3 h-3" /> Print Token
+                    </button>
+                    <button
+                      onClick={() => handlePrintToken(true)}
+                      className={`w-full px-3 py-2 text-xs text-left flex items-center gap-2 transition-colors border-t ${isDark ? 'hover:bg-gray-700 text-orange-400 border-gray-700' : 'hover:bg-orange-50 text-orange-600 border-gray-100'}`}
+                    >
+                      <RefreshCw className="w-3 h-3" /> Print Updated Token
+                    </button>
+                  </div>
+                )}
+              </div>
               {/* Send Bill via WhatsApp (Customer Account only) */}
               <SendBillButton order={order} size="sm" />
               {/* Order type conversion buttons — Pending/Preparing/Ready only */}

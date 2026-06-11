@@ -30,6 +30,9 @@ const nextConfig = {
 
     // Optimize webpack for faster dev builds
     webpack: (config, { dev }) => {
+      // Alias WebSdk bare import → empty stub; real runtime loaded via <script> tag
+      config.resolve.alias = { ...config.resolve.alias, WebSdk: require.resolve('./lib/websdk-stub.js') }
+
       if (dev) {
         // Disable source maps in development for faster builds
         config.devtool = 'eval';
@@ -53,6 +56,10 @@ const nextConfig = {
     },
   } : {
     reactStrictMode: true,
+    webpack: (config) => {
+      config.resolve.alias = { ...config.resolve.alias, WebSdk: require.resolve('./lib/websdk-stub.js') }
+      return config
+    },
   }),
 
   // Skip type checking and linting during dev for speed

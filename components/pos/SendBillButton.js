@@ -19,6 +19,7 @@ import { supabase } from '../../lib/supabase'
 import { authManager } from '../../lib/authManager'
 import { permissionManager } from '../../lib/permissionManager'
 import { notify } from '../ui/NotificationSystem'
+import { getStatus as waGetStatus, enqueueTextAndWait, enqueueImageAndWait } from '../../lib/whatsappQueue'
 
 export default function SendBillButton({ order, size = 'md', className = '' }) {
   // 'idle' | 'queued' | 'sent'
@@ -108,26 +109,22 @@ export default function SendBillButton({ order, size = 'md', className = '' }) {
       return
     }
 
-    const isElectron = typeof window !== 'undefined' && !!window.electronAPI?.whatsapp
-    if (!isElectron) {
-      notify.error('WhatsApp only works in the desktop app')
-      setStatus('idle')
-      sendingRef.current = false
-      return
-    }
+    // Desktop is needed only to render the receipt image; text always works.
+    const canRenderImage =
+      typeof window !== 'undefined' && !!window.electronAPI?.whatsapp?.renderReceiptImage
 
     try {
-      // Check WhatsApp connection first
-      const { status: waStatus } = await window.electronAPI.whatsapp.getStatus()
+      const userId = authManager.getCurrentUser()?.id
+      if (!userId) throw new Error('Not logged in')
+
+      // Check WhatsApp connection first (centralized — server-side socket)
+      const { status: waStatus } = await waGetStatus(userId)
       if (waStatus !== 'connected') {
         notify.error('WhatsApp is not connected. Please connect in Settings > WhatsApp.')
         setStatus('idle')
         sendingRef.current = false
         return
       }
-
-      const userId = authManager.getCurrentUser()?.id
-      if (!userId) throw new Error('Not logged in')
 
       // Format phone
       let phone = (customerPhone || '').trim().replace(/[\s\-\.\(\)]/g, '')
@@ -279,7 +276,7 @@ export default function SendBillButton({ order, size = 'md', className = '' }) {
 
       // Send via WhatsApp — with receipt image if toggle is ON
       let result
-      if (sendReceiptImage && window.electronAPI?.whatsapp?.sendReceiptImage) {
+      if (sendReceiptImage && canRenderImage) {
         // Fetch extra order details for the receipt
         let subtotal = Number(order.subtotal || order.total_amount || 0)
         let discount = Number(order.discount_amount || 0)
@@ -303,9 +300,7 @@ export default function SendBillButton({ order, size = 'md', className = '' }) {
           } catch (_) {}
         }
 
-        result = await window.electronAPI.whatsapp.sendReceiptImage({
-          phone,
-          message,
+        const rendered = await window.electronAPI.whatsapp.renderReceiptImage({
           receiptData: {
             businessName,
             logoUrl: storeLogo,
@@ -325,8 +320,13 @@ export default function SendBillButton({ order, size = 'md', className = '' }) {
             paymentMethod: 'Customer Account',
           }
         })
+        if (rendered?.success && rendered.dataUrl) {
+          result = await enqueueImageAndWait({ restaurantId: userId, phone, message, dataUrl: rendered.dataUrl, filename: `receipt_${order.order_number || 'order'}.png` })
+        } else {
+          result = await enqueueTextAndWait({ restaurantId: userId, phone, message })
+        }
       } else {
-        result = await window.electronAPI.whatsapp.sendOrderMessage({ phone, message })
+        result = await enqueueTextAndWait({ restaurantId: userId, phone, message })
       }
 
       if (result?.success === false) {

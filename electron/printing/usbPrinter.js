@@ -649,7 +649,11 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
   const orderType = orderData.orderType ? orderData.orderType.toUpperCase() : 'WALKIN';
 
   {
-    const combined = [formattedSerial || '', orderType].filter(Boolean).join(' - ');
+    // Append version letter when this is an update token: #110(A), #110(B), etc.
+    const serialLabel = formattedSerial
+      ? (orderData.updateVersion ? `${formattedSerial}(${orderData.updateVersion})` : formattedSerial)
+      : null;
+    const combined = [serialLabel || '', orderType].filter(Boolean).join(' - ');
     commands.push(CMD.ALIGN_CENTER);
     commands.push(CMD.BOLD_ON);
     commands.push(CMD.DOUBLE_ON);
@@ -691,6 +695,10 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
   const kitchenOrderTakerName = orderData?.order_taker_name || null;
   if (kitchenOrderTakerName) {
     commands.push(leftRight('Order Taker:', kitchenOrderTakerName));
+  }
+
+  if (orderData.tableName) {
+    commands.push(leftRight('Table:', String(orderData.tableName)));
   }
 
   commands.push(drawLine('-'));
@@ -761,36 +769,29 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
       item => item.changeType && item.changeType !== 'unchanged'
     );
 
-    // Added items
-    const addedItems = changedItems.filter(i => i.changeType === 'added');
+    // Added items + qty-changed items both print as simple item lines.
+    // For qty-changed items: print only the ADDITIONAL qty (newQty - oldQty)
+    // so kitchen knows exactly how many more to make.
+    const addedItems = changedItems.filter(i => i.changeType === 'added' || i.changeType === 'modified');
     if (addedItems.length > 0) {
       commands.push(CMD.BOLD_ON);
       commands.push(leftText('NEW ITEMS:'));
       commands.push(CMD.BOLD_OFF);
       for (const item of addedItems) {
-        printItem(item, '+ ');
-      }
-    }
-
-    // Modified items (quantity changed)
-    const modifiedItems = changedItems.filter(i => i.changeType === 'modified');
-    if (modifiedItems.length > 0) {
-      if (addedItems.length > 0) commands.push(text('\n'));
-      commands.push(CMD.BOLD_ON);
-      commands.push(leftText('QTY CHANGED:'));
-      commands.push(CMD.BOLD_OFF);
-      for (const item of modifiedItems) {
-        let itemName = item.isDeal ? item.name : (item.size ? `${item.name} (${item.size})` : item.name);
-        const maxNameLength = PAPER_WIDTH - 6;
-        if (itemName.length > maxNameLength) itemName = itemName.substring(0, maxNameLength);
-        commands.push(leftRight(itemName, `${item.oldQuantity} > ${item.newQuantity}`));
+        if (item.changeType === 'modified') {
+          // Show how many MORE to cook: new qty − old qty
+          const delta = (item.newQuantity || item.quantity) - (item.oldQuantity || 0);
+          printItem({ ...item, quantity: delta }, '+ ');
+        } else {
+          printItem(item, '+ ');
+        }
       }
     }
 
     // Removed items
     const removedItems = changedItems.filter(i => i.changeType === 'removed');
     if (removedItems.length > 0) {
-      if (addedItems.length > 0 || modifiedItems.length > 0) commands.push(text('\n'));
+      if (addedItems.length > 0) commands.push(text('\n'));
       commands.push(CMD.BOLD_ON);
       commands.push(leftText('REMOVED:'));
       commands.push(CMD.BOLD_OFF);
@@ -800,28 +801,6 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
     }
 
     commands.push(drawLine('='));
-
-    // Bottom: RUNNING ORDER section (full current order)
-    commands.push(CMD.ALIGN_CENTER);
-    commands.push(CMD.BOLD_ON);
-    commands.push(text('RUNNING ORDER\n'));
-    commands.push(CMD.BOLD_OFF);
-    commands.push(drawLine('-'));
-    // Anchor alignment for the column header + item rows. Both are 42-char
-    // leftRight strings; under the same alignment they share an identical
-    // left edge so item names sit directly below "Item Name".
-    commands.push(CMD.ALIGN_CENTER);
-    commands.push(leftRight('Item Name', 'Qty'));
-    commands.push(drawLine('-'));
-
-    // Print all current items (exclude removed ones)
-    const currentItems = orderData.items.filter(i => i.changeType !== 'removed');
-    for (const item of currentItems) {
-      commands.push(CMD.ALIGN_CENTER);
-      printItem(item, '');
-    }
-
-    commands.push(drawLine('-'));
   } else {
     // ---- NORMAL ORDER LAYOUT ----
     commands.push(CMD.ALIGN_CENTER);
@@ -953,13 +932,20 @@ async function sendToWindowsPrinter(printerName, data) {
   const receiptFile = path.join(tempDir, `receipt_${ts}.prn`);
   const psFile = path.join(tempDir, `print_${ts}.ps1`);
 
+  // Pre-compiled assembly cache: first call compiles C# + saves DLL (~3s),
+  // every subsequent call loads the DLL (~200ms) — no recompilation.
+  // Versioned filename so stale DLLs from older code are automatically ignored.
+  const dllPath = path.join(os.tmpdir(), 'pos-rawprinter-v1.dll');
+  const dllExists = fs.existsSync(dllPath);
+  const safeDll = dllPath.replace(/'/g, "''");
+
   // PowerShell single-quoted strings treat backslashes literally — no escaping needed.
   // Only escape single quotes (by doubling them).
   const safePrinter = printerName.replace(/'/g, "''");
   const safeFile = receiptFile.replace(/'/g, "''");
 
-  const psScript = `
-Add-Type -TypeDefinition @'
+  // C# source shared between compile path and fallback
+  const csharpSource = `
 using System;
 using System.Runtime.InteropServices;
 
@@ -991,8 +977,26 @@ public class RawPrinter {
 
     [DllImport("winspool.drv", SetLastError=true)]
     public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBuf, int cbBuf, out int pcWritten);
-}
+}`.trim();
+
+  // Build Add-Type block: load from DLL if it exists (fast), otherwise compile and save DLL for next time
+  const addTypeBlock = dllExists
+    ? `# Load pre-compiled assembly (~200ms)
+try {
+    Add-Type -Path '${safeDll}' -ErrorAction Stop
+} catch {
+    # DLL missing or corrupt — fall back to inline compile
+    Add-Type -TypeDefinition @'
+${csharpSource}
 '@ -ErrorAction Stop
+}`
+    : `# First use — compile inline and save DLL for subsequent calls (~3s once)
+Add-Type -TypeDefinition @'
+${csharpSource}
+'@ -OutputAssembly '${safeDll}' -ErrorAction Stop`;
+
+  const psScript = `
+${addTypeBlock}
 
 $printerName = '${safePrinter}'
 $fileName = '${safeFile}'

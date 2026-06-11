@@ -36,6 +36,7 @@ import QRCode from 'qrcode'
 import { supabase } from '../../../lib/supabase'
 // import { authManager } from '../../../lib/authManager'
 import { authManager } from '../../../lib/authManager'
+import whatsappQueue from '../../../lib/whatsappQueue'
 import themeManager from '../../../lib/themeManager'
 import { notify } from '../../../components/ui/NotificationSystem'
 import ProtectedPage from '../../../components/ProtectedPage'
@@ -183,42 +184,39 @@ export function WhatsAppPanel() {
     loadSettings()
   }, [])
 
-  // ── Listen to Electron WhatsApp events ───────────────────
+  // ── Subscribe to the CENTRALIZED WhatsApp connection ──────
+  // Status/QR live in Supabase (whatsapp_connection) and are driven by the
+  // server-side socket, so every PC/role sees the same state. We poll the row
+  // and render the QR string the server produced.
   useEffect(() => {
-    if (!isElectron) return
-    const wa = window.electronAPI?.whatsapp
-    if (!wa) return
+    if (!userId) return
+    let prevConnected = false
+    const unsub = whatsappQueue.subscribeConnection(userId, async (conn) => {
+      const uiStatus = conn.status === 'qr' ? 'qr_ready' : (conn.status || 'disconnected')
+      setWaStatus(uiStatus)
 
-    wa.onStatus(({ status }) => setWaStatus(status))
-    wa.onQR(async ({ qr }) => {
-      try {
-        const url = await QRCode.toDataURL(qr, { width: 280, margin: 2, color: { dark: '#000000', light: '#ffffff' } })
-        setQrDataUrl(url)
-      } catch (e) {
-        console.error('QR gen error:', e)
+      if (conn.status === 'connected') {
+        setQrDataUrl(null)
+        setIsConnecting(false)
+        if (!prevConnected) notify.success('WhatsApp connected successfully!')
+        prevConnected = true
+      } else {
+        prevConnected = false
+        if (conn.qr_string) {
+          try {
+            const url = await QRCode.toDataURL(conn.qr_string, { width: 280, margin: 2, color: { dark: '#000000', light: '#ffffff' } })
+            setQrDataUrl(url)
+          } catch (e) {
+            console.error('QR gen error:', e)
+          }
+        } else {
+          setQrDataUrl(null)
+          if (conn.status === 'disconnected') setIsConnecting(false)
+        }
       }
     })
-    wa.onReady(() => {
-      setQrDataUrl(null)
-      setIsConnecting(false)
-      notify.success('WhatsApp connected successfully!')
-    })
-    wa.onDisconnected(() => {
-      setQrDataUrl(null)
-      setIsConnecting(false)
-    })
-    wa.onError(({ message }) => {
-      setIsConnecting(false)
-      notify.error(message || 'WhatsApp error')
-    })
-
-    // Get current status on mount
-    wa.getStatus()
-      .then(({ status }) => setWaStatus(status))
-      .catch(e => console.error('Failed to get WA status:', e))
-
-    return () => wa.removeListeners()
-  }, [isElectron])
+    return () => unsub()
+  }, [userId])
 
   async function loadSettings() {
     if (!userId) return
@@ -259,11 +257,13 @@ export function WhatsAppPanel() {
   }
 
   async function handleConnect() {
-    if (!isElectron) return notify.error('WhatsApp only works in the desktop app')
+    if (!userId) return notify.error('Not logged in')
     setIsConnecting(true)
     setWaStatus('connecting')
     try {
-      await window.electronAPI.whatsapp.connect()
+      // Ask the server to open the socket; the QR will arrive via the
+      // connection subscription above.
+      await whatsappQueue.requestConnect(userId)
     } catch (e) {
       console.error('WhatsApp connect error:', e)
       setIsConnecting(false)
@@ -273,11 +273,11 @@ export function WhatsAppPanel() {
   }
 
   async function handleDisconnect() {
-    if (!isElectron) return
-    await window.electronAPI.whatsapp.disconnect()
+    if (!userId) return
+    await whatsappQueue.requestDisconnect(userId)
     setQrDataUrl(null)
     setWaStatus('disconnected')
-    notify.success('WhatsApp disconnected')
+    notify.success('WhatsApp disconnect requested')
   }
 
   function insertVariable(variable) {
@@ -484,7 +484,7 @@ export function WhatsAppPanel() {
                     <div className={`flex items-start gap-3 p-4 rounded-xl border ${isDark ? 'bg-gray-700/40 border-gray-600/30' : 'bg-gray-50 border-gray-200'}`}>
                       <Info size={16} className={`${ts} flex-shrink-0 mt-0.5`} />
                       <p className={`${ts} text-xs leading-relaxed`}>
-                        Click <strong className={tp}>Connect</strong> to scan a QR code with your WhatsApp. The session is saved — you won't need to scan again after app restarts.
+                        Click <strong className={tp}>Connect</strong> to scan a QR code with your WhatsApp. The connection is shared across all your devices and staff — scan once and every PC stays connected, even after logout or restart.
                       </p>
                     </div>
                   )}
@@ -911,7 +911,7 @@ export function WhatsAppPanel() {
                 <div className="space-y-3 text-sm">
                   <div className={`flex items-center justify-between py-2 border-b ${isDark ? 'border-gray-700/40' : 'border-gray-200'}`}>
                     <span className={ts}>Session storage</span>
-                    <span className={`${tb} font-mono text-xs`}>%AppData%/BizPOS/whatsapp-baileys-auth</span>
+                    <span className={`${tb} font-mono text-xs`}>Cloud (shared across all devices)</span>
                   </div>
                   <div className={`flex items-center justify-between py-2 border-b ${isDark ? 'border-gray-700/40' : 'border-gray-200'}`}>
                     <span className={ts}>Auto-reconnect delay</span>
@@ -919,7 +919,7 @@ export function WhatsAppPanel() {
                   </div>
                   <div className="flex items-center justify-between py-2">
                     <span className={ts}>Session persistence</span>
-                    <span className={`${isDark ? 'text-green-400' : 'text-green-600'} font-semibold`}>Survives app restart</span>
+                    <span className={`${isDark ? 'text-green-400' : 'text-green-600'} font-semibold`}>Shared · survives logout & restart</span>
                   </div>
                 </div>
               </div>

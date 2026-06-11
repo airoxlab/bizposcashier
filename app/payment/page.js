@@ -44,7 +44,7 @@ import { triggerWhatsAppAutoSend } from '../../lib/whatsappAutoSend'
 import { notify } from '../../components/ui/NotificationSystem'
 import { supabase } from '../../lib/supabase'
 import { permissionManager } from '../../lib/permissionManager'
-import { getOrderItemsWithChanges } from '../../lib/utils/orderChangesTracker'
+import { getOrderItemsWithChanges, getCurrentUpdateVersion } from '../../lib/utils/orderChangesTracker'
 import LoyaltyRedemption from '../../components/pos/LoyaltyRedemption'
 import SplitPaymentModal from '../../components/pos/SplitPaymentModal'
 import paymentTransactionManager from '../../lib/paymentTransactionManager'
@@ -1752,6 +1752,7 @@ const handleThermalPrint = async () => {
   }
 }
 
+
 const handlePrintKitchenToken = async () => {
   if (!orderData || !orderNumber) {
     notify.error('No order data available for printing')
@@ -1865,6 +1866,11 @@ const handlePrintKitchenToken = async () => {
         ? (cacheManager.getOrderTakers().find(t => t.id === orderData.orderTakerId)?.name || null)
         : null)
 
+    // Determine version letter (A, B, C…) if this is an update print
+    const hasItemChanges = mappedItems.some(item => item.changeType && item.changeType !== 'unchanged')
+    const trackingId = orderData.existingOrderId || orderData.orderId
+    const updateVersion = (hasItemChanges && trackingId) ? getCurrentUpdateVersion(trackingId) : null
+
     // Prepare kitchen token data
     const kitchenTokenData = {
       orderNumber,
@@ -1876,7 +1882,8 @@ const handlePrintKitchenToken = async () => {
       specialNotes: orderData.orderInstructions || '',
       deliveryAddress: orderData.deliveryAddress || '',
       items: mappedItems,
-      order_taker_name: orderTakerForToken || null
+      order_taker_name: orderTakerForToken || null,
+      updateVersion: updateVersion || null
     }
 
     // Use printerManager to print kitchen token(s) with category/deal-based routing

@@ -3,10 +3,12 @@
 import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
-import { Coffee, RefreshCw, ArrowLeft, Table2, ClipboardList, X, Truck, AlertCircle, User, ShoppingBag, Layers, LayoutList, ChevronDown, ChevronRight, MapPin, CheckCircle, DollarSign, CreditCard, Wallet, Smartphone, Building2, Clock, Gift } from 'lucide-react'
+import { Coffee, RefreshCw, ArrowLeft, Table2, ClipboardList, X, Truck, AlertCircle, User, ShoppingBag, Layers, LayoutList, ChevronDown, ChevronRight, MapPin, CheckCircle, DollarSign, CreditCard, Wallet, Smartphone, Building2, Clock, Gift, Printer, UtensilsCrossed } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { authManager } from '../../lib/authManager'
 import { cacheManager } from '../../lib/cacheManager'
+import { printerManager } from '../../lib/printerManager'
+import { getOrderChanges, getOrderItemsWithChanges, getCurrentUpdateVersion } from '../../lib/utils/orderChangesTracker'
 import dailySerialManager from '../../lib/utils/dailySerialManager'
 import { getBusinessDate } from '../../lib/utils/businessDayUtils'
 
@@ -274,6 +276,91 @@ export default function WalkinOrdersSidebar({
   const [collapsedMenus, setCollapsedMenus] = useState({})
   const [quickPayModalOrder, setQuickPayModalOrder] = useState(null)
   const closeQuickPayModal = useCallback(() => setQuickPayModalOrder(null), [])
+  const [printingOrderId, setPrintingOrderId] = useState(null)
+  const [openDropdown, setOpenDropdown] = useState(null) // `${orderId}-receipt` | `${orderId}-token`
+
+  const _buildOrderItems = (order) =>
+    (order.order_items || []).map(item => ({
+      name: item.product_name || item.deal_name || '',
+      size: item.variant_name || '',
+      quantity: item.quantity,
+      price: parseFloat(item.final_price ?? item.variant_price ?? item.base_price ?? 0),
+      total: parseFloat(item.total_price ?? 0),
+      isDeal: item.is_deal || false,
+      dealProducts: item.deal_products || null,
+      notes: item.item_instructions || '',
+      category_id: item.category_id || null,
+      deal_id: item.deal_id || null,
+    }))
+
+  const handleSidebarPrintReceipt = async (order, e, isUpdated = false) => {
+    e.stopPropagation()
+    setOpenDropdown(null)
+    if (printingOrderId === order.id) return
+    setPrintingOrderId(order.id)
+    try {
+      const userProfile = authManager.getCurrentUser() || {}
+      const items = _buildOrderItems(order)
+      const subtotal = parseFloat(order.subtotal) || items.reduce((s, i) => s + i.total, 0)
+      const updateVersion = isUpdated ? getCurrentUpdateVersion(order.id) : null
+      await printerManager.printReceipt({
+        orderNumber: order.order_number,
+        dailySerial: order.daily_serial,
+        orderType: order.order_type,
+        tableName: order.tables?.table_name || order.tables?.table_number || null,
+        customer: order.customers || null,
+        items,
+        subtotal,
+        serviceCharge: parseFloat(order.service_charge) || 0,
+        serviceChargeAmount: parseFloat(order.service_charge_amount) || 0,
+        deliveryCharge: parseFloat(order.delivery_charge) || 0,
+        discountType: order.discount_type || null,
+        discountValue: parseFloat(order.discount_value) || 0,
+        discountAmount: parseFloat(order.discount_amount) || 0,
+        totalAmount: parseFloat(order.total_amount) || 0,
+        paymentMethod: order.payment_method || 'Cash',
+        updateVersion,
+        userProfile,
+      })
+    } catch (err) {
+      console.error('Sidebar receipt print failed:', err)
+    } finally {
+      setPrintingOrderId(null)
+    }
+  }
+
+  const handleSidebarPrintToken = async (order, e, isUpdated = false) => {
+    e.stopPropagation()
+    setOpenDropdown(null)
+    if (printingOrderId === order.id) return
+    setPrintingOrderId(order.id)
+    try {
+      const items = _buildOrderItems(order)
+      let updateVersion = null
+      let mappedItems = items
+      if (isUpdated) {
+        updateVersion = getCurrentUpdateVersion(order.id)
+        const changes = getOrderChanges(order.id)
+        const hasChanges = changes && (changes.added?.length || changes.removed?.length || changes.modified?.length)
+        if (hasChanges) mappedItems = getOrderItemsWithChanges(order.id, items)
+      }
+      await printerManager.printKitchenTokens({
+        orderId: order.id,
+        orderNumber: order.order_number,
+        dailySerial: order.daily_serial,
+        orderType: order.order_type,
+        tableName: order.tables?.table_name || order.tables?.table_number || null,
+        customer: order.customers || null,
+        items: mappedItems,
+        updateVersion,
+        changesOnly: isUpdated,
+      })
+    } catch (err) {
+      console.error('Sidebar token print failed:', err)
+    } finally {
+      setPrintingOrderId(null)
+    }
+  }
 
   const toggleMenuCollapse = (menuId) => {
     setCollapsedMenus(prev => ({ ...prev, [menuId]: !prev[menuId] }))
@@ -941,7 +1028,7 @@ export default function WalkinOrdersSidebar({
               >
                 {/* Clickable card area */}
                 <div
-                  onClick={() => onOrderSelect(order)}
+                  onClick={() => { setOpenDropdown(null); onOrderSelect(order) }}
                   className="p-3 cursor-pointer"
                 >
                   {/* Row 1: order number + amount */}

@@ -38,13 +38,15 @@ import {
   Zap,
   Package,
   Building2,
-  BookOpen
+  BookOpen,
+  Fingerprint
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
 import { cacheManager } from '../../lib/cacheManager'
 import { themeManager } from '../../lib/themeManager'
 import { authManager } from '../../lib/authManager'
+import whatsappQueue from '../../lib/whatsappQueue'
 import { webOrderNotificationManager } from '../../lib/webOrderNotification'
 import { networkPrintListener } from '../../lib/networkPrintListener'
 import ProtectedPage from '../../components/ProtectedPage'
@@ -278,14 +280,16 @@ export default function Dashboard() {
     }
   }, [router])
 
-  // WhatsApp status listener
+  // WhatsApp status — centralized server-side socket, shared across all PCs/roles.
+  // Map server 'qr' → 'qr_ready' so the indicator shows the connecting (yellow) state.
   useEffect(() => {
-    const isElectron = typeof window !== 'undefined' && !!window.electronAPI?.whatsapp
-    if (!isElectron) return
-    const wa = window.electronAPI.whatsapp
-    wa.getStatus().then(({ status }) => setWaStatus(status))
-    wa.onStatus(({ status }) => setWaStatus(status))
-    return () => wa.removeListeners()
+    const restaurantId = authManager.getCurrentUser()?.id
+    if (!restaurantId) return
+    const unsub = whatsappQueue.subscribeConnection(restaurantId, (conn) => {
+      const s = conn?.status === 'qr' ? 'qr_ready' : (conn?.status || 'disconnected')
+      setWaStatus(s)
+    })
+    return () => unsub()
   }, [])
 
   // Quick actions: fixed 8-column row, last slot is "Others" folder when overflow
@@ -583,6 +587,13 @@ export default function Dashboard() {
       gradient: 'from-blue-500 to-indigo-600',
       route: '/payroll',
       permissionKey: 'PAYROLL'
+    },
+    {
+      id: 'fingerprint',
+      title: 'Fingerprint',
+      icon: Fingerprint,
+      gradient: 'from-violet-500 to-purple-600',
+      route: '/fingerprint',
     },
 
   ]

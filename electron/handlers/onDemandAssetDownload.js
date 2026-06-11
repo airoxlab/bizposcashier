@@ -190,90 +190,84 @@ async function saveDownloadMeta(logoUrl, qrUrl) {
   }
 }
 
+// Deduplicates background refresh — parallel prints share one download, not N
+let _bgRefreshPromise = null;
+
+function _startBackgroundRefresh(logoUrl, qrUrl) {
+  if (_bgRefreshPromise) return;
+  _bgRefreshPromise = (async () => {
+    try {
+      const { LOGO_PATH, QR_PATH } = getPaths();
+      const downloads = [];
+      if (logoUrl) downloads.push(downloadFile(logoUrl, LOGO_PATH).catch(() => {}));
+      if (qrUrl)   downloads.push(downloadFile(qrUrl, QR_PATH).catch(() => {}));
+      await Promise.all(downloads);
+      await saveDownloadMeta(logoUrl, qrUrl);
+      console.log('✅ Background asset refresh complete');
+    } catch (e) {
+      console.warn('⚠️ Background asset refresh failed:', e.message);
+    } finally {
+      _bgRefreshPromise = null;
+    }
+  })();
+}
+
 /**
  * Ensure assets are available before printing.
- * Returns immediately with cached assets when available; downloads/processes otherwise.
+ *
+ * Stale-while-revalidate: if cached files exist on disk, return them immediately
+ * (printing is never blocked by a network download). If the files are stale or
+ * the source URL changed, a background refresh runs so the NEXT print gets fresh
+ * assets. Only the very first ever use (no files at all) waits for the download.
  */
 async function ensureAssets(logoUrl, qrUrl) {
-  console.log('🔍 ensureAssets called with:');
-  console.log('  - logoUrl:', logoUrl ? (logoUrl.startsWith('data:') ? `BASE64 (${logoUrl.length} chars)` : logoUrl) : 'NULL');
-  console.log('  - qrUrl:', qrUrl ? (qrUrl.length > 100 ? `${qrUrl.substring(0, 50)}...` : qrUrl) : 'NULL');
-
   ensureTempDir();
   const { LOGO_PATH, QR_PATH } = getPaths();
 
-  const isFresh = await areAssetsFresh(logoUrl, qrUrl);
   const logoExists = fs.existsSync(LOGO_PATH);
-  const qrExists = fs.existsSync(QR_PATH);
+  const qrExists   = fs.existsSync(QR_PATH);
+  const needsLogo  = !!logoUrl;
+  const needsQr    = !!qrUrl;
 
-  console.log('  - isFresh:', isFresh);
-  console.log('  - logoExists:', logoExists);
-  console.log('  - qrExists:', qrExists);
-
-  const needsLogo = !!logoUrl;
-  const needsQr = !!qrUrl;
-  const hasLogoIfNeeded = !needsLogo || logoExists;
-  const hasQrIfNeeded = !needsQr || qrExists;
-
-  if (isFresh && hasLogoIfNeeded && hasQrIfNeeded) {
+  // Files exist — return immediately, refresh in background if stale
+  if ((!needsLogo || logoExists) && (!needsQr || qrExists)) {
+    areAssetsFresh(logoUrl, qrUrl).then(isFresh => {
+      if (!isFresh) _startBackgroundRefresh(logoUrl, qrUrl);
+    }).catch(() => {});
     console.log('⚡ Using cached assets (instant)');
     return {
       logo: logoExists ? LOGO_PATH : null,
-      qr: qrExists ? QR_PATH : null,
+      qr:   qrExists   ? QR_PATH   : null,
       cached: true
     };
   }
 
-  console.log('📥 Processing assets (first print or updated)...');
+  // No files yet — must download now (first-ever use only)
+  console.log('📥 No cached assets — downloading for first time...');
   const downloads = [];
-
   if (logoUrl) {
     downloads.push(
       downloadFile(logoUrl, LOGO_PATH)
-        .then(() => {
-          console.log('✅ Logo processed successfully');
-          return { type: 'logo', path: LOGO_PATH, success: true };
-        })
-        .catch(err => {
-          console.error('❌ Logo processing failed:', err.message);
-          return { type: 'logo', success: false, error: err.message };
-        })
+        .then(() => ({ type: 'logo', path: LOGO_PATH, success: true }))
+        .catch(err => ({ type: 'logo', success: false, error: err.message }))
     );
   }
-
   if (qrUrl) {
     downloads.push(
       downloadFile(qrUrl, QR_PATH)
-        .then(() => {
-          console.log('✅ QR processed successfully');
-          return { type: 'qr', path: QR_PATH, success: true };
-        })
-        .catch(err => {
-          console.error('❌ QR processing failed:', err.message);
-          return { type: 'qr', success: false, error: err.message };
-        })
+        .then(() => ({ type: 'qr', path: QR_PATH, success: true }))
+        .catch(err => ({ type: 'qr', success: false, error: err.message }))
     );
   }
-
-  // Wait for both downloads/processing steps
   const downloadResults = await Promise.all(downloads);
-
-  // Process results
   const results = {};
-  downloadResults.forEach(result => {
-    if (result.success) {
-      results[result.type] = result.path;
-      console.log(`✅ ${result.type} processed`);
-    } else {
-      console.error(`❌ ${result.type} failed:`, result.error);
-    }
+  downloadResults.forEach(r => {
+    if (r.success) { results[r.type] = r.path; console.log(`✅ ${r.type} processed`); }
+    else           { console.error(`❌ ${r.type} failed:`, r.error); }
   });
-
-  // Save compact meta (async, non-blocking)
   saveDownloadMeta(logoUrl, qrUrl).catch(err =>
     console.error('❌ saveDownloadMeta failed:', err.message)
   );
-
   return results;
 }
 

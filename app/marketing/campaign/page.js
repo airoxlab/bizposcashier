@@ -12,6 +12,7 @@ import { supabase } from '../../../lib/supabase'
 import { authManager } from '../../../lib/authManager'
 import { notify } from '../../../components/ui/NotificationSystem'
 import ProtectedPage from '../../../components/ProtectedPage'
+import whatsappQueue from '../../../lib/whatsappQueue'
 
 const TEMPLATE_VARS = ['{full_name}', '{phone}']
 
@@ -46,14 +47,12 @@ function CampaignPage() {
     if (userId) loadCustomers()
   }, [userId])
 
-  // Listen to WA status
+  // Listen to centralized WA status (server-side socket, shared across PCs)
   useEffect(() => {
-    if (!isElectron) return
-    const wa = window.electronAPI.whatsapp
-    wa.getStatus().then(({ status }) => setWaStatus(status))
-    wa.onStatus(({ status }) => setWaStatus(status))
-    return () => wa.removeListeners()
-  }, [isElectron])
+    if (!userId) return
+    const unsub = whatsappQueue.subscribeConnection(userId, (conn) => setWaStatus(conn.status || 'disconnected'))
+    return () => unsub()
+  }, [userId])
 
   // Filter customers
   useEffect(() => {
@@ -158,7 +157,7 @@ function CampaignPage() {
     if (!campaignName.trim()) return notify.error('Enter a campaign name')
     if (!message.trim()) return notify.error('Enter a message')
     if (selectedIds.size === 0) return notify.error('Select at least one customer')
-    if (!isElectron) return notify.error('Campaign sending requires the desktop app')
+    if (mediaFile && !isElectron) return notify.error('Sending media requires the desktop app')
     if (waStatus !== 'connected') return notify.error('WhatsApp is not connected. Go to Settings → WhatsApp to connect.')
 
     const recipients = customers.filter(c => selectedIds.has(c.id) && !c.is_blocked && c.phone)
@@ -210,6 +209,27 @@ function CampaignPage() {
       return
     }
 
+    // Upload the campaign attachment ONCE (reused for every recipient) ──
+    let campaignMedia = null
+    if (mediaFile?.path) {
+      try {
+        const rf = await window.electronAPI.whatsapp.readFileBase64({ path: mediaFile.path })
+        if (rf?.success) {
+          const filename = mediaFile.name || 'media'
+          const mime = whatsappQueue.guessMime(filename)
+          const kind = mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : 'document'
+          const mediaPath = await whatsappQueue.uploadMediaBase64(userId, rf.base64, mime, filename)
+          campaignMedia = { mediaPath, mime, filename, kind }
+        } else {
+          throw new Error(rf?.error || 'read failed')
+        }
+      } catch (e) {
+        notify.error('Failed to upload campaign media')
+        await supabase.from('whatsapp_campaigns').delete().eq('id', campaignId)
+        return
+      }
+    }
+
     // Start sending loop
     setIsSending(true)
     stopRef.current = false
@@ -233,11 +253,17 @@ function CampaignPage() {
         .replace(/\{phone\}/g, c.phone || '')
 
       try {
-        const result = await window.electronAPI.whatsapp.sendCampaignMessage({
-          phone: c.phone,
-          message: finalMsg,
-          mediaPath: mediaFile?.path || null,
-        })
+        const result = campaignMedia
+          ? await whatsappQueue.enqueueExistingMediaAndWait({
+              restaurantId: userId,
+              phone: c.phone,
+              message: finalMsg,
+              mediaPath: campaignMedia.mediaPath,
+              mime: campaignMedia.mime,
+              filename: campaignMedia.filename,
+              kind: campaignMedia.kind,
+            })
+          : await whatsappQueue.enqueueTextAndWait({ restaurantId: userId, phone: c.phone, message: finalMsg })
 
         if (result.success) {
           sent++

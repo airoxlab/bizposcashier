@@ -35,6 +35,7 @@ import { authManager } from '../../../lib/authManager'
 import { permissionManager } from '../../../lib/permissionManager'
 import themeManager from '../../../lib/themeManager'
 import { notify } from '../../../components/ui/NotificationSystem'
+import { enqueueTextAndWait, enqueueImageAndWait } from '../../../lib/whatsappQueue'
 
 // ─── Template variable chips for account messages ─────────────────────────────
 const TEMPLATE_VARS = [
@@ -392,10 +393,8 @@ export function CustomerAccountPanel() {
           .replace(/\{business_name\}/g, businessName)
 
         let result
-        if (bulkSendReceiptImage && window.electronAPI?.whatsapp?.sendBalanceImage) {
-          result = await window.electronAPI.whatsapp.sendBalanceImage({
-            phone,
-            message,
+        if (bulkSendReceiptImage && window.electronAPI?.whatsapp?.renderBalanceImage) {
+          const rendered = await window.electronAPI.whatsapp.renderBalanceImage({
             balanceData: {
               businessName,
               logoUrl: storeLogo,
@@ -405,8 +404,11 @@ export function CustomerAccountPanel() {
               date: new Date().toLocaleDateString('en-PK', { day: '2-digit', month: 'short', year: 'numeric' }),
             }
           })
+          result = rendered?.success && rendered.dataUrl
+            ? await enqueueImageAndWait({ restaurantId: userId, phone, message, dataUrl: rendered.dataUrl, filename: 'balance.png' })
+            : await enqueueTextAndWait({ restaurantId: userId, phone, message })
         } else {
-          result = await window.electronAPI.whatsapp.sendOrderMessage({ phone, message })
+          result = await enqueueTextAndWait({ restaurantId: userId, phone, message })
         }
 
         if (result?.success === false) throw new Error(result?.error || 'Send failed')
@@ -563,12 +565,6 @@ export function CustomerAccountPanel() {
       return
     }
 
-    const isElectron = typeof window !== 'undefined' && !!window.electronAPI?.whatsapp
-    if (!isElectron) {
-      notify.error('WhatsApp only works in the desktop app')
-      return
-    }
-
     setIsSending(true)
     let resolvedMessage = manualMessage
     try {
@@ -599,12 +595,11 @@ export function CustomerAccountPanel() {
 
       let result
       if (manualImage) {
-        result = await window.electronAPI.whatsapp.sendCampaignMessage({ phone, message: resolvedMessage || '', mediaPath: null })
-      } else if (manualSendReceiptImage && window.electronAPI?.whatsapp?.sendBalanceImage) {
+        // (Preserves prior behavior: attachment preview sends the text only.)
+        result = await enqueueTextAndWait({ restaurantId: userId, phone, message: resolvedMessage || '' })
+      } else if (manualSendReceiptImage && window.electronAPI?.whatsapp?.renderBalanceImage) {
         // Send balance statement image with message as caption
-        result = await window.electronAPI.whatsapp.sendBalanceImage({
-          phone,
-          message: resolvedMessage,
+        const rendered = await window.electronAPI.whatsapp.renderBalanceImage({
           balanceData: {
             businessName,
             logoUrl: storeLogo,
@@ -614,8 +609,11 @@ export function CustomerAccountPanel() {
             date: new Date().toLocaleDateString('en-PK', { day: '2-digit', month: 'short', year: 'numeric' }),
           }
         })
+        result = rendered?.success && rendered.dataUrl
+          ? await enqueueImageAndWait({ restaurantId: userId, phone, message: resolvedMessage, dataUrl: rendered.dataUrl, filename: 'balance.png' })
+          : await enqueueTextAndWait({ restaurantId: userId, phone, message: resolvedMessage })
       } else {
-        result = await window.electronAPI.whatsapp.sendOrderMessage({ phone, message: resolvedMessage })
+        result = await enqueueTextAndWait({ restaurantId: userId, phone, message: resolvedMessage })
       }
 
       if (result?.success !== false) {
@@ -701,11 +699,6 @@ export function CustomerAccountPanel() {
   }
 
   async function handleResend(log) {
-    const isElectron = typeof window !== 'undefined' && !!window.electronAPI?.whatsapp
-    if (!isElectron) {
-      notify.error('WhatsApp only works in the desktop app')
-      return
-    }
     if (!log.phone) {
       notify.error('No phone number stored in this log')
       return
@@ -749,7 +742,8 @@ export function CustomerAccountPanel() {
         .replace(/\{balance\}/g, customerBalance.toLocaleString('en-PK'))
         .replace(/\{business_name\}/g, businessName)
 
-      const result = await window.electronAPI.whatsapp.sendOrderMessage({
+      const result = await enqueueTextAndWait({
+        restaurantId: userId,
         phone: log.phone,
         message: resolvedResendMessage,
       })

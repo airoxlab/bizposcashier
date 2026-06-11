@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Store, Lock, Phone, Eye, EyeOff, Printer } from 'lucide-react'
+import { Store, Lock, Phone, Eye, EyeOff } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { authManager } from '../lib/authManager'
 import { themeManager } from '../lib/themeManager'
@@ -15,7 +15,6 @@ export default function LoginPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   const [isCheckingAuth, setIsCheckingAuth] = useState(true)
-  const [printerAssetsStatus, setPrinterAssetsStatus] = useState('')
   const router = useRouter()
 
   useEffect(() => {
@@ -76,11 +75,10 @@ export default function LoginPage() {
     e.preventDefault()
     setIsLoading(true)
     setError('')
-    setPrinterAssetsStatus('')
 
     try {
       const cleanPhone = phone.replace(/\s+/g, '')
-      
+
       if (cleanPhone.length < 11) {
         setError('Please enter a valid 11-digit phone number')
         setIsLoading(false)
@@ -93,59 +91,19 @@ export default function LoginPage() {
         return
       }
 
-      // Show printer assets loading if in Electron
-      if (typeof window !== 'undefined' && window.electron) {
-        setPrinterAssetsStatus('Downloading printer assets...')
-      }
-
-      // Use phone as-is without adding country code
       const result = await authManager.login(cleanPhone, password)
-      
+
       if (result.success) {
-        // Download and cache printer assets on login
-        if (typeof window !== 'undefined' && window.electron) {
-          try {
-            setPrinterAssetsStatus('⏳ Downloading printer assets...')
-
-            // Get user profile data with logo and QR URLs
-            const userProfile = result.user || JSON.parse(localStorage.getItem('user') || '{}')
-
-            if (userProfile.store_logo || userProfile.qr_code) {
-              // Trigger asset download and caching
-              const downloadResult = await window.electron.invoke('download-store-assets', {
-                logoUrl: userProfile.store_logo,
-                qrUrl: userProfile.qr_code
-              })
-
-              if (downloadResult.success) {
-                setPrinterAssetsStatus('✓ Printer assets cached successfully')
-              } else {
-                setPrinterAssetsStatus('⚠ Some assets may not have downloaded')
-              }
-            } else {
-              setPrinterAssetsStatus('⚠ No logo/QR configured')
-            }
-          } catch (err) {
-            console.error('Error downloading printer assets:', err)
-            setPrinterAssetsStatus('⚠ Asset download failed')
-          }
-        }
-
-        // Small delay to show success message
-        setTimeout(() => {
-          cacheManager.resetSession()
-          router.push('/dashboard')
-        }, 500)
+        cacheManager.resetSession()
+        router.push('/dashboard')
       } else {
         setError(result.error || 'Invalid phone number or password')
         setIsLoading(false)
-        setPrinterAssetsStatus('')
       }
     } catch (err) {
       console.error('Login error:', err)
       setError('An error occurred. Please try again.')
       setIsLoading(false)
-      setPrinterAssetsStatus('')
     }
   }
 
@@ -180,23 +138,6 @@ export default function LoginPage() {
                 className="bg-red-50 border border-red-200 rounded-lg p-3 text-red-700 text-sm"
               >
                 {error}
-              </motion.div>
-            )}
-
-            {printerAssetsStatus && (
-              <motion.div
-                initial={{ opacity: 0, y: -10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className={`border rounded-lg p-3 text-sm flex items-center gap-2 ${
-                  printerAssetsStatus.includes('✓') 
-                    ? 'bg-green-50 border-green-200 text-green-700'
-                    : printerAssetsStatus.includes('⚠')
-                    ? 'bg-yellow-50 border-yellow-200 text-yellow-700'
-                    : 'bg-blue-50 border-blue-200 text-blue-700'
-                }`}
-              >
-                <Printer className="w-4 h-4" />
-                {printerAssetsStatus}
               </motion.div>
             )}
 

@@ -249,14 +249,16 @@ function createWindow() {
   });
 
   // ── WhatsApp Auto-Connect on Startup ─────────────────────────────────────
-  // Runs ONCE on first load. If a saved session exists and the user hasn't
-  // manually disconnected, auto-connect so messages can be sent without
-  // visiting the WhatsApp settings page.
-  // Because initialize() is reentrant-safe (returns the same promise if
-  // already running), clicking Connect from settings while auto-connect is
-  // in progress will simply join the existing attempt instead of fighting it.
+  // DISABLED: WhatsApp is now a CENTRALIZED server-side socket (one per
+  // restaurant on the admin server). This PC must NOT open its own Baileys
+  // socket — doing so would consume a 4-device slot and conflict with the
+  // shared session. Connection is driven from Supabase (whatsapp_connection)
+  // and sends go through whatsapp_outbox. The local client is kept only for
+  // local image rendering (whatsapp:render-* handlers), which need no socket.
+  const USE_LOCAL_WHATSAPP = false;
   let whatsappAutoConnectDone = false;
   mainWindow.webContents.on('did-finish-load', () => {
+    if (!USE_LOCAL_WHATSAPP) return;
     if (whatsappAutoConnectDone) return; // only once per window lifetime
     whatsappAutoConnectDone = true;
 
@@ -463,6 +465,97 @@ app.whenReady().then(() => {
   });
 });
 
+
+// ─── Fingerprint comparison via dpfj.dll (DigitalPersona) ────────────────────
+// Raw intermediate data from DpHost WebSocket cannot be fed to dpfj_compare
+// directly — it must first be converted to a DPFJ FMD struct via dpfj_create_fmd.
+// DPFJ_FMD struct layout: { uint32 cbEffective; uint8 data[cbEffective-4]; }
+let _fingerFuncs = null
+
+function getFingerFunctions() {
+  if (_fingerFuncs) return _fingerFuncs
+  try {
+    const koffi = require('koffi')
+    const lib = koffi.load('dpfj.dll')
+    _fingerFuncs = {
+      koffi,
+      // Convert raw captured intermediate data → proper DPFJ FMD struct
+      createFmd: lib.func('dpfj_create_fmd', 'int', [
+        'uint32',                           // DPFPDD image format
+        'void *',                           // input buffer
+        'uint32',                           // input size
+        'uint32',                           // desired FMD format
+        koffi.out(koffi.pointer('void *')), // ppFMD [out] — allocated by callee
+      ]),
+      freeFmd: lib.func('dpfj_free_fmd', 'int', ['void *']),
+      compare: lib.func('dpfj_compare', 'int', [
+        'uint32', 'void *', 'uint32',
+        'uint32', 'void *', 'uint32',
+        'uint32',
+        koffi.out(koffi.pointer('uint32')), // achieved_far [out]
+        koffi.out(koffi.pointer('int32')),  // result [out] — 0=no match, >0=match
+      ]),
+    }
+    log.info('[Fingerprint] dpfj.dll loaded')
+    return _fingerFuncs
+  } catch (err) {
+    log.error('[Fingerprint] dpfj.dll load failed:', err.message)
+    return null
+  }
+}
+
+// Convert one intermediate buffer → DPFJ FMD pointer.
+// DpHost's SampleFormat.Intermediate = 2, but DPFPDD_IMG_FMT_INTERMEDIATE = 1.
+// Try 1 first (native value), fall back to 2 (DpHost protocol value) if rejected.
+function createFmdFromBuf(f, buf) {
+  const DPFJ_FMD_DP_PRE_REG_FEATURES = 0x00270000
+  const fmdPtr = [null]
+  for (const fmt of [1, 2]) {
+    const s = f.createFmd(fmt, buf, buf.length, DPFJ_FMD_DP_PRE_REG_FEATURES, fmdPtr)
+    if (s === 0) return { fmdPtr, fmtUsed: fmt }
+    log.info(`[Fingerprint] create_fmd(fmt=${fmt}) → 0x${s.toString(16)}`)
+  }
+  return null
+}
+
+ipcMain.handle('fingerprint:compare', async (_event, storedB64, liveB64) => {
+  const f = getFingerFunctions()
+  if (!f) return { matched: false, error: 'dpfj.dll not available — install DigitalPersona drivers' }
+
+  const DPFJ_FMD_DP_PRE_REG_FEATURES = 0x00270000
+  const buf1 = Buffer.from(storedB64, 'base64')
+  const buf2 = Buffer.from(liveB64, 'base64')
+
+  const r1 = createFmdFromBuf(f, buf1)
+  const r2 = createFmdFromBuf(f, buf2)
+
+  try {
+    if (!r1) return { matched: false, error: 'create_fmd failed for stored template' }
+    if (!r2) return { matched: false, error: 'create_fmd failed for live sample' }
+
+    // Read cbEffective (first uint32) to get total FMD struct size
+    const fmd1Size = f.koffi.decode(r1.fmdPtr[0], 'uint32')
+    const fmd2Size = f.koffi.decode(r2.fmdPtr[0], 'uint32')
+    log.info(`[Fingerprint] FMD sizes: stored=${fmd1Size} live=${fmd2Size}`)
+
+    const achievedFar = [0]
+    const result = [0]
+    const status = f.compare(
+      DPFJ_FMD_DP_PRE_REG_FEATURES, r1.fmdPtr[0], fmd1Size,
+      DPFJ_FMD_DP_PRE_REG_FEATURES, r2.fmdPtr[0], fmd2Size,
+      0, achievedFar, result
+    )
+
+    log.info(`[Fingerprint] compare: status=0x${status.toString(16)} result=${result[0]} far=${achievedFar[0]}`)
+    return { matched: status === 0 && result[0] > 0, status, far: achievedFar[0] }
+  } catch (err) {
+    log.error('[Fingerprint] compare error:', err.message)
+    return { matched: false, error: err.message }
+  } finally {
+    try { if (r1?.fmdPtr[0]) f.freeFmd(r1.fmdPtr[0]) } catch {}
+    try { if (r2?.fmdPtr[0]) f.freeFmd(r2.fmdPtr[0]) } catch {}
+  }
+})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

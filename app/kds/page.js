@@ -46,7 +46,7 @@ import { cacheManager } from '../../lib/cacheManager'
 import { printerManager } from '../../lib/printerManager'
 import dailySerialManager from '../../lib/utils/dailySerialManager'
 import { getTodaysBusinessDate, filterOrdersByBusinessDate, getBusinessDayRange } from '../../lib/utils/businessDayUtils'
-import { getOrderChanges, getOrderItemsWithChanges } from '../../lib/utils/orderChangesTracker'
+import { getOrderChanges, getOrderItemsWithChanges, getCurrentUpdateVersion } from '../../lib/utils/orderChangesTracker'
 import { triggerWhatsAppAutoSend } from '../../lib/whatsappAutoSend'
 import NotificationSystem, { notify } from '../../components/ui/NotificationSystem'
 import ProtectedPage from '../../components/ProtectedPage'
@@ -818,8 +818,12 @@ export default function KDSPage() {
     themeManager.setTheme(newTheme)
   }
 
+
   // Print kitchen docket for an order
-  const printDocket = async (order, e) => {
+  // options.changesOnly = true  → prints only what changed (with version letter)
+  // options.changesOnly = false → prints full clean current order
+  const printDocket = async (order, e, options = {}) => {
+    const { changesOnly = false, updateVersion = null } = options
     if (e) {
       e.stopPropagation()
     }
@@ -940,14 +944,16 @@ export default function KDSPage() {
         }
       })
 
-      // Enrich items with change tracking (changeType, oldQuantity, newQuantity)
-      if (order.id) {
+      // For update prints: apply change markers so printer shows only what changed.
+      // For normal full prints: skip so kitchen gets the clean current order.
+      if (changesOnly && order.id) {
         mappedItems = await getOrderItemsWithChanges(order.id, mappedItems)
       }
 
       const orderData = {
         orderNumber: order.order_number,
         dailySerial: order.daily_serial || null,
+        updateVersion: updateVersion || null,
         orderType: order.order_type || 'walkin',
         customerName: order.customers?.full_name || '',
         customerPhone: order.customers?.phone || '',
@@ -1153,6 +1159,16 @@ export default function KDSPage() {
             <Printer className={`w-3.5 h-3.5 ${printingOrderIds.has(order.id) ? 'animate-pulse' : ''}`} />
             {printingOrderIds.has(order.id) ? 'Printing…' : 'Print'}
           </button>
+          {isUpdated && (
+            <button
+              onClick={(e) => { e.stopPropagation(); printDocket(order, null, { changesOnly: true, updateVersion: getCurrentUpdateVersion(order.id) }) }}
+              disabled={printingOrderIds.has(order.id)}
+              className={`flex-1 py-1.5 rounded text-xs font-medium flex items-center justify-center gap-1 bg-orange-500 hover:bg-orange-600 text-white ${printingOrderIds.has(order.id) ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Update
+            </button>
+          )}
           {config.nextStatus && (
             <button
               onClick={(e) => {
@@ -1386,6 +1402,16 @@ export default function KDSPage() {
                       <Printer className={`w-3 h-3 ${printingIds?.has(order.id) ? 'animate-pulse' : ''}`} />
                       {printingIds?.has(order.id) ? 'Printing…' : 'Print'}
                     </button>
+                    {isUpdated && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onPrintDocket(order, null, { changesOnly: true, updateVersion: getCurrentUpdateVersion(order.id) }) }}
+                        disabled={printingIds?.has(order.id)}
+                        className={`flex-1 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 bg-orange-500 hover:bg-orange-600 text-white ${printingIds?.has(order.id) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        Update
+                      </button>
+                    )}
                     {config.nextStatus && (
                       <button
                         onClick={(e) => {
@@ -1905,6 +1931,18 @@ export default function KDSPage() {
                     <Printer className={`w-5 h-5 mr-2 ${printingOrderIds.has(selectedOrder.id) ? 'animate-pulse' : ''}`} />
                     {printingOrderIds.has(selectedOrder.id) ? 'Printing…' : 'Print Docket'}
                   </button>
+
+                  {/* Print Update Token - only for modified orders */}
+                  {updatedOrderIds.has(selectedOrder.id) && (
+                    <button
+                      onClick={() => printDocket(selectedOrder, null, { changesOnly: true, updateVersion: getCurrentUpdateVersion(selectedOrder.id) })}
+                      disabled={printingOrderIds.has(selectedOrder.id)}
+                      className={`px-6 py-3 rounded-xl font-semibold shadow-lg flex items-center bg-orange-500 hover:bg-orange-600 text-white ${printingOrderIds.has(selectedOrder.id) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      <RefreshCw className="w-5 h-5 mr-2" />
+                      Print Update
+                    </button>
+                  )}
 
                   {/* Status Action Button - Only show if there's a next status */}
                   {getStatusConfig(selectedOrder.order_status).nextStatus && (

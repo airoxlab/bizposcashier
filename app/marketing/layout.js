@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { permissionManager } from '../../lib/permissionManager'
 import { authManager } from '../../lib/authManager'
+import whatsappQueue from '../../lib/whatsappQueue'
 
 const NAV_ITEMS = [
   {
@@ -54,11 +55,13 @@ export default function MarketingLayout({ children }) {
   const [waStatus, setWaStatus] = useState('disconnected')
 
   useEffect(() => {
-    const wa = window.electronAPI?.whatsapp
-    if (!wa) return
-    wa.getStatus().then(({ status }) => setWaStatus(status))
-    wa.onStatus(({ status }) => setWaStatus(status))
-    return () => wa.removeListeners?.()
+    const restaurantId = authManager.getCurrentUser()?.id
+    if (!restaurantId) return
+    const unsub = whatsappQueue.subscribeConnection(restaurantId, (conn) => {
+      const s = conn?.status === 'qr' ? 'qr_ready' : (conn?.status || 'disconnected')
+      setWaStatus(s)
+    })
+    return () => unsub()
   }, [])
 
   const isConnected = waStatus === 'connected'
