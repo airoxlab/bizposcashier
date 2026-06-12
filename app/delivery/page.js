@@ -70,6 +70,7 @@ export default function DeliveryPage() {
   const [theme, setTheme] = useState('light')
   const [isReopenedOrder, setIsReopenedOrder] = useState(false)
   const [originalOrderId, setOriginalOrderId] = useState(null)
+  const [isPlacingOrder, setIsPlacingOrder] = useState(false)
 
   // View state management
   const [currentView, setCurrentView] = useState('products')
@@ -2332,13 +2333,18 @@ export default function DeliveryPage() {
   const handleOrderAndPay = async () => {
     console.log('🔵 [Delivery] handleOrderAndPay called')
 
+    if (isPlacingOrder) return
+    setIsPlacingOrder(true)
+
     if (cart.length === 0) {
       notify.warning('Please add items to cart before proceeding')
+      setIsPlacingOrder(false)
       return
     }
 
     if (requireCustomer && !customer) {
       notify.warning('Customer is required for delivery orders — please select a customer')
+      setIsPlacingOrder(false)
       return
     }
 
@@ -2466,12 +2472,16 @@ export default function DeliveryPage() {
       }
     }
 
-    console.log('🔵 [Delivery] Saving order_data to localStorage')
-    orderPayload.sourcePage = 'delivery'
-    localStorage.setItem('order_data', JSON.stringify(orderPayload))
-    console.log('🔵 [Delivery] Navigating to payment page')
-    notify.info('Proceeding to payment...')
-    router.push('/payment')
+    try {
+      console.log('🔵 [Delivery] Saving order_data to localStorage')
+      orderPayload.sourcePage = 'delivery'
+      localStorage.setItem('order_data', JSON.stringify(orderPayload))
+      console.log('🔵 [Delivery] Navigating to payment page')
+      notify.info('Proceeding to payment...')
+      router.push('/payment')
+    } finally {
+      setIsPlacingOrder(false)
+    }
   }
 
   const classes = themeManager.getClasses()
@@ -2607,6 +2617,7 @@ export default function DeliveryPage() {
         onRemoveItem={removeCartItem}
         onShowCustomerForm={() => setShowCustomerForm(true)}
         onOrderAndPay={handleOrderAndPay}
+        isPlacingOrder={isPlacingOrder}
         onClearCart={handleClearCart}
         calculateSubtotal={calculateSubtotal}
         calculateTotal={calculateTotal}

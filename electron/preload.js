@@ -162,6 +162,10 @@ const api = {
   // Fingerprint template comparison via dpfj.dll
   compareFingerprints: (storedB64, liveB64) => ipcRenderer.invoke('fingerprint:compare', storedB64, liveB64),
 
+  // PRA e-IMS fiscalization — token stays in main process, never exposed to renderer
+  praSubmit: (data) => ipcRenderer.invoke('pra:submit', data),
+  praEnsureQr: (data) => ipcRenderer.invoke('pra:ensure-qr', data),
+
   platform: process.platform,
   isElectron: true
 };

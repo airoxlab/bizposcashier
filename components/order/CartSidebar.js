@@ -39,6 +39,7 @@ export default function CartSidebar({
   onOrderTakerChange,
   requireOrderTaker = false,
   onUpdateItemDiscount,
+  isPlacingOrder = false,
 }) {
   const [showInstructionPanel, setShowInstructionPanel] = useState(false)
   const [draftInstruction, setDraftInstruction] = useState('')
@@ -819,14 +820,28 @@ export default function CartSidebar({
 
           {/* Checkout Button */}
           <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            onClick={onOrderAndPay}
-            className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2.5 rounded-lg shadow-lg hover:shadow-xl transition-all duration-200"
+            whileHover={isPlacingOrder ? {} : { scale: 1.02 }}
+            whileTap={isPlacingOrder ? {} : { scale: 0.98 }}
+            onClick={isPlacingOrder ? undefined : onOrderAndPay}
+            disabled={isPlacingOrder}
+            className={`w-full text-white font-bold py-2.5 rounded-lg shadow-lg transition-all duration-200 ${
+              isPlacingOrder
+                ? 'bg-green-700 opacity-75 cursor-not-allowed'
+                : 'bg-green-600 hover:bg-green-700 hover:shadow-xl'
+            }`}
           >
             <div className="flex items-center justify-center text-sm">
-              <ShoppingCart className="w-4 h-4 mr-1.5" />
-              Order & Pay Rs {parseFloat(calculateTotal()).toFixed(2)}
+              {isPlacingOrder ? (
+                <>
+                  <div className="w-4 h-4 mr-1.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Processing...
+                </>
+              ) : (
+                <>
+                  <ShoppingCart className="w-4 h-4 mr-1.5" />
+                  Order & Pay Rs {parseFloat(calculateTotal()).toFixed(2)}
+                </>
+              )}
             </div>
           </motion.button>
         </div>

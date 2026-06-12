@@ -118,10 +118,21 @@ export default function NewOrderPage() {
   const [splitPaymentOrder, setSplitPaymentOrder] = useState(null)
   const [showSuccessModal, setShowSuccessModal] = useState(false)
   const [completedOrderData, setCompletedOrderData] = useState(null)
+  const successTimerRef = useRef(null)
+  useEffect(() => {
+    if (showSuccessModal) {
+      clearTimeout(successTimerRef.current)
+      successTimerRef.current = setTimeout(() => setShowSuccessModal(false), 3000)
+    } else {
+      clearTimeout(successTimerRef.current)
+    }
+    return () => clearTimeout(successTimerRef.current)
+  }, [showSuccessModal])
   const [isPrinting, setIsPrinting] = useState(false)
 
   // Reopened/modified order state
   const [isReopenedOrder, setIsReopenedOrder] = useState(false)
+  const [isPlacingOrder, setIsPlacingOrder] = useState(false)
   const [modifyingOrderId, setModifyingOrderId] = useState(null)
   const [modifyingOrderNumber, setModifyingOrderNumber] = useState(null)
   const [modifyingDailySerial, setModifyingDailySerial] = useState(null)
@@ -718,17 +729,23 @@ export default function NewOrderPage() {
   }
 
   const handleOrderAndPay = () => {
+    if (isPlacingOrder) return
+    setIsPlacingOrder(true)
+
     if (cart.length === 0) {
       notify.warning('Please add items to cart before proceeding')
+      setIsPlacingOrder(false)
       return
     }
     const activeTabDef = ORDER_TABS.find(t => t.id === activeOrderType)
     if (activeTabDef && !permissions.hasPermission(activeTabDef.permissionKey)) {
       notify.error(`You don't have permission to place ${activeTabDef.label} orders`)
+      setIsPlacingOrder(false)
       return
     }
     if (activeOrderType === 'walkin' && requireOrderTaker && !selectedOrderTaker) {
       notify.warning('Please select an order taker before proceeding')
+      setIsPlacingOrder(false)
       return
     }
     // Per-tab "require customer" from admin settings
@@ -737,6 +754,7 @@ export default function NewOrderPage() {
         : activeOrderType === 'takeaway' ? 'takeaway'
         : 'delivery'
       notify.warning(`Customer is required for ${typeLabel} orders — please select a customer`)
+      setIsPlacingOrder(false)
       return
     }
     const tab = ORDER_TABS.find(t => t.id === activeOrderType)
@@ -835,11 +853,15 @@ export default function NewOrderPage() {
       orderData.detailedChanges = changes
     }
 
-    localStorage.setItem('order_data', JSON.stringify(orderData))
-    // Do NOT clear cart here — payment page clears it on success.
-    // If user comes back from payment, cart is preserved.
-    notify.info('Proceeding to payment...')
-    router.push('/payment')
+    try {
+      localStorage.setItem('order_data', JSON.stringify(orderData))
+      // Do NOT clear cart here — payment page clears it on success.
+      // If user comes back from payment, cart is preserved.
+      notify.info('Proceeding to payment...')
+      router.push('/payment')
+    } finally {
+      setIsPlacingOrder(false)
+    }
   }
 
   const classes = themeManager.getClasses()
@@ -1735,6 +1757,7 @@ export default function NewOrderPage() {
         onUpdateQuantity={updateCartItemQuantity}
         onRemoveItem={removeCartItem}
         onOrderAndPay={handleOrderAndPay}
+        isPlacingOrder={isPlacingOrder}
         onClearCart={handleClearCart}
         calculateSubtotal={calculateSubtotal}
         calculateTotal={calculateTotal}

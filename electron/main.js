@@ -66,6 +66,7 @@ const { registerAssetHandlers } = require('./handlers/assetHandlers');
 const { registerBackupHandlers } = require('./handlers/backupHandler');
 const { registerImageHandlers, getImageDir } = require('./handlers/imageHandler');
 const { registerMobilePrintServer } = require('./printing/mobilePrintServer');
+const { registerPRAHandlers } = require('./handlers/praHandler');
 
 let mainWindow;
 
@@ -375,6 +376,7 @@ app.whenReady().then(() => {
   registerBackupHandlers(ipcMain);
   registerImageHandlers(ipcMain);
   registerMobilePrintServer();
+  registerPRAHandlers(ipcMain);
 
   // File picker for campaign media
   ipcMain.handle('dialog:pick-file', async (_event, options = {}) => {

@@ -53,6 +53,7 @@ export default function WalkInPage() {
   const [theme, setTheme] = useState('light')
   const [isReopenedOrder, setIsReopenedOrder] = useState(false)
   const [originalOrderId, setOriginalOrderId] = useState(null)
+  const [isPlacingOrder, setIsPlacingOrder] = useState(false)
 
   // View state management
   const [currentView, setCurrentView] = useState('products') // 'products', 'variant', 'deal', 'tables', 'orders'
@@ -2731,21 +2732,27 @@ export default function WalkInPage() {
     console.log('🔵 [Walkin] isReopenedOrder:', isReopenedOrder)
     console.log('🔵 [Walkin] originalOrderId:', originalOrderId)
 
+    if (isPlacingOrder) return
+    setIsPlacingOrder(true)
+
     if (cart.length === 0) {
       console.warn('🚫 [Walkin] Blocked: cart is empty')
       notify.warning('Please add items to cart before proceeding')
+      setIsPlacingOrder(false)
       return
     }
 
     if (requireOrderTaker && !selectedOrderTaker) {
       console.warn('🚫 [Walkin] Blocked: requireOrderTaker is true but no order taker selected')
       notify.warning('Please select an order taker before proceeding')
+      setIsPlacingOrder(false)
       return
     }
 
     if (requireCustomer && !customer) {
       console.warn('🚫 [Walkin] Blocked: requireCustomer is true but no customer selected. Check admin settings → Customer Requirement → Walk-in')
       notify.warning('Customer is required for walk-in orders — please select a customer')
+      setIsPlacingOrder(false)
       return
     }
 
@@ -2867,12 +2874,15 @@ export default function WalkInPage() {
       }
     }
 
-    console.log('🔵 [Walkin] Saving order_data to localStorage')
-    orderData.sourcePage = 'walkin'
-    localStorage.setItem('order_data', JSON.stringify(orderData))
-    console.log('🔵 [Walkin] Navigating to payment page')
-    // Removed toast notification - too many notifications
-    router.push('/payment')
+    try {
+      console.log('🔵 [Walkin] Saving order_data to localStorage')
+      orderData.sourcePage = 'walkin'
+      localStorage.setItem('order_data', JSON.stringify(orderData))
+      console.log('🔵 [Walkin] Navigating to payment page')
+      router.push('/payment')
+    } finally {
+      setIsPlacingOrder(false)
+    }
   }
 
   const classes = themeManager.getClasses()
@@ -3021,6 +3031,7 @@ export default function WalkInPage() {
         onRemoveItem={removeCartItem}
         onShowCustomerForm={() => setShowCustomerForm(true)}
         onOrderAndPay={handleOrderAndPay}
+        isPlacingOrder={isPlacingOrder}
         onClearCart={handleClearCart}
         calculateSubtotal={calculateSubtotal}
         calculateTotal={calculateTotal}

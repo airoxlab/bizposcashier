@@ -557,14 +557,13 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
   const showFooterSection = userProfile?.show_footer_section !== false;
 
   if (showFooterSection) {
-    // QR Code (if available)
+    // 1. Business QR — always first in footer
     if (assets && assets.qr && fs.existsSync(assets.qr)) {
       try {
         commands.push(CMD.ALIGN_CENTER);
         const qrData = await imageToEscPos(assets.qr, 200);
         if (qrData) {
           commands.push(qrData);
-          // Breathing room below QR before the review message / hashtags
           commands.push(CMD.FEED);
           commands.push(CMD.FEED);
         }
@@ -572,20 +571,52 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
         console.error('QR processing error:', e.message);
       }
     }
+  }
 
-    // Review message (configurable via receipt_review_message; hidden if blank)
+  // 2. PRA TAX INVOICE BLOCK — after business QR, before hashtags
+  if (orderData?.pra?.invoice_number) {
+    const pra = orderData.pra;
+    commands.push(drawLine('-'));
+    commands.push(CMD.ALIGN_CENTER);
+    commands.push(CMD.BOLD_ON);
+    commands.push(text('*** PRA TAX INVOICE ***\n'));
+    commands.push(CMD.BOLD_OFF);
+    commands.push(CMD.ALIGN_LEFT);
+    commands.push(leftRight('Fiscal Invoice No:', pra.invoice_number));
+    commands.push(leftRight(`Taxable Amount:`, `Rs ${parseFloat(pra.sale_value || 0).toFixed(0)}`));
+    commands.push(leftRight(`Tax (${pra.tax_rate}%):`, `Rs ${parseFloat(pra.tax_charged || 0).toFixed(0)}`));
+    commands.push(CMD.BOLD_ON);
+    commands.push(leftRight('Total incl. Tax:', `Rs ${parseFloat(pra.bill_amount || 0).toFixed(0)}`));
+    commands.push(CMD.BOLD_OFF);
+    if (pra.qr_path && fs.existsSync(pra.qr_path)) {
+      try {
+        commands.push(CMD.ALIGN_CENTER);
+        const qrData = await imageToEscPos(pra.qr_path, 200);
+        if (qrData) {
+          commands.push(qrData);
+          commands.push(CMD.FEED);
+        }
+      } catch (e) {
+        console.error('[PRA] QR print error:', e.message);
+      }
+    }
+    commands.push(CMD.ALIGN_CENTER);
+    commands.push(text('Scan to verify at PRA\n'));
+    commands.push(CMD.ALIGN_LEFT);
+    commands.push(drawLine('-'));
+  }
+
+  // 3. Hashtags / review message — always last before thank-you
+  if (showFooterSection) {
     const reviewMsg = userProfile?.receipt_review_message;
     if (reviewMsg) {
       commands.push(CMD.ALIGN_CENTER);
       commands.push(text(reviewMsg + '\n'));
     }
 
-    // Hashtags
     const hashtag1 = userProfile?.hashtag1 || '';
     const hashtag2 = userProfile?.hashtag2 || '';
     if (hashtag1 || hashtag2) {
-      // Always insert a blank line above hashtags so they aren't crammed against
-      // whatever printed above (QR / review message / etc.).
       commands.push(CMD.FEED);
       const hashtagLine = [hashtag1, hashtag2].filter(Boolean).join(' ');
       commands.push(CMD.ALIGN_CENTER);

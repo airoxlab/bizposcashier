@@ -54,6 +54,7 @@ export default function TakeawayPage() {
   const [isLoading, setIsLoading] = useState(() => !cacheManager.isReady())
   const [theme, setTheme] = useState('light')
   const [isReopenedOrder, setIsReopenedOrder] = useState(false)
+  const [isPlacingOrder, setIsPlacingOrder] = useState(false)
   const [originalOrderId, setOriginalOrderId] = useState(null)
 
   // View state management
@@ -2150,13 +2151,18 @@ export default function TakeawayPage() {
   const handleOrderAndPay = async () => {
     console.log('🔵 [Takeaway] handleOrderAndPay called')
 
+    if (isPlacingOrder) return
+    setIsPlacingOrder(true)
+
     if (cart.length === 0) {
       notify.warning('Please add items to cart before proceeding')
+      setIsPlacingOrder(false)
       return
     }
 
     if (requireCustomer && !customer) {
       notify.warning('Customer is required for takeaway orders — please select a customer')
+      setIsPlacingOrder(false)
       return
     }
 
@@ -2262,12 +2268,16 @@ export default function TakeawayPage() {
       }
     }
 
-    console.log('🔵 [Takeaway] Saving order_data to localStorage')
-    orderData.sourcePage = 'takeaway'
-    localStorage.setItem('order_data', JSON.stringify(orderData))
-    console.log('🔵 [Takeaway] Navigating to payment page')
-    notify.info('Proceeding to payment...')
-    router.push('/payment')
+    try {
+      console.log('🔵 [Takeaway] Saving order_data to localStorage')
+      orderData.sourcePage = 'takeaway'
+      localStorage.setItem('order_data', JSON.stringify(orderData))
+      console.log('🔵 [Takeaway] Navigating to payment page')
+      notify.info('Proceeding to payment...')
+      router.push('/payment')
+    } finally {
+      setIsPlacingOrder(false)
+    }
   }
 
   const classes = themeManager.getClasses()
@@ -2402,6 +2412,7 @@ export default function TakeawayPage() {
         onRemoveItem={removeCartItem}
         onShowCustomerForm={() => setShowCustomerForm(true)}
         onOrderAndPay={handleOrderAndPay}
+        isPlacingOrder={isPlacingOrder}
         onClearCart={handleClearCart}
         calculateSubtotal={calculateSubtotal}
         calculateTotal={calculateTotal}

@@ -42,6 +42,7 @@ import {
   Gift,
   BarChart2,
   UserCheck,
+  Send,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabase";
@@ -218,6 +219,12 @@ export default function OrdersPage() {
   const [customerEditForm, setCustomerEditForm] = useState({ name: '', phone: '', address: '' });
   const [savingCustomerEdit, setSavingCustomerEdit] = useState(false);
 
+  // PRA e-IMS fiscalization
+  const [praSettings, setPraSettings] = useState(null);
+  const [showPRAModal, setShowPRAModal] = useState(false);
+  const [praPaymentMode, setPraPaymentMode] = useState(null);
+  const [praSubmitting, setPraSubmitting] = useState(false);
+
   const cancellationReasons = [
     "Customer requested cancellation",
     "Out of stock items",
@@ -266,6 +273,16 @@ export default function OrdersPage() {
         .single()
         .then(({ data }) => {
           if (data) setShowDispatchButton(data.show_dispatch_button !== false)
+        })
+
+      // Fetch PRA settings — only non-sensitive fields, token stays server-side
+      supabase
+        .from('pra_settings')
+        .select('is_enabled, cash_tax_rate, card_tax_rate, environment')
+        .eq('user_id', userData.id)
+        .maybeSingle()
+        .then(({ data }) => {
+          if (data) setPraSettings(data)
         })
     }
 
@@ -565,6 +582,13 @@ export default function OrdersPage() {
               order_source,
               original_order_source,
               is_approved,
+              pra_invoice_number,
+              pra_status,
+              pra_payment_mode,
+              pra_sale_value,
+              pra_tax_rate,
+              pra_tax_charged,
+              pra_bill_amount,
               customers (
                 id,
                 full_name,
@@ -1801,15 +1825,161 @@ export default function OrdersPage() {
     router.push(routes[order.order_type] || "/walkin");
   };
 
-  const handlePrintReceipt = async () => {
-    if (!selectedOrder) return;
+  const handlePushToPRA = async (paymentMode) => {
+    if (!selectedOrder || !window.electronAPI?.praSubmit) return;
+    setPraSubmitting(true);
+    try {
+      const result = await window.electronAPI.praSubmit({
+        order_id: selectedOrder.id,
+        user_id: user.id,
+        payment_mode: paymentMode,
+      });
+      if (result.success) {
+        const updatedOrder = {
+          ...selectedOrder,
+          pra_invoice_number: result.invoice_number,
+          pra_status: 'filed',
+          pra_payment_mode: paymentMode,
+          pra_sale_value: result.total_sale_value,
+          pra_tax_rate: result.tax_rate,
+          pra_tax_charged: result.total_tax_charged,
+          pra_bill_amount: result.total_bill_amount,
+        };
+        setSelectedOrder(updatedOrder);
+        setOrders(prev => prev.map(o =>
+          o.id === selectedOrder.id
+            ? { ...o, pra_invoice_number: result.invoice_number, pra_status: 'filed' }
+            : o
+        ));
+        setShowPRAModal(false);
+        showSuccess('PRA Filed Successfully', `Invoice: ${result.invoice_number}`);
+      } else if (result.already_filed) {
+        setShowPRAModal(false);
+        alert(result.error);
+      } else {
+        alert(result.error || 'PRA filing failed. Please try again.');
+      }
+    } catch (err) {
+      alert('PRA error: ' + err.message);
+    } finally {
+      setPraSubmitting(false);
+    }
+  };
+
+  const handlePrintPRAReceipt = async (orderOverride, praResultOverride) => {
+    const ord = orderOverride || selectedOrder;
+    if (!ord?.pra_invoice_number) return;
+    try {
+      setIsPrinting(true);
+      const praResult = praResultOverride || ord._pra_result || {};
+
+      // Ensure QR file exists — regenerates if missing after restart
+      let qrPath = praResult.qr_path || null;
+      if (!qrPath && window.electronAPI?.praEnsureQr) {
+        qrPath = await window.electronAPI.praEnsureQr({ invoice_number: ord.pra_invoice_number });
+      }
+
+      const taxRate = praSettings
+        ? (ord.pra_payment_mode === 2 ? parseFloat(praSettings.card_tax_rate) : parseFloat(praSettings.cash_tax_rate))
+        : 16;
+      const subtotalNum = parseFloat(ord.subtotal || 0);
+      const taxCharged = praResult.total_tax_charged || Math.round(subtotalNum * taxRate / 100 * 100) / 100;
+      const billAmount = praResult.total_bill_amount || (subtotalNum + taxCharged);
+
+      let printItems = [];
+      if (ord.id && cacheManager.checkOnlineStatus()) {
+        const { data } = await supabase.from('order_items').select('*').eq('order_id', ord.id).order('created_at');
+        printItems = data || [];
+      }
+      if (!printItems.length) printItems = ord.order_items || [];
+
+      const printer = await printerManager.getPrinterForPrinting();
+      if (!printer) return;
+
+      const orderData = {
+        orderNumber: ord.order_number,
+        dailySerial: ord.daily_serial || null,
+        orderType: ord.order_type,
+        customer: ord.customers,
+        deliveryAddress: ord.delivery_address || ord.customers?.addressline,
+        orderInstructions: ord.order_instructions,
+        total: ord.total_amount,
+        subtotal: ord.subtotal,
+        deliveryCharges: ord.delivery_charges || 0,
+        discountAmount: ord.discount_amount || 0,
+        loyaltyDiscountAmount: 0,
+        loyaltyPointsRedeemed: 0,
+        serviceChargeAmount: parseFloat(ord.service_charge_amount || 0),
+        serviceChargeType: parseFloat(ord.service_charge_percentage || 0) > 0 ? 'percentage' : 'fixed',
+        serviceChargeValue: parseFloat(ord.service_charge_percentage || 0),
+        tableName: ord.tables?.table_name || '',
+        cart: printItems.map(item => ({
+          isDeal: !!item.is_deal,
+          productName: item.product_name,
+          variantName: item.variant_name,
+          quantity: item.quantity,
+          totalPrice: item.total_price,
+          finalPrice: item.final_price,
+          itemDiscountAmount: parseFloat(item.item_discount_amount) || 0,
+          itemInstructions: item.item_instructions || null,
+        })),
+        paymentMethod: ord.payment_method || 'Cash',
+        pra: {
+          invoice_number: ord.pra_invoice_number,
+          qr_path: qrPath,
+          tax_rate: taxRate,
+          sale_value: subtotalNum,
+          tax_charged: taxCharged,
+          bill_amount: billAmount,
+        },
+      };
+
+      const userProfileRaw = JSON.parse(localStorage.getItem('user_profile') || localStorage.getItem('user') || '{}');
+      const userRaw = JSON.parse(localStorage.getItem('user') || '{}');
+      const localLogo = localStorage.getItem('store_logo_local');
+      const localQr = localStorage.getItem('qr_code_local');
+      const resolveBool = (key, def = true) => {
+        const v = userProfileRaw?.[key] !== undefined ? userProfileRaw[key] : userRaw?.[key];
+        if (v === false || v === 'false') return false;
+        if (v === true || v === 'true') return true;
+        return def;
+      };
+
+      const userProfile = {
+        store_name: userProfileRaw?.store_name || userRaw?.store_name || '',
+        store_address: userProfileRaw?.store_address || userRaw?.store_address || '',
+        phone: userProfileRaw?.phone || userRaw?.phone || '',
+        store_logo: localLogo || userProfileRaw?.store_logo || null,
+        qr_code: localQr || userProfileRaw?.qr_code || null,
+        hashtag1: userProfileRaw?.hashtag1 || '',
+        hashtag2: userProfileRaw?.hashtag2 || '',
+        show_footer_section: resolveBool('show_footer_section'),
+        show_logo_on_receipt: resolveBool('show_logo_on_receipt'),
+        show_business_name_on_receipt: resolveBool('show_business_name_on_receipt'),
+        show_powered_by_airoxlab: resolveBool('show_powered_by_airoxlab'),
+        phone_secondary: userProfileRaw?.phone_secondary || '',
+        receipt_review_message: userProfileRaw?.receipt_review_message || '',
+        receipt_footer_message: userProfileRaw?.receipt_footer_message || '',
+        cashier_name: ord.cashier_id ? ord.cashiers?.name : null,
+      };
+
+      await printerManager.printReceipt(orderData, userProfile, printer);
+    } catch (err) {
+      console.error('[PRA Print]', err);
+    } finally {
+      setIsPrinting(false);
+    }
+  };
+
+  const handlePrintReceipt = async (printOrderOverride = null) => {
+    if (!selectedOrder && !printOrderOverride) return;
 
     try {
       setIsPrinting(true);
 
-      // Capture the order we're printing for — selectedOrder state may change
-      // if the user clicks another order while the async print is in progress.
-      const printOrder = selectedOrder;
+      // Accept an explicit order override for cases where React state hasn't
+      // settled yet (e.g. auto-print immediately after PRA filing).
+      const printOrder = printOrderOverride || selectedOrder;
 
       if (!user?.id) {
         setIsPrinting(false);
@@ -1922,6 +2092,25 @@ export default function OrdersPage() {
       if (printOrder.payment_method === 'Split' && paymentTransactions.length > 0) {
         orderData.paymentTransactions = paymentTransactions;
         console.log('✅ Including payment transactions in print data:', paymentTransactions);
+      }
+
+      // Inject PRA tax block only when PRA toggle is on and order has been filed.
+      // If toggle is off or order was never pushed, receipt prints as normal.
+      if (praSettings?.is_enabled && printOrder.pra_invoice_number) {
+        let praQrPath = null;
+        if (window.electronAPI?.praEnsureQr) {
+          praQrPath = await window.electronAPI.praEnsureQr({
+            invoice_number: printOrder.pra_invoice_number
+          }).catch(() => null);
+        }
+        orderData.pra = {
+          invoice_number: printOrder.pra_invoice_number,
+          qr_path: praQrPath,
+          tax_rate: parseFloat(printOrder.pra_tax_rate || 16),
+          sale_value: parseFloat(printOrder.pra_sale_value || printOrder.subtotal || 0),
+          tax_charged: parseFloat(printOrder.pra_tax_charged || 0),
+          bill_amount: parseFloat(printOrder.pra_bill_amount || 0),
+        };
       }
 
       // Get user profile with all fields including hashtags
@@ -2643,11 +2832,20 @@ export default function OrdersPage() {
                             </div>
                           )}
                         </div>
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusConfig.badge}`}
-                        >
-                          {order.order_status}
-                        </span>
+                        <div className="flex items-center gap-1">
+                          {order.pra_invoice_number && (
+                            <span className={`px-1.5 py-0.5 rounded-full text-xs font-semibold ${
+                              isDark ? 'bg-sky-900/40 text-sky-400' : 'bg-sky-100 text-sky-700'
+                            }`}>
+                              PRA
+                            </span>
+                          )}
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusConfig.badge}`}
+                          >
+                            {order.order_status}
+                          </span>
+                        </div>
                       </div>
 
                       {/* Show table info for walkin orders */}
@@ -2797,6 +2995,20 @@ export default function OrdersPage() {
                 </div>
 
                 <div className="flex items-center space-x-2">
+                  {/* Print PRA Receipt Button — only when PRA toggle is on and order has been filed */}
+                  {praSettings?.is_enabled && selectedOrder.pra_invoice_number && (
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => handlePrintReceipt()}
+                      disabled={isPrinting}
+                      className="flex items-center space-x-1.5 px-3 py-2 bg-sky-500 hover:bg-sky-600 disabled:bg-gray-400 text-white rounded-lg transition-all font-medium text-sm"
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                      <span>{isPrinting ? "Printing..." : "PRA Receipt"}</span>
+                    </motion.button>
+                  )}
+
                   {/* Print Receipt Button */}
                   <motion.button
                     whileHover={{ scale: 1.02 }}
@@ -3045,6 +3257,30 @@ export default function OrdersPage() {
                               <span>Re-Open Order</span>
                             </button>
                           )}
+                          {/* Push to PRA — only when PRA is enabled and order is Completed and not yet filed */}
+                          {praSettings?.is_enabled &&
+                            selectedOrder.order_status === 'Completed' &&
+                            !selectedOrder.pra_invoice_number && (
+                              <button
+                                onClick={() => { setShowPRAModal(true); setShowActionMenu(null); }}
+                                className={`w-full px-4 py-2 text-left hover:${
+                                  isDark ? "bg-gray-700" : "bg-gray-50"
+                                } flex items-center space-x-3 text-sm text-sky-600 transition-colors`}
+                              >
+                                <Send className="w-4 h-4" />
+                                <span>Push to PRA</span>
+                              </button>
+                            )}
+                          {/* Show filed indicator when already pushed */}
+                          {praSettings?.is_enabled &&
+                            selectedOrder.pra_invoice_number && (
+                              <div
+                                className={`w-full px-4 py-2 flex items-center space-x-3 text-sm text-green-600`}
+                              >
+                                <CheckCircle className="w-4 h-4" />
+                                <span>PRA Filed ✓</span>
+                              </div>
+                            )}
                           {permissions.hasPermission('CANCEL_ORDER') &&
                             selectedOrder.order_status !== "Cancelled" &&
                             selectedOrder.order_status !== "Completed" && (
@@ -4628,6 +4864,97 @@ export default function OrdersPage() {
                 {savingCustomerEdit ? 'Saving...' : 'Save'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* PRA e-IMS Payment Mode Selection Modal */}
+      {showPRAModal && selectedOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => { if (!praSubmitting) { setShowPRAModal(false); setPraPaymentMode(null); } }}
+          />
+          <div className={`relative w-full max-w-sm rounded-2xl shadow-2xl p-6 ${isDark ? "bg-gray-800 border border-gray-700" : "bg-white border border-gray-200"}`}>
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-sky-100 flex items-center justify-center">
+                  <Send className="w-5 h-5 text-sky-600" />
+                </div>
+                <div>
+                  <h3 className={`font-bold text-lg ${isDark ? "text-white" : "text-gray-900"}`}>Push to PRA</h3>
+                  <p className={`text-xs ${isDark ? "text-gray-400" : "text-gray-500"}`}>Order #{selectedOrder.order_number}</p>
+                </div>
+              </div>
+              {!praSubmitting && (
+                <button
+                  onClick={() => { setShowPRAModal(false); setPraPaymentMode(null); }}
+                  className={`p-1 rounded-lg ${isDark ? "hover:bg-gray-700 text-gray-400" : "hover:bg-gray-100 text-gray-500"}`}
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              )}
+            </div>
+
+            <p className={`text-sm mb-5 ${isDark ? "text-gray-300" : "text-gray-600"}`}>
+              Select the payment method to determine the correct tax rate for this invoice.
+            </p>
+
+            <div className="space-y-3 mb-6">
+              <button
+                onClick={() => setPraPaymentMode(1)}
+                disabled={praSubmitting}
+                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl border-2 transition-all ${
+                  praPaymentMode === 1
+                    ? isDark ? "border-sky-500 bg-sky-900/30" : "border-sky-500 bg-sky-50"
+                    : isDark ? "border-gray-600 hover:border-gray-500 bg-gray-700/30" : "border-gray-200 hover:border-gray-300"
+                }`}
+              >
+                <DollarSign className={`w-5 h-5 ${praPaymentMode === 1 ? "text-sky-400" : isDark ? "text-gray-400" : "text-gray-500"}`} />
+                <div className="text-left flex-1">
+                  <p className={`font-medium text-sm ${isDark ? "text-white" : "text-gray-900"}`}>Cash</p>
+                  <p className={`text-xs ${isDark ? "text-gray-400" : "text-gray-500"}`}>Tax rate: {praSettings?.cash_tax_rate || 16}%</p>
+                </div>
+                {praPaymentMode === 1 && <CheckCircle className="w-4 h-4 text-sky-600" />}
+              </button>
+
+              <button
+                onClick={() => setPraPaymentMode(2)}
+                disabled={praSubmitting}
+                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl border-2 transition-all ${
+                  praPaymentMode === 2
+                    ? isDark ? "border-sky-500 bg-sky-900/30" : "border-sky-500 bg-sky-50"
+                    : isDark ? "border-gray-600 hover:border-gray-500 bg-gray-700/30" : "border-gray-200 hover:border-gray-300"
+                }`}
+              >
+                <CreditCard className={`w-5 h-5 ${praPaymentMode === 2 ? "text-sky-400" : isDark ? "text-gray-400" : "text-gray-500"}`} />
+                <div className="text-left flex-1">
+                  <p className={`font-medium text-sm ${isDark ? "text-white" : "text-gray-900"}`}>Card</p>
+                  <p className={`text-xs ${isDark ? "text-gray-400" : "text-gray-500"}`}>Tax rate: {praSettings?.card_tax_rate || 5}%</p>
+                </div>
+                {praPaymentMode === 2 && <CheckCircle className="w-4 h-4 text-sky-600" />}
+              </button>
+            </div>
+
+            <motion.button
+              whileHover={{ scale: praPaymentMode && !praSubmitting ? 1.02 : 1 }}
+              whileTap={{ scale: praPaymentMode && !praSubmitting ? 0.98 : 1 }}
+              onClick={() => praPaymentMode && !praSubmitting && handlePushToPRA(praPaymentMode)}
+              disabled={!praPaymentMode || praSubmitting}
+              className="w-full flex items-center justify-center space-x-2 px-4 py-3 bg-sky-500 hover:bg-sky-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all"
+            >
+              {praSubmitting ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Submitting to PRA...</span>
+                </>
+              ) : (
+                <>
+                  <Send className="w-4 h-4" />
+                  <span>Submit to PRA</span>
+                </>
+              )}
+            </motion.button>
           </div>
         </div>
       )}

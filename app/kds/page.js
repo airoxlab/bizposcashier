@@ -4,7 +4,6 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import {
   ArrowLeft,
   Clock,
-  CheckCircle,
   AlertTriangle,
   ChefHat,
   Flame,
@@ -104,20 +103,19 @@ export default function KDSPage() {
     } catch {}
   }
 
-  // Status tabs matching orders page
+  // KDS status tabs — driven by kitchen_status (null = Placed)
   const statusTabs = [
     { id: 'All', label: 'All', icon: FileText },
-    { id: 'Pending', label: 'Placed', icon: Clock },
+    { id: 'Placed', label: 'Placed', icon: Clock },
     { id: 'Preparing', label: 'Preparing', icon: ChefHat },
     { id: 'Ready', label: 'Ready', icon: Package },
-    { id: 'Dispatched', label: 'Dispatched', icon: CheckCircle },
   ]
 
-  // Status config matching orders page colors
-  const getStatusConfig = (status) => {
+  // Status config keyed by kitchen_status value (null → 'Placed' for display)
+  const getStatusConfig = (kitchenStatus) => {
     const isDark = themeManager.isDark()
     const configs = {
-      Pending: {
+      Placed: {
         bg: isDark ? 'bg-yellow-900/20' : 'bg-yellow-50',
         border: isDark ? 'border-yellow-700/30' : 'border-yellow-200',
         text: isDark ? 'text-yellow-300' : 'text-yellow-700',
@@ -138,19 +136,13 @@ export default function KDSPage() {
         border: isDark ? 'border-purple-700/30' : 'border-purple-200',
         text: isDark ? 'text-purple-300' : 'text-purple-700',
         badge: isDark ? 'bg-purple-900/30 text-purple-300' : 'bg-purple-100 text-purple-800',
-        nextStatus: 'Dispatched',
-        nextLabel: 'Mark as Dispatch'
-      },
-      Dispatched: {
-        bg: isDark ? 'bg-green-900/20' : 'bg-green-50',
-        border: isDark ? 'border-green-700/30' : 'border-green-200',
-        text: isDark ? 'text-green-300' : 'text-green-700',
-        badge: isDark ? 'bg-green-900/30 text-green-300' : 'bg-green-100 text-green-800',
-        nextStatus: null,
-        nextLabel: null
+        nextStatus: 'Collected',
+        nextLabel: 'Mark Collected'
       },
     }
-    return configs[status] || configs['Pending']
+    // Treat null/undefined kitchen_status as 'Placed'
+    const key = kitchenStatus || 'Placed'
+    return configs[key] || configs['Placed']
   }
 
   // Get order type icon
@@ -229,8 +221,8 @@ export default function KDSPage() {
             loadOrders(true, userData.id)
           }
 
-          // Play KDS notification sound for new Pending orders only
-          if (payload.eventType === 'INSERT' && payload.new?.order_status === 'Pending') {
+          // Play KDS notification sound for any new order (kitchen_status will be null = Placed)
+          if (payload.eventType === 'INSERT' && !payload.new?.kitchen_status) {
             playNotificationSound()
           }
 
@@ -250,9 +242,9 @@ export default function KDSPage() {
         (payload) => {
           const orderId = payload.new?.order_id
           if (!orderId) return
-          // If this order is already in a kitchen status → it was edited, not newly placed
+          // If this order is still active on KDS → it was edited, not newly placed
           const existingOrder = allOrdersRef.current.find(o => o.id === orderId)
-          if (existingOrder && ['Pending', 'Preparing', 'Ready'].includes(existingOrder.order_status)) {
+          if (existingOrder && existingOrder.kitchen_status !== 'Collected') {
             const stored = getStoredUpdatedIds()
             stored.add(orderId)
             saveUpdatedIds(stored)
@@ -296,7 +288,7 @@ export default function KDSPage() {
       const now = Date.now()
       const newTimedOut = new Set()
       allOrdersRef.current.forEach(order => {
-        if (order.order_status === 'Pending') {
+        if (!order.kitchen_status) {
           const ageMinutes = (now - new Date(order.created_at).getTime()) / 60000
           if (ageMinutes >= kdsOrderTimeoutMinutes) {
             newTimedOut.add(order.id)
@@ -324,7 +316,7 @@ export default function KDSPage() {
     const now = Date.now()
     const newTimedOut = new Set()
     allOrders.forEach(order => {
-      if (order.order_status === 'Pending') {
+      if (!order.kitchen_status) {
         const ageMinutes = (now - new Date(order.created_at).getTime()) / 60000
         if (ageMinutes >= kdsOrderTimeoutMinutes) {
           newTimedOut.add(order.id)
@@ -385,6 +377,7 @@ export default function KDSPage() {
               daily_serial,
               order_type,
               order_status,
+              kitchen_status,
               order_time,
               order_date,
               total_amount,
@@ -460,38 +453,39 @@ export default function KDSPage() {
         console.log('📦 [KDS] Loaded from cache:', fetchedOrders.length)
       }
 
-      // Check for new orders
-      if (notificationsEnabled && fetchedOrders.length > lastOrderCountRef.current) {
+      // Enrich orders with daily serial numbers
+      const ordersWithSerials = cacheManager.enrichOrdersWithSerials(fetchedOrders)
+
+      // KDS only shows orders the kitchen hasn't dismissed yet
+      const activeOrders = ordersWithSerials.filter(o => o.kitchen_status !== 'Collected')
+
+      // Check for new orders (compare against active kitchen orders only)
+      if (notificationsEnabled && activeOrders.length > lastOrderCountRef.current) {
         if (!silent && lastOrderCountRef.current > 0) {
           showNotification('New Order Received!', 'A new order is ready for preparation.')
         }
       }
-      lastOrderCountRef.current = fetchedOrders.length
+      lastOrderCountRef.current = activeOrders.length
 
-      // Enrich orders with daily serial numbers
-      const ordersWithSerials = cacheManager.enrichOrdersWithSerials(fetchedOrders)
+      // Store active orders (also keep ref in sync for real-time comparison)
+      allOrdersRef.current = activeOrders
+      setAllOrders(activeOrders)
 
-      // Store all orders (also keep ref in sync for real-time comparison)
-      allOrdersRef.current = ordersWithSerials
-      setAllOrders(ordersWithSerials)
-
-      // Restore UPDATED tags from localStorage, keeping only IDs still in a kitchen status
+      // Restore UPDATED tags from localStorage, keeping only IDs still active on KDS
       const storedIds = getStoredUpdatedIds()
 
       // Also seed from order_changes cache — catches orders modified before KDS was opened
       try {
         const cachedChanges = JSON.parse(localStorage.getItem('order_changes') || '{}')
-        ordersWithSerials
-          .filter(o => ['Pending', 'Preparing', 'Ready'].includes(o.order_status))
-          .forEach(o => {
-            const changes = cachedChanges[o.id]
-            if (changes && changes.length > 0) storedIds.add(o.id)
-          })
+        activeOrders.forEach(o => {
+          const changes = cachedChanges[o.id]
+          if (changes && changes.length > 0) storedIds.add(o.id)
+        })
       } catch (_) {}
 
       const validIds = new Set(
         [...storedIds].filter(id =>
-          ordersWithSerials.some(o => o.id === id && ['Pending', 'Preparing', 'Ready'].includes(o.order_status))
+          activeOrders.some(o => o.id === id)
         )
       )
       saveUpdatedIds(validIds) // prune stale IDs
@@ -535,9 +529,13 @@ export default function KDSPage() {
   const filteredOrders = useMemo(() => {
     let result = allOrders
 
-    // Apply status filter
+    // Apply status filter (keyed by kitchen_status; 'Placed' maps to null/undefined)
     if (statusFilter !== 'All') {
-      result = result.filter(order => order.order_status === statusFilter)
+      if (statusFilter === 'Placed') {
+        result = result.filter(order => !order.kitchen_status)
+      } else {
+        result = result.filter(order => order.kitchen_status === statusFilter)
+      }
     }
 
     // Apply search filter
@@ -606,10 +604,9 @@ export default function KDSPage() {
     }
 
     return {
-      Pending: sortOrders(filterBySearch(allOrders.filter(o => o.order_status === 'Pending'))),
-      Preparing: sortOrders(filterBySearch(allOrders.filter(o => o.order_status === 'Preparing'))),
-      Ready: sortOrders(filterBySearch(allOrders.filter(o => o.order_status === 'Ready'))),
-      Dispatched: sortOrders(filterBySearch(allOrders.filter(o => o.order_status === 'Dispatched'))),
+      Placed: sortOrders(filterBySearch(allOrders.filter(o => !o.kitchen_status))),
+      Preparing: sortOrders(filterBySearch(allOrders.filter(o => o.kitchen_status === 'Preparing'))),
+      Ready: sortOrders(filterBySearch(allOrders.filter(o => o.kitchen_status === 'Ready'))),
     }
   }, [allOrders, searchTerm, sortOrder, updatedOrderIds])
 
@@ -669,72 +666,61 @@ export default function KDSPage() {
     }
   }
 
-  const updateOrderStatus = async (orderId, newStatus) => {
+  const updateOrderStatus = async (orderId, newKitchenStatus) => {
     try {
-      // Check if we're online or offline
       const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true
 
       if (isOnline) {
-        // Online: Update Supabase directly
         const { error } = await supabase
           .from('orders')
           .update({
-            order_status: newStatus,
+            kitchen_status: newKitchenStatus,
             updated_at: new Date().toISOString()
           })
           .eq('id', orderId)
 
         if (error) throw error
       } else {
-        // Offline: Use cacheManager to queue the update
-        console.log('📴 [KDS] Offline - queueing status update for later sync')
-        const result = await cacheManager.updateOrderStatus(orderId, newStatus)
-        if (!result.success) {
-          throw new Error('Failed to queue offline update')
-        }
+        // Offline: optimistic local update only — will reconcile on next sync
+        console.log('📴 [KDS] Offline - kitchen_status update applied locally only')
       }
 
       // Capture the order object BEFORE React state update flushes
       const orderForWA = allOrders.find(o => o.id === orderId)
 
-      // Update local state immediately for instant feedback
-      setAllOrders(prevOrders =>
-        prevOrders.map(order =>
-          order.id === orderId
-            ? { ...order, order_status: newStatus, updated_at: new Date().toISOString() }
-            : order
+      // Update local state immediately; remove from list if Collected
+      if (newKitchenStatus === 'Collected') {
+        setAllOrders(prevOrders => prevOrders.filter(order => order.id !== orderId))
+      } else {
+        setAllOrders(prevOrders =>
+          prevOrders.map(order =>
+            order.id === orderId
+              ? { ...order, kitchen_status: newKitchenStatus, updated_at: new Date().toISOString() }
+              : order
+          )
         )
-      )
-
+      }
 
       // ─── WhatsApp auto-send triggers ──────────────────────────────────
-      if (isOnline && user?.id) {
-        // orderForWA captured above before state update
-        if (orderForWA) {
-          const waNotify = (r, successMsg) => {
-            if (r?.success) notify.success(successMsg)
-            else if (r && !r.silent) notify.error(`WhatsApp: ${r.error || 'Failed to send'}`)
-          }
-          if (newStatus === 'Preparing') {
-            triggerWhatsAppAutoSend(orderForWA, user.id, 'Preparing')
-              .then(r => waNotify(r, 'WhatsApp: preparing notification sent'))
-              .catch(err => notify.error(`WhatsApp error: ${err.message}`))
-          }
-          if (newStatus === 'Ready') {
-            triggerWhatsAppAutoSend(orderForWA, user.id, 'Ready')
-              .then(r => waNotify(r, 'WhatsApp: order ready notification sent'))
-              .catch(err => notify.error(`WhatsApp error: ${err.message}`))
-          }
-          if (newStatus === 'Dispatched') {
-            triggerWhatsAppAutoSend(orderForWA, user.id, 'Dispatched')
-              .then(r => waNotify(r, 'WhatsApp: dispatch notification sent'))
-              .catch(err => notify.error(`WhatsApp error: ${err.message}`))
-          }
-          if (newStatus === 'Completed') {
-            triggerWhatsAppAutoSend(orderForWA, user.id, 'Completed')
-              .then(r => waNotify(r, 'WhatsApp thank-you message sent to customer'))
-              .catch(err => notify.error(`WhatsApp error: ${err.message}`))
-          }
+      if (isOnline && user?.id && orderForWA) {
+        const waNotify = (r, successMsg) => {
+          if (r?.success) notify.success(successMsg)
+          else if (r && !r.silent) notify.error(`WhatsApp: ${r.error || 'Failed to send'}`)
+        }
+        if (newKitchenStatus === 'Preparing') {
+          triggerWhatsAppAutoSend(orderForWA, user.id, 'Preparing')
+            .then(r => waNotify(r, 'WhatsApp: preparing notification sent'))
+            .catch(err => notify.error(`WhatsApp error: ${err.message}`))
+        }
+        if (newKitchenStatus === 'Ready') {
+          triggerWhatsAppAutoSend(orderForWA, user.id, 'Ready')
+            .then(r => waNotify(r, 'WhatsApp: order ready notification sent'))
+            .catch(err => notify.error(`WhatsApp error: ${err.message}`))
+        }
+        if (newKitchenStatus === 'Collected') {
+          triggerWhatsAppAutoSend(orderForWA, user.id, 'Dispatched')
+            .then(r => waNotify(r, 'WhatsApp: dispatch notification sent'))
+            .catch(err => notify.error(`WhatsApp error: ${err.message}`))
         }
       }
 
@@ -743,7 +729,7 @@ export default function KDSPage() {
       setOrderItems([])
       setSelectedOrderChanges(null)
     } catch (error) {
-      console.error('Error updating order status:', error)
+      console.error('Error updating kitchen status:', error)
       notify.error('Failed to update order status')
     }
   }
@@ -1024,7 +1010,7 @@ export default function KDSPage() {
   const isDark = themeManager.isDark()
 
   const OrderCard = ({ order }) => {
-    const config = getStatusConfig(order.order_status)
+    const config = getStatusConfig(order.kitchen_status)
     const OrderIcon = getOrderTypeIcon(order.order_type)
     const elapsed = getElapsedTime(order.created_at)
     const isUpdated = updatedOrderIds.has(order.id)
@@ -1070,7 +1056,7 @@ export default function KDSPage() {
             <span className={`font-bold ${classes.textPrimary} text-sm`}>
               {order.daily_serial ? `${dailySerialManager.formatSerial(order.daily_serial)} ` : ''}#{order.order_number}
             </span>
-            <span className={`text-xs px-1.5 py-0.5 rounded ${config.badge}`}>{order.order_status}</span>
+            <span className={`text-xs px-1.5 py-0.5 rounded ${config.badge}`}>{order.kitchen_status || 'Placed'}</span>
           </div>
           <span className={`text-xs ${classes.textSecondary} ${isUpdated ? 'pr-10' : ''}`}>{elapsed}</span>
         </div>
@@ -1137,6 +1123,12 @@ export default function KDSPage() {
                         ))}
                       </div>
                     )}
+                    {item.item_instructions && (
+                      <div className={`ml-6 mt-0.5 flex items-start gap-1 text-[10px] font-medium px-1 py-0.5 rounded ${isDark ? 'bg-orange-500/10 text-orange-400' : 'bg-orange-50 text-orange-600'}`}>
+                        <FileText className="w-2.5 h-2.5 flex-shrink-0 mt-0.5" />
+                        <span>{item.item_instructions}</span>
+                      </div>
+                    )}
                   </div>
                 )
               })}
@@ -1144,6 +1136,14 @@ export default function KDSPage() {
                 <div className={`text-xs ${classes.textSecondary} italic pl-6`}>+{order.order_items.length - 6} more items</div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* Order-level Special Instructions */}
+        {order.order_instructions && (
+          <div className={`mb-2 flex items-start gap-1.5 text-[10px] font-medium px-2 py-1 rounded ${isDark ? 'bg-yellow-500/10 text-yellow-300 border border-yellow-700/30' : 'bg-yellow-50 text-yellow-700 border border-yellow-200'}`}>
+            <FileText className="w-3 h-3 flex-shrink-0 mt-0.5" />
+            <span><span className="font-bold">Note: </span>{order.order_instructions}</span>
           </div>
         )}
 
@@ -1316,6 +1316,12 @@ export default function KDSPage() {
                                 ))}
                               </div>
                             )}
+                            {item.item_instructions && (
+                              <div className={`ml-8 mt-0.5 flex items-start gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded ${isDark ? 'bg-orange-500/10 text-orange-400' : 'bg-orange-50 text-orange-600'}`}>
+                                <FileText className="w-2.5 h-2.5 flex-shrink-0 mt-0.5" />
+                                <span>{item.item_instructions}</span>
+                              </div>
+                            )}
                           </div>
                         )
                       })}
@@ -1387,6 +1393,14 @@ export default function KDSPage() {
                           )
                         })}
                       </div>
+                    </div>
+                  )}
+
+                  {/* Order-level Special Instructions */}
+                  {order.order_instructions && (
+                    <div className={`mb-2 flex items-start gap-1.5 text-[10px] font-medium px-2 py-1 rounded ${isDark ? 'bg-yellow-500/10 text-yellow-300 border border-yellow-700/30' : 'bg-yellow-50 text-yellow-700 border border-yellow-200'}`}>
+                      <FileText className="w-3 h-3 flex-shrink-0 mt-0.5" />
+                      <span><span className="font-bold">Note: </span>{order.order_instructions}</span>
                     </div>
                   )}
 
@@ -1562,7 +1576,9 @@ export default function KDSPage() {
               // Get count for each tab
               const count = tab.id === 'All'
                 ? allOrders.length
-                : allOrders.filter(o => o.order_status === tab.id).length
+                : tab.id === 'Placed'
+                  ? allOrders.filter(o => !o.kitchen_status).length
+                  : allOrders.filter(o => o.kitchen_status === tab.id).length
               return (
                 <button
                   key={tab.id}
@@ -1612,16 +1628,16 @@ export default function KDSPage() {
           )}
         </div>
       ) : (
-        // Column View - Full screen, all statuses side by side
+        // Column View - Full screen, all kitchen statuses side by side
         <div className="h-[calc(100vh-80px)] p-3">
-          <div className="grid grid-cols-4 gap-3 h-full">
-            {/* Placed (Pending) Column */}
+          <div className="grid grid-cols-3 gap-3 h-full">
+            {/* Placed Column (kitchen_status = null) */}
             <StatusColumn
               title="Placed"
               icon={Clock}
-              status="Pending"
-              orders={ordersByStatus.Pending}
-              config={getStatusConfig('Pending')}
+              status="Placed"
+              orders={ordersByStatus.Placed}
+              config={getStatusConfig(null)}
               onOrderClick={(order) => {
                 setSelectedOrder(order)
                 fetchOrderItems(order.id)
@@ -1664,27 +1680,6 @@ export default function KDSPage() {
               status="Ready"
               orders={ordersByStatus.Ready}
               config={getStatusConfig('Ready')}
-              onOrderClick={(order) => {
-                setSelectedOrder(order)
-                fetchOrderItems(order.id)
-              }}
-              onStatusUpdate={updateOrderStatus}
-              onPrintDocket={printDocket}
-              printingIds={printingOrderIds}
-              classes={classes}
-              isDark={isDark}
-              updatedIds={updatedOrderIds}
-              changesMap={orderChangesMap}
-              timedOutIds={timedOutOrderIds}
-            />
-
-            {/* Dispatched Column */}
-            <StatusColumn
-              title="Dispatched"
-              icon={CheckCircle}
-              status="Dispatched"
-              orders={ordersByStatus.Dispatched}
-              config={getStatusConfig('Dispatched')}
               onOrderClick={(order) => {
                 setSelectedOrder(order)
                 fetchOrderItems(order.id)
@@ -1768,6 +1763,16 @@ export default function KDSPage() {
                 )}
               </div>
 
+              {/* Order-level Special Instructions */}
+              {selectedOrder.order_instructions && (
+                <div className="px-4 pb-3">
+                  <div className={`flex items-start gap-2 px-3 py-2 rounded-xl font-medium text-sm ${isDark ? 'bg-yellow-500/10 text-yellow-300 border border-yellow-700/30' : 'bg-yellow-50 text-yellow-700 border border-yellow-200'}`}>
+                    <FileText className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                    <span><span className="font-bold">Special Instructions: </span>{selectedOrder.order_instructions}</span>
+                  </div>
+                </div>
+              )}
+
               {/* Order Items */}
               <div className="p-4">
                 <h3 className={`text-sm font-bold ${classes.textPrimary} mb-3`}>Order Items</h3>
@@ -1836,7 +1841,7 @@ export default function KDSPage() {
                             {/* Item instructions */}
                             {item.item_instructions && (
                               <div className={`flex items-start gap-1 px-1.5 py-1 rounded font-medium ${isDark ? 'bg-orange-500/10 text-orange-400' : 'bg-orange-50 text-orange-600'}`}>
-                                <AlertTriangle className="w-3 h-3 flex-shrink-0 mt-0.5" />
+                                <FileText className="w-3 h-3 flex-shrink-0 mt-0.5" />
                                 <span>{item.item_instructions}</span>
                               </div>
                             )}
@@ -1944,14 +1949,14 @@ export default function KDSPage() {
                     </button>
                   )}
 
-                  {/* Status Action Button - Only show if there's a next status */}
-                  {getStatusConfig(selectedOrder.order_status).nextStatus && (
+                  {/* Status Action Button - Only show if there's a next kitchen status */}
+                  {getStatusConfig(selectedOrder.kitchen_status).nextStatus && (
                     <button
-                      onClick={() => updateOrderStatus(selectedOrder.id, getStatusConfig(selectedOrder.order_status).nextStatus)}
+                      onClick={() => updateOrderStatus(selectedOrder.id, getStatusConfig(selectedOrder.kitchen_status).nextStatus)}
                       className="flex-1 py-3 rounded-xl bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white font-semibold shadow-lg"
                     >
                       <Check className="w-5 h-5 inline mr-2" />
-                      {getStatusConfig(selectedOrder.order_status).nextLabel}
+                      {getStatusConfig(selectedOrder.kitchen_status).nextLabel}
                     </button>
                   )}
                 </div>
