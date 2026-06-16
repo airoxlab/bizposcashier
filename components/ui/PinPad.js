@@ -2,10 +2,16 @@
 
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Delete, Lock, Shield } from 'lucide-react'
+import { Delete, Lock, Shield, Fingerprint, CheckCircle, X } from 'lucide-react'
 import themeManager from '../../lib/themeManager'
 
-export default function PinPad({ pin, onPinChange, onSubmit, error, subtitle = '6-digit PIN required to access expenses', buttonLabel = 'Access Expenses' }) {
+export default function PinPad({
+  pin, onPinChange, onSubmit, error,
+  subtitle = '6-digit PIN required to access expenses',
+  buttonLabel = 'Access Expenses',
+  fpStatus = null,   // null | 'loading' | 'scanning' | 'matched' | 'denied' | 'no_reader'
+  fpActive = false,  // true when owner-fingerprint unlock is available on this page
+}) {
   const numbers = [
     ['1', '2', '3'],
     ['4', '5', '6'],
@@ -61,15 +67,50 @@ export default function PinPad({ pin, onPinChange, onSubmit, error, subtitle = '
     }
   }, [activeKey])
 
+  // Fingerprint-driven header state
+  const fpMatched  = fpStatus === 'matched'
+  const fpDenied   = fpStatus === 'denied'
+  const fpScanning = fpStatus === 'scanning'
+  const HeaderIcon = fpMatched ? CheckCircle : fpDenied ? X : fpScanning ? Fingerprint : Shield
+
   return (
     <div className="w-full max-w-sm mx-auto">
-      {/* Header */}
+      {/* Header — icon reflects fingerprint status when available */}
       <div className="text-center mb-8">
-        <div className="w-20 h-20 bg-gradient-to-r from-purple-500 to-blue-500 rounded-full flex items-center justify-center mx-auto mb-4">
-          <Shield className="w-10 h-10 text-white" />
+        <div className="relative w-20 h-20 mx-auto mb-4">
+          <div className={`w-20 h-20 rounded-full flex items-center justify-center bg-gradient-to-r transition-all duration-300 ${
+            fpMatched ? 'from-emerald-500 to-green-500 shadow-lg shadow-emerald-500/40' :
+            fpDenied  ? 'from-red-500 to-pink-500 shadow-lg shadow-red-500/30' :
+            fpScanning ? 'from-purple-500 to-blue-500 shadow-lg shadow-purple-500/40 animate-pulse' :
+            'from-purple-500 to-blue-500'
+          }`}>
+            <HeaderIcon className="w-10 h-10 text-white" />
+          </div>
+          {/* Idle "fingerprint available" badge */}
+          {fpActive && !fpMatched && !fpDenied && !fpScanning && (
+            <div className={`absolute -bottom-1 -right-1 w-8 h-8 rounded-full ${themeClasses.card} border-2 border-purple-400 flex items-center justify-center shadow-md`}>
+              <Fingerprint className="w-4 h-4 text-purple-500" />
+            </div>
+          )}
         </div>
         <h2 className={`text-2xl font-bold ${themeClasses.textPrimary} mb-2`}>Enter PIN</h2>
         <p className={themeClasses.textSecondary}>{subtitle}</p>
+
+        {/* Fingerprint status line (so the user doesn't have to scroll) */}
+        {fpActive && (
+          <p className={`mt-2 text-sm font-medium flex items-center justify-center gap-1.5 ${
+            fpMatched ? 'text-emerald-600 dark:text-emerald-400' :
+            fpDenied  ? 'text-red-600 dark:text-red-400' :
+            fpStatus === 'no_reader' ? 'text-amber-600 dark:text-amber-400' :
+            'text-purple-600 dark:text-purple-400'
+          }`}>
+            <Fingerprint className="w-4 h-4" />
+            {fpMatched ? 'Owner verified — unlocking…' :
+             fpDenied  ? 'Not the owner — try again' :
+             fpStatus === 'no_reader' ? 'Fingerprint reader not detected' :
+             'Or place the owner’s finger to unlock'}
+          </p>
+        )}
       </div>
 
       {/* PIN Display */}

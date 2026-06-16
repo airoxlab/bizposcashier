@@ -50,6 +50,7 @@ import { triggerWhatsAppAutoSend } from '../../lib/whatsappAutoSend'
 import NotificationSystem, { notify } from '../../components/ui/NotificationSystem'
 import ProtectedPage from '../../components/ProtectedPage'
 import PlanGate from '../../components/ui/PlanGate'
+import FingerprintStatusBadge from '../../components/FingerprintStatusBadge'
 
 export default function KDSPage() {
   const router = useRouter()
@@ -1551,6 +1552,9 @@ export default function KDSPage() {
               {viewMode === 'tabs' ? <LayoutGrid className="w-4 h-4" /> : <List className="w-4 h-4" />}
               <span>{viewMode === 'tabs' ? 'Column View' : 'Tab View'}</span>
             </button>
+
+            {/* Fingerprint reader status */}
+            <FingerprintStatusBadge className={`p-2 rounded-lg ${classes.button}`} />
 
             {/* Theme Toggle */}
             <button

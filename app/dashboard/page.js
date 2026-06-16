@@ -38,8 +38,7 @@ import {
   Zap,
   Package,
   Building2,
-  BookOpen,
-  Fingerprint
+  BookOpen
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
@@ -51,6 +50,7 @@ import { webOrderNotificationManager } from '../../lib/webOrderNotification'
 import { networkPrintListener } from '../../lib/networkPrintListener'
 import ProtectedPage from '../../components/ProtectedPage'
 import PrinterStatusBadge from '../../components/PrinterStatusBadge'
+import FingerprintStatusBadge from '../../components/FingerprintStatusBadge'
 import CashierAnalytics from '../../components/pos/CashierAnalytics'
 import { usePermissions, permissionManager } from '../../lib/permissionManager'
 import { planManager } from '../../lib/planManager'
@@ -535,12 +535,12 @@ export default function Dashboard() {
       permissionKey: 'MARKETING'
     },
     {
-      id: 'my-till',
-      title: 'My Till',
-      icon: Wallet,
-      gradient: 'from-violet-500 to-purple-600',
-      route: '/my-till',
-      permissionKey: 'MY_TILL'
+      id: 'web-orders',
+      title: 'Web Orders',
+      icon: Globe,
+      gradient: 'from-purple-500 to-pink-600',
+      route: '/web-orders',
+      permissionKey: 'WEB_ORDERS'
     }
   ]
 
@@ -549,12 +549,12 @@ export default function Dashboard() {
   // ============================================================================
   const otherQuickItems = [
     {
-      id: 'web-orders',
-      title: 'Web Orders',
-      icon: Globe,
-      gradient: 'from-purple-500 to-pink-600',
-      route: '/web-orders',
-      permissionKey: 'WEB_ORDERS'
+      id: 'my-till',
+      title: 'My Till',
+      icon: Wallet,
+      gradient: 'from-violet-500 to-purple-600',
+      route: '/my-till',
+      permissionKey: 'MY_TILL'
     },
     {
       id: 'purchase-orders',
@@ -587,13 +587,6 @@ export default function Dashboard() {
       gradient: 'from-blue-500 to-indigo-600',
       route: '/payroll',
       permissionKey: 'PAYROLL'
-    },
-    {
-      id: 'fingerprint',
-      title: 'Fingerprint',
-      icon: Fingerprint,
-      gradient: 'from-violet-500 to-purple-600',
-      route: '/fingerprint',
     },
 
   ]
@@ -929,6 +922,8 @@ export default function Dashboard() {
                 buttonClassName={`relative p-3 rounded-xl ${themeClasses.button} transition-all ${!permissions.hasPermission('PRINTERS') ? 'opacity-50 cursor-not-allowed' : ''}`}
                 iconClassName={`w-5 h-5 ${themeClasses.textSecondary}`}
               />
+
+              <FingerprintStatusBadge className={`p-3 rounded-xl ${themeClasses.button}`} />
 
               {/* Plan Button */}
               <Tooltip label="Plan & Billing">

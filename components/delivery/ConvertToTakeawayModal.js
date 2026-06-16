@@ -7,6 +7,7 @@ import { cacheManager } from '../../lib/cacheManager'
 import { authManager } from '../../lib/authManager'
 import { notify } from '../ui/NotificationSystem'
 import { themeManager } from '../../lib/themeManager'
+import { clearOrderChangeTracking } from '../../lib/utils/orderChangesTracker'
 
 export default function ConvertToTakeawayModal({ isOpen, onClose, order, onSuccess }) {
   const isDark = themeManager.isDark()
@@ -156,6 +157,8 @@ export default function ConvertToTakeawayModal({ isOpen, onClose, order, onSucce
       )
 
       if (!result.success) throw new Error('Failed to update order')
+      // Reset diff/update-version state so the converted order prints clean merged quantities
+      clearOrderChangeTracking(order.id)
       onSuccess?.()
       onClose()
     } catch (error) {

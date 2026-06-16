@@ -13,7 +13,8 @@ export default function ConfirmModal({
   confirmText = 'Confirm',
   cancelText = 'Cancel',
   type = 'danger', // 'danger', 'warning', 'info'
-  isLoading = false
+  isLoading = false,
+  loadingText = 'Deleting...'
 }) {
   const themeClasses = themeManager.getClasses()
 
@@ -123,7 +124,7 @@ export default function ConfirmModal({
                         transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
                         className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full"
                       />
-                      <span>Deleting...</span>
+                      <span>{loadingText}</span>
                     </>
                   ) : (
                     confirmText

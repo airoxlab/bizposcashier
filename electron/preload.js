@@ -159,8 +159,14 @@ const api = {
     scanAllPorts: () => ipcRenderer.invoke('backup:scan-all-ports'),
   },
 
-  // Fingerprint template comparison via dpfj.dll
-  compareFingerprints: (storedB64, liveB64) => ipcRenderer.invoke('fingerprint:compare', storedB64, liveB64),
+  // Fingerprint engine via dpfj.dll (DigitalPersona FingerJet)
+  // Stateful enrollment: start once, add each capture until done:true.
+  enrollStart:        ()                         => ipcRenderer.invoke('fingerprint:enrollStart'),
+  enrollAdd:          (sampleB64)                => ipcRenderer.invoke('fingerprint:enrollAdd', sampleB64),
+  enrollCancel:       ()                         => ipcRenderer.invoke('fingerprint:enrollCancel'),
+  compareFingerprints:(templateB64, liveB64, th) => ipcRenderer.invoke('fingerprint:compare', templateB64, liveB64, th),
+  identifyFingerprint:(liveB64, templates, th)   => ipcRenderer.invoke('fingerprint:identify', liveB64, templates, th),
+  fingerprintSelfTest:()                         => ipcRenderer.invoke('fingerprint:selftest'),
 
   // PRA e-IMS fiscalization — token stays in main process, never exposed to renderer
   praSubmit: (data) => ipcRenderer.invoke('pra:submit', data),

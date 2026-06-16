@@ -6,6 +6,7 @@ import { supabase } from '../../lib/supabase'
 import { cacheManager } from '../../lib/cacheManager'
 import { authManager } from '../../lib/authManager'
 import { notify } from '../ui/NotificationSystem'
+import { clearOrderChangeTracking } from '../../lib/utils/orderChangesTracker'
 
 export default function ConvertToDeliveryModal({ isOpen, onClose, order, onSuccess }) {
   const [formData, setFormData] = useState({
@@ -290,6 +291,9 @@ export default function ConvertToDeliveryModal({ isOpen, onClose, order, onSucce
       if (!result.success) {
         throw new Error('Failed to update order')
       }
+
+      // Reset diff/update-version state so the converted order prints clean merged quantities
+      clearOrderChangeTracking(order.id)
 
       // Let parent component handle success notification
       onSuccess?.()

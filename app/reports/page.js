@@ -57,6 +57,7 @@ import { ledgerManager } from '../../lib/ledgerManager'
 import NotificationSystem, { notify } from '../../components/ui/NotificationSystem'
 import ProtectedPage from '../../components/ProtectedPage'
 import PinPad from '../../components/ui/PinPad'
+import OwnerFingerprintUnlock from '../../components/ui/OwnerFingerprintUnlock'
 
 export default function ReportsPage() {
   const router = useRouter()
@@ -68,6 +69,7 @@ export default function ReportsPage() {
   const [pin, setPin] = useState('')
   const [pinError, setPinError] = useState('')
   const [pinLoading, setPinLoading] = useState(false)
+  const [fpStatus, setFpStatus] = useState(null) // owner-fingerprint unlock status (shown in PinPad header)
   const [prefetchedLedgerCustomers, setPrefetchedLedgerCustomers] = useState(null)
   const [refreshing, setRefreshing] = useState(false)
   const [showFilters, setShowFilters] = useState(false)
@@ -1541,6 +1543,15 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                 loading={pinLoading}
                 subtitle="6-digit PIN required to access reports"
                 buttonLabel="Access Reports"
+                fpStatus={fpStatus}
+                fpActive={!!fpStatus && !['unsupported', 'not_enrolled', 'loading'].includes(fpStatus)}
+              />
+
+              <OwnerFingerprintUnlock
+                compact
+                userId={user?.id}
+                onStatusChange={setFpStatus}
+                onUnlock={() => { setIsAuthenticated(true); setPin(''); setPinError('') }}
               />
             </div>
           </div>

@@ -2,6 +2,7 @@ import './globals.css'
 import Script from 'next/script'
 import NotificationSystem from '../components/ui/NotificationSystem'
 import GlobalPrintListener from '../components/GlobalPrintListener'
+import GlobalFingerprintListener from '../components/GlobalFingerprintListener'
 import TrialBanner from '../components/TrialBanner'
 import TrialExpiredGate from '../components/TrialExpiredGate'
 import UpdateNotification from '../components/UpdateNotification'
@@ -46,6 +47,7 @@ export default function RootLayout({ children }) {
         <UpdateNotification />
         <TrialBanner />
         <GlobalPrintListener />
+        <GlobalFingerprintListener />
         <TrialExpiredGate>
           {children}
         </TrialExpiredGate>

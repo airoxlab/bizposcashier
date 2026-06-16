@@ -63,7 +63,7 @@ import SplitPaymentModal from "../../components/pos/SplitPaymentModal";
 import ConvertToDeliveryModal from "../../components/delivery/ConvertToDeliveryModal";
 import ConvertToTakeawayModal from "../../components/delivery/ConvertToTakeawayModal";
 import NotificationSystem, { notify } from "../../components/ui/NotificationSystem";
-import { getOrderItemsWithChanges, getOrderChanges, getCurrentUpdateVersion } from '../../lib/utils/orderChangesTracker';
+import { getOrderItemsWithChanges, getOrderChanges, getCurrentUpdateVersion, clearOrderChangeTracking } from '../../lib/utils/orderChangesTracker';
 import SendBillButton from '../../components/pos/SendBillButton';
 
 const OrderSkeleton = ({ isDark }) => {
@@ -1259,6 +1259,8 @@ export default function OrdersPage() {
         additionalData
       );
       if (!result.success) throw new Error('Failed to move order');
+      // Reset diff/update-version state so the moved order prints clean merged quantities
+      clearOrderChangeTracking(selectedOrder.id);
       // Optimistically update selectedOrder so UI reflects the change immediately
       setSelectedOrder(prev => prev ? { ...prev, ...additionalData } : prev);
       notify.success(`Order moved to ${targetType} successfully!`);

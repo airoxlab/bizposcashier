@@ -115,8 +115,9 @@ export default function PaymentPage() {
 
   // POS order behavior settings
   const [showOrderConfirmationPopup, setShowOrderConfirmationPopup] = useState(true)
-  const [autoPrintKitchen, setAutoPrintKitchen] = useState(false)
-  const [autoPrintReceipt, setAutoPrintReceipt] = useState(false)
+  // Per-order-type auto-print maps: { walkin: bool, takeaway: bool, delivery: bool }
+  const [autoPrintTokenMap, setAutoPrintTokenMap] = useState({})
+  const [autoPrintReceiptMap, setAutoPrintReceiptMap] = useState({})
 useEffect(() => {
   // Check authentication
   if (!authManager.isLoggedIn()) {
@@ -344,10 +345,26 @@ useEffect(() => {
   try {
     const showConf = localStorage.getItem('pos_show_order_confirmation')
     if (showConf !== null) setShowOrderConfirmationPopup(JSON.parse(showConf))
-    const autoKitchen = localStorage.getItem('pos_auto_print_kitchen')
-    if (autoKitchen !== null) setAutoPrintKitchen(JSON.parse(autoKitchen))
-    const autoReceipt = localStorage.getItem('pos_auto_print_receipt')
-    if (autoReceipt !== null) setAutoPrintReceipt(JSON.parse(autoReceipt))
+
+    // Per-order-type auto-print maps. Fall back to the legacy global booleans
+    // (applied to every order type) if the per-type maps haven't synced yet.
+    const tokenByType = localStorage.getItem('pos_auto_print_token_by_type')
+    if (tokenByType !== null) {
+      setAutoPrintTokenMap(JSON.parse(tokenByType))
+    } else {
+      const legacyKitchen = localStorage.getItem('pos_auto_print_kitchen')
+      const v = legacyKitchen !== null ? JSON.parse(legacyKitchen) : false
+      setAutoPrintTokenMap({ walkin: v, takeaway: v, delivery: v })
+    }
+
+    const receiptByType = localStorage.getItem('pos_auto_print_receipt_by_type')
+    if (receiptByType !== null) {
+      setAutoPrintReceiptMap(JSON.parse(receiptByType))
+    } else {
+      const legacyReceipt = localStorage.getItem('pos_auto_print_receipt')
+      const v = legacyReceipt !== null ? JSON.parse(legacyReceipt) : false
+      setAutoPrintReceiptMap({ walkin: v, takeaway: v, delivery: v })
+    }
   } catch {}
 
   return () => clearInterval(statusInterval)
@@ -359,18 +376,54 @@ useEffect(() => {
     themeManager.setTheme(newTheme)
   }
 
-  // Auto-print and skip popup based on admin settings
+  // Auto-print and skip popup based on admin settings (per order type).
+  // Read maps fresh from localStorage at fire time: syncChargeSettings runs
+  // fire-and-forget on mount so it may finish after state was initialised.
+  //
+  // Prints run SEQUENTIALLY (token → receipt) so they never race each other
+  // to the printer manager. Navigation (when popup is OFF) waits for all
+  // prints to finish — or 8 s max — so the IPC call always reaches the
+  // Electron main process before the renderer unmounts.
   useEffect(() => {
     if (!orderComplete) return
-    if (autoPrintKitchen) {
-      handlePrintKitchenToken().catch(err => console.error('Auto kitchen print failed:', err))
-    }
-    if (autoPrintReceipt) {
-      handleThermalPrint().catch(err => console.error('Auto receipt print failed:', err))
-    }
-    if (!showOrderConfirmationPopup) {
-      setTimeout(() => handleNewOrder(), 400)
-    }
+    const orderType = orderData?.orderType
+
+    let tokenMap = autoPrintTokenMap
+    let receiptMap = autoPrintReceiptMap
+    try {
+      const t = localStorage.getItem('pos_auto_print_token_by_type')
+      if (t) tokenMap = JSON.parse(t)
+      const r = localStorage.getItem('pos_auto_print_receipt_by_type')
+      if (r) receiptMap = JSON.parse(r)
+    } catch {}
+
+    const shouldPrintToken = !!tokenMap[orderType]
+    const shouldPrintReceipt = !!receiptMap[orderType]
+
+    ;(async () => {
+      // Sync settings fresh from DB right before printing — ensures any admin
+      // toggle change made since last login/refresh is picked up immediately.
+      try { await cacheManager.syncChargeSettings() } catch {}
+
+      // Re-read maps after sync in case they were stale at useEffect capture time.
+      try {
+        const t = localStorage.getItem('pos_auto_print_token_by_type')
+        if (t) tokenMap = JSON.parse(t)
+        const r = localStorage.getItem('pos_auto_print_receipt_by_type')
+        if (r) receiptMap = JSON.parse(r)
+      } catch {}
+
+      const finalShouldPrintToken = !!tokenMap[orderType]
+      const finalShouldPrintReceipt = !!receiptMap[orderType]
+
+      if (finalShouldPrintToken) {
+        try { await handlePrintKitchenToken() } catch (err) { console.error('Auto kitchen print failed:', err) }
+      }
+      if (finalShouldPrintReceipt) {
+        try { await handleThermalPrint() } catch (err) { console.error('Auto receipt print failed:', err) }
+      }
+      if (!showOrderConfirmationPopup) handleNewOrder()
+    })()
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderComplete])
 
@@ -1893,9 +1946,13 @@ const handlePrintKitchenToken = async () => {
       printerConfig
     )
 
-    const allOk = results.every(r => r.success)
+    // Guard: [].every() is true in JS — treat an empty results array as a no-op
+    // (printerManager already logged why nothing matched) rather than a false success.
+    const allOk = results.length > 0 && results.every(r => r.success)
     const anyOk = results.some(r => r.success)
-    if (allOk) {
+    if (results.length === 0) {
+      console.warn('[AutoPrint] printKitchenTokens returned empty — no printer matched')
+    } else if (allOk) {
       notify.success('Kitchen token printed successfully!')
     } else if (anyOk) {
       const failed = results.filter(r => !r.success).map(r => r.printerName || r.printerId).join(', ')

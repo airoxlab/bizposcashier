@@ -33,6 +33,7 @@ import { authManager } from '../../lib/authManager'
 import { cacheManager } from '../../lib/cacheManager'
 import Modal from '../../components/ui/Modal'
 import PinPad from '../../components/ui/PinPad'
+import OwnerFingerprintUnlock from '../../components/ui/OwnerFingerprintUnlock'
 import ConfirmModal from '../../components/ui/ConfirmModal'
 import NotificationSystem, { notify } from '../../components/ui/NotificationSystem'
 import themeManager from '../../lib/themeManager'
@@ -95,6 +96,7 @@ export default function ExpensesPage() {
   const [pin, setPin] = useState('')
   const [pinError, setPinError] = useState('')
   const [pinLoading, setPinLoading] = useState(false)
+  const [fpStatus, setFpStatus] = useState(null) // owner-fingerprint unlock status (shown in PinPad header)
 
   // Expenses data
   const [expenses, setExpenses] = useState([])
@@ -867,7 +869,22 @@ export default function ExpensesPage() {
                 <ArrowLeft className="w-5 h-5 mr-2" />
                 Back to Dashboard
               </motion.button>
-              <PinPad pin={pin} onPinChange={setPin} onSubmit={verifyPin} error={pinError} loading={pinLoading} />
+              <PinPad
+                pin={pin}
+                onPinChange={setPin}
+                onSubmit={verifyPin}
+                error={pinError}
+                loading={pinLoading}
+                fpStatus={fpStatus}
+                fpActive={!!fpStatus && !['unsupported', 'not_enrolled', 'loading'].includes(fpStatus)}
+              />
+
+              <OwnerFingerprintUnlock
+                compact
+                userId={user?.id}
+                onStatusChange={setFpStatus}
+                onUnlock={() => { setIsAuthenticated(true); setPin(''); setPinError('') }}
+              />
             </div>
           </div>
         </div>

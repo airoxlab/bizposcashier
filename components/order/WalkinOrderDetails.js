@@ -37,7 +37,7 @@ import ConvertToDeliveryModal from '../delivery/ConvertToDeliveryModal'
 import ConvertToTakeawayModal from '../delivery/ConvertToTakeawayModal'
 import { cacheManager } from '../../lib/cacheManager'
 import { useRouter } from 'next/navigation'
-import { getOrderItemsWithChanges, getCurrentUpdateVersion } from '../../lib/utils/orderChangesTracker'
+import { getOrderItemsWithChanges, getCurrentUpdateVersion, clearOrderChangeTracking } from '../../lib/utils/orderChangesTracker'
 import SendBillButton from '../pos/SendBillButton'
 import { getBusinessDate } from '../../lib/utils/businessDayUtils'
 
@@ -645,6 +645,8 @@ export default function WalkinOrderDetails({
       }
       const result = await cacheManager.updateOrderStatus(order.id, order.order_status, additionalData)
       if (!result.success) throw new Error('Failed to convert order')
+      // Reset diff/update-version state so the converted order prints clean merged quantities
+      clearOrderChangeTracking(order.id)
       onConvertToDelivery?.()
       onClose?.()
     } catch (err) {

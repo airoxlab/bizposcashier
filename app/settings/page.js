@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowLeft, Settings, User, Users, Palette, Download,
   Smartphone, Monitor, HardDrive, MessageSquare, CreditCard,
-  Zap, Wifi, WifiOff, FlaskConical,
+  Zap, Wifi, WifiOff, FlaskConical, Fingerprint,
 } from 'lucide-react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import themeManager from '../../lib/themeManager'
@@ -20,6 +20,7 @@ import { CustomersPanel } from './customers/page'
 import { WhatsAppPanel } from './whatsapp/page'
 import { CustomerAccountPanel } from './customer-account/page'
 import { MobilePanel } from './mobile/page'
+import { FingerprintPanel } from './fingerprint/page'
 import { UpdatesPanel } from './updates/page'
 import { BackupPanel } from './backup/page'
 import { PlanPanel } from './plan/page'
@@ -32,6 +33,7 @@ const SIDEBAR_ITEMS = [
   { id: 'whatsapp',          name: 'WhatsApp',            icon: MessageSquare, description: 'Messaging & automation' },
   { id: 'customer-account',  name: 'Customer Account',    icon: CreditCard,    description: 'Account alerts & receipts' },
   { id: 'mobile',            name: 'Mobile App',          icon: Smartphone,    description: 'Mobile app integration' },
+  { id: 'fingerprint',       name: 'Fingerprint',         icon: Fingerprint,   description: 'Attendance kiosk settings' },
   { id: 'updates',           name: 'Updates',             icon: Download,      description: 'Check for app updates' },
   { id: 'backup',            name: 'Backup & Recovery',   icon: HardDrive,     description: 'Backup offline data & recover orders' },
   { id: 'plan',              name: 'Plan & Billing',      icon: Zap,           description: 'Subscription & features' },
@@ -251,6 +253,7 @@ function SettingsContent() {
                     </motion.div>
                   )}
                   {activeTab === 'mobile'            && <MobilePanel key="mobile" />}
+                  {activeTab === 'fingerprint'       && <FingerprintPanel key="fingerprint" />}
                   {activeTab === 'updates'           && <UpdatesPanel key="updates" />}
                   {activeTab === 'backup'            && <BackupPanel key="backup" />}
                   {activeTab === 'plan'              && <PlanPanel key="plan" />}

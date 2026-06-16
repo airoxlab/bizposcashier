@@ -468,95 +468,345 @@ app.whenReady().then(() => {
 });
 
 
-// ─── Fingerprint comparison via dpfj.dll (DigitalPersona) ────────────────────
-// Raw intermediate data from DpHost WebSocket cannot be fed to dpfj_compare
-// directly — it must first be converted to a DPFJ FMD struct via dpfj_create_fmd.
-// DPFJ_FMD struct layout: { uint32 cbEffective; uint8 data[cbEffective-4]; }
-let _fingerFuncs = null
+// ═══ Fingerprint engine via dpfj.dll (DigitalPersona FingerJet) ══════════════
+// Pipeline (per the authoritative U.are.U SDK dpfj.h):
+//   1. DpHost WebSDK captures a finger as a SampleFormat.Intermediate IMAGE
+//      (base64). It is an image, NOT a template.
+//   2. dpfj_create_fmd_from_fid(...) extracts that image into an FMD
+//      (Fingerprint Minutiae Data) — a pre-reg / verification feature set.
+//   3. Enroll: combine N pre-reg FMDs (start/add/create/finish enrollment)
+//      into ONE registration template (stored in DB).
+//   4. Verify: dpfj_compare(regTemplate, liveVerFmd) → dissimilarity score.
+//      Lower score = better match. matched = score <= threshold.
+//
+// FMD format constants (dpfj.h):  PRE_REG=0, REG=1 (template), VER=2.
+// The exact FID/image format that the WebSDK "Intermediate" sample decodes
+// to is undocumented, so createFmd() PROBES a list of candidate input
+// formats and logs which one returns DPFJ_SUCCESS — we lock that in once the
+// first real-hardware run reveals it.
+const DPFJ = {
+  FMD_ANSI_378:  0x001B0001,
+  FMD_ISO_19794: 0x01010001,
+  FMD_PRE_REG:   0,   // pre-enrollment feature set
+  FMD_REG:       1,   // enrollment template (what we store)
+  FMD_VER:       2,   // verification feature set
+  // FID (image) input formats — candidates for the Intermediate sample
+  FID_ANSI_381:    0x001B0401,
+  FID_ISO_19794_4: 0x01010007,
+  SUCCESS: 0,
+  E_MORE_DATA: 0x05BA000D, // DPERROR(0x0d) — "accepted, add more" during enrollment
+}
 
-function getFingerFunctions() {
-  if (_fingerFuncs) return _fingerFuncs
+// dpfj_compare dissimilarity score is in [0, 0x7fffffff]; FAR ≈ score/0x7fffffff.
+// Default threshold targets FAR ≈ 1e-5 (1 in 100,000). Lower = stricter.
+const DPFJ_PROBABILITY_ONE = 0x7fffffff
+const DEFAULT_MATCH_THRESHOLD = Math.floor(DPFJ_PROBABILITY_ONE / 100000) // ≈ 21474
+const FMD_BUF = 8192 // generous; a single-view FMD is well under this
+
+let _fp = null
+function getFp() {
+  if (_fp) return _fp
   try {
     const koffi = require('koffi')
     const lib = koffi.load('dpfj.dll')
-    _fingerFuncs = {
-      koffi,
-      // Convert raw captured intermediate data → proper DPFJ FMD struct
-      createFmd: lib.func('dpfj_create_fmd', 'int', [
-        'uint32',                           // DPFPDD image format
-        'void *',                           // input buffer
-        'uint32',                           // input size
-        'uint32',                           // desired FMD format
-        koffi.out(koffi.pointer('void *')), // ppFMD [out] — allocated by callee
-      ]),
-      freeFmd: lib.func('dpfj_free_fmd', 'int', ['void *']),
-      compare: lib.func('dpfj_compare', 'int', [
-        'uint32', 'void *', 'uint32',
-        'uint32', 'void *', 'uint32',
-        'uint32',
-        koffi.out(koffi.pointer('uint32')), // achieved_far [out]
-        koffi.out(koffi.pointer('int32')),  // result [out] — 0=no match, >0=match
-      ]),
+    const fns = { koffi, available: {} }
+    const bind = (name, ret, args) => {
+      try { fns[name] = lib.func(name, ret, args); fns.available[name] = true }
+      catch (e) { fns.available[name] = false; log.warn(`[FP] symbol missing: ${name} (${e.message})`) }
     }
-    log.info('[Fingerprint] dpfj.dll loaded')
-    return _fingerFuncs
+    // image (FID) → FMD
+    bind('dpfj_create_fmd_from_fid', 'int', [
+      'uint32', 'void *', 'uint32', 'uint32', 'void *', koffi.inout(koffi.pointer('uint32')),
+    ])
+    // raw bitmap → FMD (fallback path if we ever capture Raw)
+    bind('dpfj_create_fmd_from_raw', 'int', [
+      'void *', 'uint32', 'uint32', 'uint32', 'uint32', 'uint32', 'uint32',
+      'uint32', 'void *', koffi.inout(koffi.pointer('uint32')),
+    ])
+    // legacy single-entry extractor present in older dpfj.dll builds
+    bind('dpfj_create_fmd', 'int', [
+      'uint32', 'void *', 'uint32', 'uint32', 'void *', koffi.inout(koffi.pointer('uint32')),
+    ])
+    // enrollment session (combine pre-reg FMDs → one template)
+    bind('dpfj_start_enrollment', 'int', ['uint32'])
+    bind('dpfj_add_to_enrollment', 'int', ['uint32', 'void *', 'uint32', 'uint32'])
+    bind('dpfj_create_enrollment_fmd', 'int', ['void *', koffi.inout(koffi.pointer('uint32'))])
+    bind('dpfj_finish_enrollment', 'int', [])
+    // 1:1 compare (single view vs single view)
+    bind('dpfj_compare', 'int', [
+      'uint32', 'void *', 'uint32', 'uint32',
+      'uint32', 'void *', 'uint32', 'uint32',
+      koffi.out(koffi.pointer('uint32')),
+    ])
+    // 1:N identify — matches a probe feature set against enrollment templates.
+    // fmds is an array of pointers; candidates is a DPFJ_CANDIDATE[] out buffer
+    // ({uint32 size; uint32 fmd_idx; uint32 view_idx} = 12 bytes each).
+    bind('dpfj_identify', 'int', [
+      'uint32', 'void *', 'uint32', 'uint32',         // probe: type, fmd, size, view
+      'uint32', 'uint32', 'void **', 'uint32 *',      // templates: type, cnt, fmds**, sizes*
+      'uint32', koffi.inout(koffi.pointer('uint32')), // threshold, candidate_cnt (in:capacity/out:found)
+      'void *',                                       // candidates out buffer
+    ])
+    _fp = fns
+    log.info('[FP] dpfj.dll loaded — symbols:', JSON.stringify(fns.available))
+    return _fp
   } catch (err) {
-    log.error('[Fingerprint] dpfj.dll load failed:', err.message)
+    log.error('[FP] dpfj.dll load failed:', err.message)
     return null
   }
 }
 
-// Convert one intermediate buffer → DPFJ FMD pointer.
-// DpHost's SampleFormat.Intermediate = 2, but DPFPDD_IMG_FMT_INTERMEDIATE = 1.
-// Try 1 first (native value), fall back to 2 (DpHost protocol value) if rejected.
-function createFmdFromBuf(f, buf) {
-  const DPFJ_FMD_DP_PRE_REG_FEATURES = 0x00270000
-  const fmdPtr = [null]
-  for (const fmt of [1, 2]) {
-    const s = f.createFmd(fmt, buf, buf.length, DPFJ_FMD_DP_PRE_REG_FEATURES, fmdPtr)
-    if (s === 0) return { fmdPtr, fmtUsed: fmt }
-    log.info(`[Fingerprint] create_fmd(fmt=${fmt}) → 0x${s.toString(16)}`)
+// IMPORTANT: the WebSDK SampleFormat.Intermediate sample is NOT an image — it
+// arrives as a ~330-byte DigitalPersona feature set (an FMD) already extracted
+// by DpHost. So we do NOT run a feature extractor (dpfj_create_fmd_*) on it;
+// we feed the raw sample bytes straight into enrollment / compare as an FMD.
+const hex = (n) => '0x' + ((n >>> 0).toString(16))
+
+// The DP feature-set type of a captured sample is not advertised, and the
+// stored template's type depends on how it was built. dpfj_compare only needs
+// the (fmd1_type, fmd2_type) pair to be right, so we probe candidate pairs once
+// and cache the winner. Lead with REG-template × VER-sample (the normal case).
+const TYPE_LABEL = { 0: 'PRE_REG', 1: 'REG', 2: 'VER', [DPFJ.FMD_ANSI_378]: 'ANSI378', [DPFJ.FMD_ISO_19794]: 'ISO19794' }
+// CRITICAL: only the small enum types {REG=1, VER=2} are safe with this
+// dpfj.dll. PRE_REG(0) → INVALID_PARAMETER for compare; ANSI378 → INVALID_FMD;
+// ISO19794 (and other big-hex types) cause an ACCESS VIOLATION that crashes the
+// whole process. Never pass ISO/ANSI to compare or enrollment. The canonical
+// match is a REG template vs a VER feature set, so [REG,VER] leads.
+const COMPARE_PAIRS = [
+  [DPFJ.FMD_REG, DPFJ.FMD_VER], [DPFJ.FMD_VER, DPFJ.FMD_REG],
+  [DPFJ.FMD_REG, DPFJ.FMD_REG], [DPFJ.FMD_VER, DPFJ.FMD_VER],
+]
+let _cmpPair = null
+
+// Compare a stored template against a live feature set. Probes type pairs until
+// dpfj_compare returns SUCCESS, then caches the working pair. Returns
+// { ok, score, pair, status } — score is dissimilarity (lower = better).
+function compareFmd(f, storedBuf, liveBuf) {
+  const run = (t1, t2) => {
+    const score = [0]
+    const status = f.dpfj_compare(t1, storedBuf, storedBuf.length, 0, t2, liveBuf, liveBuf.length, 0, score)
+    return { status, score: score[0] }
   }
+  if (_cmpPair) {
+    const r = run(_cmpPair[0], _cmpPair[1])
+    if (r.status === DPFJ.SUCCESS) return { ok: true, score: r.score, pair: _cmpPair, status: r.status }
+  }
+  let lastStatus = -1
+  for (const [t1, t2] of COMPARE_PAIRS) {
+    if (_cmpPair && t1 === _cmpPair[0] && t2 === _cmpPair[1]) continue
+    const r = run(t1, t2)
+    lastStatus = r.status
+    if (r.status === DPFJ.SUCCESS) {
+      _cmpPair = [t1, t2]
+      log.info(`[FP] compare pair locked → ${TYPE_LABEL[t1]}×${TYPE_LABEL[t2]}`)
+      return { ok: true, score: r.score, pair: _cmpPair, status: r.status }
+    }
+    log.info(`[FP] compare ${TYPE_LABEL[t1]}×${TYPE_LABEL[t2]} → status=${hex(r.status)}`)
+  }
+  return { ok: false, status: lastStatus }
+}
+
+// ── Stateful enrollment session ───────────────────────────────────────────────
+// The canonical DigitalPersona flow: dpfj_start_enrollment(REG) once, then
+// dpfj_add_to_enrollment(PRE_REG, …) for each captured feature set. The engine
+// returns DPFJ_E_MORE_DATA ("keep going") until it has enough, then SUCCESS —
+// only THEN do we dpfj_create_enrollment_fmd(). Samples are fed one per IPC call
+// as the user lifts and re-places the finger. Types stay in {REG, PRE_REG} only.
+let _enroll = { active: false, count: 0 }
+
+ipcMain.handle('fingerprint:enrollStart', async () => {
+  const f = getFp()
+  if (!f) return { ok: false, error: 'dpfj.dll not available — install DigitalPersona U.are.U runtime' }
+  if (!f.available.dpfj_start_enrollment) return { ok: false, error: 'enrollment not supported by dpfj.dll' }
+  try { if (_enroll.active) { try { f.dpfj_finish_enrollment() } catch {} } } catch {}
+  const startStatus = f.dpfj_start_enrollment(DPFJ.FMD_REG) // output template = REG
+  if (startStatus !== DPFJ.SUCCESS) { _enroll = { active: false, count: 0 }; return { ok: false, error: `start_enrollment → ${hex(startStatus)}` } }
+  _enroll = { active: true, count: 0 }
+  log.info('[FP] enrollStart OK (REG output)')
+  return { ok: true }
+})
+
+// Add one captured feature set. Returns:
+//   { ok:true, done:true, template }  — enrollment complete, REG template ready
+//   { ok:true, done:false, count }    — accepted, need more captures
+//   { ok:true, rejected:true, count } — bad/dup capture, ask the user to retry
+//   { ok:false, error }               — fatal; session is closed
+ipcMain.handle('fingerprint:enrollAdd', async (_event, sampleB64) => {
+  const f = getFp()
+  if (!f) return { ok: false, error: 'dpfj.dll not available' }
+  if (!_enroll.active) return { ok: false, error: 'enrollment not started' }
+  const buf = Buffer.from(sampleB64 || '', 'base64')
+  if (buf.length < 100 || buf.length > 4096) return { ok: true, rejected: true, count: _enroll.count, reason: 'bad capture size' }
+  try {
+    const st = f.dpfj_add_to_enrollment(DPFJ.FMD_PRE_REG, buf, buf.length, 0)
+    log.info(`[FP] add_to_enrollment → ${hex(st)} (count was ${_enroll.count})`)
+
+    if (st === DPFJ.E_MORE_DATA) { _enroll.count++; return { ok: true, done: false, count: _enroll.count } }
+
+    if (st === DPFJ.SUCCESS) {
+      _enroll.count++
+      // Engine is satisfied → build the registration template.
+      let out = Buffer.alloc(FMD_BUF); let sz = [FMD_BUF]
+      let createStatus = f.dpfj_create_enrollment_fmd(out, sz)
+      if (createStatus === DPFJ.E_MORE_DATA && sz[0] > 0 && sz[0] <= 65536) { // buffer too small — resize once
+        out = Buffer.alloc(sz[0]); sz = [out.length]
+        createStatus = f.dpfj_create_enrollment_fmd(out, sz)
+      }
+      try { f.dpfj_finish_enrollment() } catch {}
+      _enroll = { active: false, count: 0 }
+      log.info(`[FP] create_enrollment_fmd → ${hex(createStatus)} size=${sz[0]}`)
+      if (createStatus === DPFJ.SUCCESS && sz[0] > 0) {
+        const template = JSON.stringify({ v: 2, kind: 'reg', t: out.subarray(0, sz[0]).toString('base64') })
+        return { ok: true, done: true, template, templateBytes: sz[0] }
+      }
+      return { ok: false, error: `create_enrollment_fmd → ${hex(createStatus)}` }
+    }
+
+    // Any other code (e.g. INVALID_FMD on a smudged scan) → ask user to retry,
+    // keep the session open so prior good captures aren't lost.
+    return { ok: true, rejected: true, count: _enroll.count, reason: hex(st) }
+  } catch (err) {
+    try { f.dpfj_finish_enrollment() } catch {}
+    _enroll = { active: false, count: 0 }
+    log.error('[FP] enrollAdd error:', err.message)
+    return { ok: false, error: err.message }
+  }
+})
+
+ipcMain.handle('fingerprint:enrollCancel', async () => {
+  const f = getFp()
+  try { if (f && _enroll.active) f.dpfj_finish_enrollment() } catch {}
+  _enroll = { active: false, count: 0 }
+  return { ok: true }
+})
+
+// A stored template is JSON: { v:2, kind:'reg', t:b64 } (a REG template) or
+// { v:1, samples:[b64,...] } (raw feature sets). Legacy = a bare base64 string.
+// Return the list of comparable FMD buffers.
+function templateBufs(templateStr) {
+  try {
+    const o = JSON.parse(templateStr)
+    if (o && o.v === 2 && o.kind === 'reg' && o.t) return [Buffer.from(o.t, 'base64')]
+    if (o && o.v === 1 && Array.isArray(o.samples)) return o.samples.map(s => Buffer.from(s, 'base64'))
+  } catch { /* not JSON → legacy single base64 template */ }
+  return [Buffer.from(templateStr, 'base64')]
+}
+
+// Best (lowest) score of a live feature set vs all of a template's stored
+// feature sets, via dpfj_compare (legacy single-view fallback only).
+function compareTemplate(f, templateStr, liveBuf) {
+  let best = null, lastStatus = -1
+  for (const stored of templateBufs(templateStr)) {
+    const r = compareFmd(f, stored, liveBuf)
+    if (!r.ok) { lastStatus = r.status; continue }
+    if (!best || r.score < best.score) best = r
+  }
+  return best ? { ok: true, ...best } : { ok: false, status: lastStatus }
+}
+
+// Return the REG template buffer for a v2 template, else null.
+function regTemplateBuf(templateStr) {
+  try { const o = JSON.parse(templateStr); if (o && o.v === 2 && o.kind === 'reg' && o.t) return Buffer.from(o.t, 'base64') } catch {}
   return null
 }
 
-ipcMain.handle('fingerprint:compare', async (_event, storedB64, liveB64) => {
-  const f = getFingerFunctions()
-  if (!f) return { matched: false, error: 'dpfj.dll not available — install DigitalPersona drivers' }
-
-  const DPFJ_FMD_DP_PRE_REG_FEATURES = 0x00270000
-  const buf1 = Buffer.from(storedB64, 'base64')
-  const buf2 = Buffer.from(liveB64, 'base64')
-
-  const r1 = createFmdFromBuf(f, buf1)
-  const r2 = createFmdFromBuf(f, buf2)
-
-  try {
-    if (!r1) return { matched: false, error: 'create_fmd failed for stored template' }
-    if (!r2) return { matched: false, error: 'create_fmd failed for live sample' }
-
-    // Read cbEffective (first uint32) to get total FMD struct size
-    const fmd1Size = f.koffi.decode(r1.fmdPtr[0], 'uint32')
-    const fmd2Size = f.koffi.decode(r2.fmdPtr[0], 'uint32')
-    log.info(`[Fingerprint] FMD sizes: stored=${fmd1Size} live=${fmd2Size}`)
-
-    const achievedFar = [0]
-    const result = [0]
-    const status = f.compare(
-      DPFJ_FMD_DP_PRE_REG_FEATURES, r1.fmdPtr[0], fmd1Size,
-      DPFJ_FMD_DP_PRE_REG_FEATURES, r2.fmdPtr[0], fmd2Size,
-      0, achievedFar, result
-    )
-
-    log.info(`[Fingerprint] compare: status=0x${status.toString(16)} result=${result[0]} far=${achievedFar[0]}`)
-    return { matched: status === 0 && result[0] > 0, status, far: achievedFar[0] }
-  } catch (err) {
-    log.error('[Fingerprint] compare error:', err.message)
-    return { matched: false, error: err.message }
-  } finally {
-    try { if (r1?.fmdPtr[0]) f.freeFmd(r1.fmdPtr[0]) } catch {}
-    try { if (r2?.fmdPtr[0]) f.freeFmd(r2.fmdPtr[0]) } catch {}
+// 1:N (and 1:1) match via dpfj_identify — the correct call for matching a probe
+// feature set against multi-view REG enrollment templates. `regBufs` are REG
+// template buffers; returns { ok, matchedIdx } where matchedIdx is the index of
+// the matching template (or -1 if none under threshold).
+const CANDIDATE_SIZE = 12 // DPFJ_CANDIDATE { uint32 size, fmd_idx, view_idx }
+function identifyAgainst(f, liveBuf, regBufs, threshold) {
+  if (!f.available.dpfj_identify) return { ok: false, error: 'dpfj_identify missing' }
+  const cnt = regBufs.length
+  if (!cnt) return { ok: false, error: 'no templates' }
+  const sizes = regBufs.map(b => b.length)
+  const candidates = Buffer.alloc(CANDIDATE_SIZE * cnt)
+  for (let i = 0; i < cnt; i++) candidates.writeUInt32LE(CANDIDATE_SIZE, i * CANDIDATE_SIZE) // preset .size
+  const candCnt = [cnt] // in: capacity, out: number found
+  const status = f.dpfj_identify(
+    DPFJ.FMD_VER, liveBuf, liveBuf.length, 0,   // probe = live verification feature set
+    DPFJ.FMD_REG, cnt, regBufs, sizes,          // enrollment REG templates
+    threshold >>> 0, candCnt, candidates,
+  )
+  if (status !== DPFJ.SUCCESS) { log.info(`[FP] identify → status=${hex(status)}`); return { ok: false, status } }
+  const found = candCnt[0]
+  if (found > 0) {
+    const idx = candidates.readUInt32LE(4) // candidates[0].fmd_idx
+    return { ok: true, matchedIdx: idx, found }
   }
+  return { ok: true, matchedIdx: -1, found: 0 }
+}
+
+// 1:1 verify a live feature set against one stored template.
+ipcMain.handle('fingerprint:compare', async (_event, templateB64, liveB64, threshold) => {
+  const f = getFp()
+  if (!f) return { matched: false, error: 'dpfj.dll not available' }
+  const th = (Number.isFinite(threshold) ? threshold : DEFAULT_MATCH_THRESHOLD) >>> 0
+  try {
+    const live = Buffer.from(liveB64, 'base64')
+    const reg = regTemplateBuf(templateB64)
+    if (reg) {
+      const r = identifyAgainst(f, live, [reg], th)
+      if (!r.ok) return { matched: false, error: `identify failed ${r.status != null ? hex(r.status) : (r.error || '')}` }
+      log.info(`[FP] compare(identify) → matched=${r.matchedIdx === 0} threshold=${th}`)
+      return { matched: r.matchedIdx === 0, threshold: th }
+    }
+    // Legacy v1/raw template → single-view compare fallback.
+    const r = compareTemplate(f, templateB64, live)
+    if (!r.ok) return { matched: false, error: `compare failed ${hex(r.status)}` }
+    return { matched: r.score <= th, score: r.score, threshold: th }
+  } catch (err) {
+    log.error('[FP] compare error:', err.message)
+    return { matched: false, error: err.message }
+  }
+})
+
+// 1:N identify — one dpfj_identify call against all REG templates at once.
+// templates = [{ id, name, template }].
+ipcMain.handle('fingerprint:identify', async (_event, liveB64, templates, threshold) => {
+  const f = getFp()
+  if (!f) return { matched: false, error: 'dpfj.dll not available' }
+  const th = (Number.isFinite(threshold) ? threshold : DEFAULT_MATCH_THRESHOLD) >>> 0
+  try {
+    const live = Buffer.from(liveB64, 'base64')
+    const regs = [], emps = []
+    for (const t of (templates || [])) {
+      const reg = t?.template && regTemplateBuf(t.template)
+      if (reg) { regs.push(reg); emps.push(t) }
+    }
+    if (regs.length) {
+      const r = identifyAgainst(f, live, regs, th)
+      if (!r.ok) return { matched: false, error: `identify failed ${r.status != null ? hex(r.status) : (r.error || '')}` }
+      if (r.matchedIdx >= 0 && emps[r.matchedIdx]) {
+        const e = emps[r.matchedIdx]
+        log.info(`[FP] identify → MATCH ${e.name} (idx ${r.matchedIdx})`)
+        return { matched: true, id: e.id, name: e.name, threshold: th }
+      }
+      log.info('[FP] identify → no match under threshold')
+      return { matched: false, threshold: th }
+    }
+    // Legacy fallback: compare each raw template, take best score.
+    let best = null, comparable = 0
+    for (const t of (templates || [])) {
+      if (!t?.template) continue
+      const r = compareTemplate(f, t.template, live)
+      if (!r.ok) continue
+      comparable++
+      if (!best || r.score < best.score) best = { id: t.id, name: t.name, score: r.score }
+    }
+    if (!comparable) return { matched: false, error: 'no comparable templates' }
+    return { matched: best.score <= th, ...best, threshold: th }
+  } catch (err) {
+    log.error('[FP] identify error:', err.message)
+    return { matched: false, error: err.message }
+  }
+})
+
+// Diagnostics — confirms the DLL loaded and which symbols resolved.
+ipcMain.handle('fingerprint:selftest', async () => {
+  const f = getFp()
+  if (!f) return { ok: false, error: 'dpfj.dll failed to load — is the DigitalPersona U.are.U runtime installed?' }
+  return { ok: true, symbols: f.available, defaultThreshold: DEFAULT_MATCH_THRESHOLD }
 })
 
 app.on('window-all-closed', () => {
