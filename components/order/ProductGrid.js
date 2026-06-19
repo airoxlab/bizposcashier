@@ -161,7 +161,7 @@ const ProductGrid = forwardRef(({
     <div className={`flex-1 flex flex-col overflow-hidden ${isDark ? 'bg-gray-900' : 'bg-gray-50'}`}>
       <div className={`${classes.card} ${classes.shadow} shadow-sm ${classes.border} border-b p-4`}>
         <div className="flex items-center justify-between mb-3">
-          <div>
+          <div className="flex-shrink-0">
             <h1 className={`text-xl font-bold ${classes.textPrimary}`}>
               Products Menu
             </h1>
@@ -175,25 +175,31 @@ const ProductGrid = forwardRef(({
             </p>
           </div>
           {headerCenter && (
-            <div className="flex-1 flex justify-center px-4">
+            <div className="flex-1 flex justify-center px-2">
               {headerCenter}
             </div>
           )}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowAnalytics(true)}
-              title="My Shift Analytics"
-              className={`p-2 rounded-xl transition-all ${isDark ? 'hover:bg-indigo-900/40 text-indigo-400' : 'hover:bg-indigo-50 text-indigo-500'}`}
-            >
-              <BarChart2 className="w-4.5 h-4.5" style={{ width: 18, height: 18 }} />
-            </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {/* On classic pages (no tabs) keep the analytics icon on the right */}
+            {!headerCenter && (
+              <button
+                onClick={() => setShowAnalytics(true)}
+                title="My Shift Analytics"
+                className={`p-2 rounded-xl transition-all ${isDark ? 'hover:bg-indigo-900/40 text-indigo-400' : 'hover:bg-indigo-50 text-indigo-500'}`}
+              >
+                <BarChart2 className="w-4.5 h-4.5" style={{ width: 18, height: 18 }} />
+              </button>
+            )}
             <div className="text-right">
               <div className={`text-xs ${classes.textSecondary}`}>
                 {new Date().toLocaleDateString()}
               </div>
-              <div className={`text-sm font-semibold ${classes.textPrimary}`}>
-                {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}
-              </div>
+              {/* Time hidden on the new-order screen to free up horizontal space */}
+              {!headerCenter && (
+                <div className={`text-sm font-semibold ${classes.textPrimary}`}>
+                  {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true })}
+                </div>
+              )}
             </div>
           </div>
         </div>

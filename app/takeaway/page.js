@@ -10,7 +10,7 @@ import { authManager } from '../../lib/authManager'
 import loyaltyManager from '../../lib/loyaltyManager'
 import { webOrderNotificationManager } from '../../lib/webOrderNotification'
 import { notify } from '../../components/ui/NotificationSystem'
-import { getOrderItemsWithChanges } from '../../lib/utils/orderChangesTracker'
+import { getOrderItemsWithChanges, saveChangesOffline, applyChangesToItems } from '../../lib/utils/orderChangesTracker'
 import Modal from '../../components/ui/Modal'
 import { printerManager } from '../../lib/printerManager'
 import TakeawayCustomerForm from '../../components/pos/TakeawayCustomerForm'
@@ -2023,8 +2023,56 @@ export default function TakeawayPage() {
         }
       })
 
-      // 🆕 Check for order changes using order_item_changes table
-      if (order.id) {
+      // Pre-payment print for a reopened order: apply local changes directly
+      // to avoid DB returning a previous modification's data.
+      let localChangesApplied = false
+      if (isReopenedOrder && originalOrderId && order.id === originalOrderId) {
+        try {
+          const originalStateStr = localStorage.getItem('takeaway_original_state')
+          if (originalStateStr) {
+            const originalState = JSON.parse(originalStateStr)
+            const changes = { itemsAdded: [], itemsRemoved: [], itemsModified: [] }
+            originalState.items.forEach(oldItem => {
+              const itemName = oldItem.isDeal ? oldItem.dealName : oldItem.productName
+              const itemVariant = oldItem.isDeal ? null : oldItem.variantName
+              const stillExists = cart.find(n => {
+                const nName = n.isDeal ? n.dealName : n.productName
+                const nVariant = n.isDeal ? null : n.variantName
+                return nName === itemName && nVariant === itemVariant
+              })
+              if (!stillExists) changes.itemsRemoved.push({ name: itemName, variant: itemVariant, quantity: oldItem.quantity, price: oldItem.totalPrice })
+            })
+            cart.forEach(newItem => {
+              const itemName = newItem.isDeal ? newItem.dealName : newItem.productName
+              const itemVariant = newItem.isDeal ? null : newItem.variantName
+              const oldItem = originalState.items.find(o => {
+                const oName = o.isDeal ? o.dealName : o.productName
+                const oVariant = o.isDeal ? null : o.variantName
+                return oName === itemName && oVariant === itemVariant
+              })
+              if (!oldItem) {
+                changes.itemsAdded.push({ name: itemName, variant: itemVariant, quantity: newItem.quantity, price: newItem.totalPrice })
+              } else if (oldItem.quantity !== newItem.quantity) {
+                changes.itemsModified.push({ name: itemName, variant: itemVariant, oldQuantity: oldItem.quantity, newQuantity: newItem.quantity, oldPrice: oldItem.totalPrice, newPrice: newItem.totalPrice })
+              }
+            })
+            const hasChanges = changes.itemsAdded.length > 0 || changes.itemsRemoved.length > 0 || changes.itemsModified.length > 0
+            if (hasChanges) {
+              saveChangesOffline(order.id, order.order_number, changes, { cacheOnly: true })
+              const cachedAll = JSON.parse(localStorage.getItem('order_changes') || '{}')
+              const storedChanges = cachedAll[order.id] || []
+              if (storedChanges.length) {
+                mappedItems = applyChangesToItems(mappedItems, storedChanges)
+                localChangesApplied = true
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('Could not apply local order changes for print:', e)
+        }
+      }
+
+      if (order.id && !localChangesApplied) {
         mappedItems = await getOrderItemsWithChanges(order.id, mappedItems)
       }
 

@@ -21,10 +21,11 @@ import TableSelectionPanel from '../../components/order/TableSelectionPanel'
 import loyaltyManager from '../../lib/loyaltyManager'
 import { webOrderNotificationManager } from '../../lib/webOrderNotification'
 import { usePermissions } from '../../lib/permissionManager'
-import { Users, ShoppingBag, Truck, FileText, Printer, CheckCircle } from 'lucide-react'
+import { Users, ShoppingBag, Truck, FileText, Printer, CheckCircle, Globe, ArrowLeft } from 'lucide-react'
 import toast from 'react-hot-toast'
 import PosToaster from '@/components/ui/PosToaster'
 import SplitPaymentModal from '../../components/pos/SplitPaymentModal'
+import WebOrdersPage from '../web-orders/page'
 
 const ORDER_TABS = [
   {
@@ -88,9 +89,13 @@ export default function NewOrderPage() {
   const [theme, setTheme] = useState('light')
 
   // Active order type tab
-  const [activeOrderType, setActiveOrderType] = useState(() =>
-    typeof window !== 'undefined' ? (localStorage.getItem('new_order_active_type') || 'walkin') : 'walkin'
-  )
+  const [activeOrderType, setActiveOrderType] = useState(() => {
+    if (typeof window === 'undefined') return 'walkin'
+    const saved = localStorage.getItem('new_order_active_type')
+    // Never auto-reopen into the embedded Web Orders view on page load — it's a
+    // management view, not an order-entry tab. Fall back to walk-in.
+    return (!saved || saved === 'weborders') ? 'walkin' : saved
+  })
 
   // Shared cart, customer, instructions across order types
   const [cart, setCart] = useState([])
@@ -153,6 +158,14 @@ export default function NewOrderPage() {
   // Per-order-type "customer required" flags from admin settings (users.require_customer_*).
   // Cached in localStorage.pos_require_customer by cacheManager.
   const [requireCustomer, setRequireCustomer] = useState({ walkin: false, takeaway: false, delivery: true })
+
+  // Web Orders tab: pending count badge shown on the tab without opening it
+  const [webOrderCount, setWebOrderCount] = useState(0)
+  const refreshWebOrderCount = () => {
+    webOrderNotificationManager.getPendingCount()
+      .then(c => setWebOrderCount(c))
+      .catch(() => {})
+  }
 
   // Persist shared cart/instructions to localStorage
   useEffect(() => {
@@ -237,10 +250,11 @@ export default function NewOrderPage() {
         console.error('Failed to initialize loyalty manager:', err)
       })
       webOrderNotificationManager.setUserId(userData.id)
-      webOrderNotificationManager.startListening(null, {
+      refreshWebOrderCount()
+      webOrderNotificationManager.startListening(() => refreshWebOrderCount(), {
         action: {
           label: 'View Web Orders',
-          onClick: () => router.push('/web-orders')
+          onClick: () => setActiveOrderType('weborders')
         }
       })
     }
@@ -313,6 +327,10 @@ export default function NewOrderPage() {
       setNetworkStatus(cacheManager.getNetworkStatus())
     }, 1000)
 
+    // Keep the Web Orders badge fresh (catches approvals/rejections that the
+    // INSERT-only realtime listener doesn't see)
+    const webCountInterval = setInterval(() => refreshWebOrderCount(), 30000)
+
     const handleFocus = () => {
       checkAndLoadData()
       // Sync cart/customer/instructions from localStorage — clears them if payment succeeded
@@ -349,6 +367,7 @@ export default function NewOrderPage() {
 
     return () => {
       clearInterval(statusInterval)
+      clearInterval(webCountInterval)
       window.removeEventListener('focus', handleFocus)
       window.removeEventListener('orderReopened', handleOrderReopened)
     }
@@ -880,14 +899,14 @@ export default function NewOrderPage() {
   }
 
   const tabBar = (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-1.5">
       {(permissionsReady ? ORDER_TABS.filter(tab => permissions.hasPermission(tab.permissionKey)) : ORDER_TABS).map(tab => {
         const isActive = activeOrderType === tab.id
         return (
           <button
             key={tab.id}
             onClick={() => handleTabSwitch(tab.id)}
-            className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-sm font-semibold transition-all duration-200 ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap flex-shrink-0 transition-all duration-200 ${
               isActive
                 ? `bg-gradient-to-r ${tab.gradient} text-white shadow-md scale-105`
                 : isDark
@@ -895,13 +914,69 @@ export default function NewOrderPage() {
                   : 'bg-gray-100 text-gray-600 hover:bg-gray-200 border border-gray-200'
             }`}
           >
-            <tab.icon className="w-3.5 h-3.5" />
+            <tab.icon className="w-3 h-3" />
             {tab.label}
           </button>
         )
       })}
+
+      {/* Web Orders tab — opens the embedded web orders manager; badge shows the
+          count of pending web/mobile orders without having to open it */}
+      {(!permissionsReady || permissions.hasPermission('WEB_ORDERS')) && (
+        <button
+          key="weborders"
+          onClick={() => handleTabSwitch('weborders')}
+          className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap flex-shrink-0 transition-all duration-200 ${
+            activeOrderType === 'weborders'
+              ? 'bg-gradient-to-r from-pink-500 to-rose-600 text-white shadow-md scale-105'
+              : isDark
+                ? 'bg-gray-700 text-gray-300 hover:bg-gray-600 border border-gray-600'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200 border border-gray-200'
+          }`}
+        >
+          <Globe className="w-3 h-3" />
+          Web Orders
+          {webOrderCount > 0 && (
+            <span className={`absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold flex items-center justify-center shadow ${
+              activeOrderType === 'weborders' ? 'bg-white text-rose-600' : 'bg-red-500 text-white'
+            }`}>
+              {webOrderCount > 99 ? '99+' : webOrderCount}
+            </span>
+          )}
+        </button>
+      )}
     </div>
   )
+
+  // Web Orders tab — render the existing web-orders manager embedded inside the
+  // new-order screen. The shared tab bar stays at the top so the cashier can
+  // switch back to walk-in / takeaway / delivery without leaving the page.
+  if (activeOrderType === 'weborders') {
+    return (
+      <div className={`h-screen flex flex-col ${classes.background} overflow-hidden transition-all duration-500`}>
+        <PosToaster isDark={isDark} toastOptions={{ duration: 2000 }} />
+        <div className={`flex items-center gap-3 px-4 py-2.5 border-b ${classes.border} ${classes.card}`}>
+          <button
+            onClick={handleBackClick}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+              isDark ? 'bg-gray-700 text-gray-200 hover:bg-gray-600' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            }`}
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Back
+          </button>
+          {tabBar}
+        </div>
+        <div className="flex-1 overflow-hidden">
+          <WebOrdersPage
+            embedded
+            onBack={() => handleTabSwitch('walkin')}
+            onOrdersChanged={refreshWebOrderCount}
+          />
+        </div>
+      </div>
+    )
+  }
 
   // Resolve table name from order — falls back to cache lookup when join isn't populated
   const resolveTableName = (order) => {
@@ -1787,6 +1862,7 @@ export default function NewOrderPage() {
           }
         }}
         requireOrderTaker={activeOrderType === 'walkin' ? requireOrderTaker : false}
+        showAnalyticsButton={true}
       />
 
       </div>{/* end flex flex-1 overflow-hidden */}

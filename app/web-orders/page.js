@@ -642,7 +642,7 @@ const OrderDetailsModal = ({ isOpen, onClose, order, orderItems, isDark, onAppro
   );
 };
 
-function WebOrdersPage() {
+function WebOrdersPage({ embedded = false, onBack, onOrdersChanged } = {}) {
   const router = useRouter();
   const permissions = usePermissions();
   const [user, setUser] = useState(null);
@@ -822,6 +822,8 @@ function WebOrdersPage() {
       if (error) throw error;
 
       setOrders(data || []);
+      // Let an embedding parent (e.g. the new-order screen) refresh its badge count
+      onOrdersChanged?.(data || []);
       console.log(`✅ [Web Orders] Fetched ${data?.length || 0} orders (filter: ${statusFilter})`);
     } catch (error) {
       console.error("❌ [Web Orders] Error fetching orders:", error);
@@ -1243,7 +1245,7 @@ function WebOrdersPage() {
   return (
     <PlanGate feature="customer_website">
     <ProtectedPage permissionKey="WEB_ORDERS" pageName="Web Orders">
-      <div className={`min-h-screen ${themeClasses.bg}`}>
+      <div className={`${embedded ? "h-full overflow-y-auto" : "min-h-screen"} ${themeClasses.bg}`}>
         {/* Header */}
         <div className={`sticky top-0 z-40 ${isDark ? "bg-gray-900/95" : "bg-white/95"} backdrop-blur-sm border-b ${isDark ? "border-gray-800" : "border-gray-200"}`}>
           <div className="px-6 py-4">
@@ -1252,7 +1254,7 @@ function WebOrdersPage() {
                 <motion.button
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.95 }}
-                  onClick={() => router.push("/dashboard")}
+                  onClick={() => (embedded ? onBack?.() : router.push("/dashboard"))}
                   className={`p-2 rounded-xl ${themeClasses.button} transition-all`}
                 >
                   <ArrowLeft className="w-5 h-5" />

@@ -40,6 +40,7 @@ export default function CartSidebar({
   requireOrderTaker = false,
   onUpdateItemDiscount,
   isPlacingOrder = false,
+  showAnalyticsButton = false,
 }) {
   const [showInstructionPanel, setShowInstructionPanel] = useState(false)
   const [draftInstruction, setDraftInstruction] = useState('')
@@ -132,6 +133,20 @@ export default function CartSidebar({
             <p className={`${classes.textSecondary} text-xs`}>{cart.length} items in cart</p>
           </div>
           <div className="flex items-center space-x-1.5">
+            {/* Shift Analytics — shown here (instead of in the products header)
+                on the new-order screen so the order-type tabs get a full row */}
+            {showAnalyticsButton && (
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={() => setShowAnalytics(true)}
+                title="My Shift Analytics"
+                className={`p-1.5 rounded-lg transition-all ${isDark ? 'hover:bg-indigo-900/40 text-indigo-400' : 'hover:bg-indigo-50 text-indigo-500'}`}
+              >
+                <BarChart2 className="w-3.5 h-3.5" />
+              </motion.button>
+            )}
+
             {/* Theme Toggle */}
             {onToggleTheme && (
               <motion.button

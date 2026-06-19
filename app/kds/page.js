@@ -35,7 +35,8 @@ import {
   List,
   Table2,
   Printer,
-  ArrowUpDown
+  ArrowUpDown,
+  Truck
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'

@@ -340,9 +340,8 @@ export default function WalkinOrdersSidebar({
       let mappedItems = items
       if (isUpdated) {
         updateVersion = getCurrentUpdateVersion(order.id)
-        const changes = getOrderChanges(order.id)
-        const hasChanges = changes && (changes.added?.length || changes.removed?.length || changes.modified?.length)
-        if (hasChanges) mappedItems = getOrderItemsWithChanges(order.id, items)
+        const { hasChanges } = await getOrderChanges(order.id)
+        if (hasChanges) mappedItems = await getOrderItemsWithChanges(order.id, items)
       }
       await printerManager.printKitchenTokens({
         orderId: order.id,

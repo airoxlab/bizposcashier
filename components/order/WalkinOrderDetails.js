@@ -37,7 +37,7 @@ import ConvertToDeliveryModal from '../delivery/ConvertToDeliveryModal'
 import ConvertToTakeawayModal from '../delivery/ConvertToTakeawayModal'
 import { cacheManager } from '../../lib/cacheManager'
 import { useRouter } from 'next/navigation'
-import { getOrderItemsWithChanges, getCurrentUpdateVersion, clearOrderChangeTracking } from '../../lib/utils/orderChangesTracker'
+import { getOrderChanges, getOrderItemsWithChanges, getCurrentUpdateVersion, clearOrderChangeTracking } from '../../lib/utils/orderChangesTracker'
 import SendBillButton from '../pos/SendBillButton'
 import { getBusinessDate } from '../../lib/utils/businessDayUtils'
 
@@ -73,6 +73,7 @@ export default function WalkinOrderDetails({
   const [isPrintingReceipt, setIsPrintingReceipt] = useState(false)
   const [isPrintingToken, setIsPrintingToken] = useState(false)
   const [openPrintDropdown, setOpenPrintDropdown] = useState(null) // 'receipt' | 'token'
+  const [orderHasChanges, setOrderHasChanges] = useState(false)
   const router = useRouter()
   const permissions = usePermissions()
   const contentRef = useRef(null)
@@ -256,6 +257,8 @@ export default function WalkinOrderDetails({
     if (order?.id) {
       fetchOrderDetails()
       setPaymentCompleted(false)
+      setOrderHasChanges(false)
+      getOrderChanges(order.id).then(({ hasChanges }) => setOrderHasChanges(hasChanges)).catch(() => {})
     }
   }, [order?.id])
 
@@ -986,12 +989,14 @@ export default function WalkinOrderDetails({
                     >
                       <Printer className="w-3 h-3" /> Print Receipt
                     </button>
-                    <button
-                      onClick={() => handlePrintReceipt(true)}
-                      className={`w-full px-3 py-2 text-xs text-left flex items-center gap-2 transition-colors border-t ${isDark ? 'hover:bg-gray-700 text-orange-400 border-gray-700' : 'hover:bg-orange-50 text-orange-600 border-gray-100'}`}
-                    >
-                      <RefreshCw className="w-3 h-3" /> Print Updated Receipt
-                    </button>
+                    {orderHasChanges && (
+                      <button
+                        onClick={() => handlePrintReceipt(true)}
+                        className={`w-full px-3 py-2 text-xs text-left flex items-center gap-2 transition-colors border-t ${isDark ? 'hover:bg-gray-700 text-orange-400 border-gray-700' : 'hover:bg-orange-50 text-orange-600 border-gray-100'}`}
+                      >
+                        <RefreshCw className="w-3 h-3" /> Print Updated Receipt
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -1027,12 +1032,14 @@ export default function WalkinOrderDetails({
                     >
                       <Printer className="w-3 h-3" /> Print Token
                     </button>
-                    <button
-                      onClick={() => handlePrintToken(true)}
-                      className={`w-full px-3 py-2 text-xs text-left flex items-center gap-2 transition-colors border-t ${isDark ? 'hover:bg-gray-700 text-orange-400 border-gray-700' : 'hover:bg-orange-50 text-orange-600 border-gray-100'}`}
-                    >
-                      <RefreshCw className="w-3 h-3" /> Print Updated Token
-                    </button>
+                    {orderHasChanges && (
+                      <button
+                        onClick={() => handlePrintToken(true)}
+                        className={`w-full px-3 py-2 text-xs text-left flex items-center gap-2 transition-colors border-t ${isDark ? 'hover:bg-gray-700 text-orange-400 border-gray-700' : 'hover:bg-orange-50 text-orange-600 border-gray-100'}`}
+                      >
+                        <RefreshCw className="w-3 h-3" /> Print Updated Token
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

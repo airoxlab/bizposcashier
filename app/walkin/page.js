@@ -11,7 +11,7 @@ import { printerManager } from '../../lib/printerManager'
 import loyaltyManager from '../../lib/loyaltyManager'
 import { webOrderNotificationManager } from '../../lib/webOrderNotification'
 import { notify } from '../../components/ui/NotificationSystem'
-import { getOrderItemsWithChanges, saveChangesOffline } from '../../lib/utils/orderChangesTracker'
+import { getOrderItemsWithChanges, saveChangesOffline, applyChangesToItems } from '../../lib/utils/orderChangesTracker'
 import Modal from '../../components/ui/Modal'
 import WalkInCustomerForm from '../../components/pos/WalkInCustomerForm'
 import CategorySidebar from '../../components/order/CategorySidebar'
@@ -2557,9 +2557,11 @@ export default function WalkInPage() {
         }
       })
 
-      // If this is a reopened order with unsaved changes (print before payment),
-      // compute the diff from walkin_original_state vs current cart and cache it
-      // so getOrderItemsWithChanges can find and apply the changes on the token.
+      // Pre-payment print for a reopened order: compute the diff locally and apply
+      // it directly WITHOUT hitting the DB. If we let getOrderItemsWithChanges go to
+      // the DB it returns a PREVIOUS modification's changes (the current modification
+      // hasn't been saved yet) and overwrites the fresh localStorage cache.
+      let localChangesApplied = false
       if (isReopenedOrder && originalOrderId && order.id === originalOrderId) {
         try {
           const originalStateStr = localStorage.getItem('walkin_original_state')
@@ -2598,15 +2600,22 @@ export default function WalkInPage() {
             const hasChanges = changes.itemsAdded.length > 0 || changes.itemsRemoved.length > 0 || changes.itemsModified.length > 0
             if (hasChanges) {
               saveChangesOffline(order.id, order.order_number, changes, { cacheOnly: true })
+              // Read back the freshly stored order_item_changes format and apply directly
+              const cachedAll = JSON.parse(localStorage.getItem('order_changes') || '{}')
+              const storedChanges = cachedAll[order.id] || []
+              if (storedChanges.length) {
+                mappedItems = applyChangesToItems(mappedItems, storedChanges)
+                localChangesApplied = true
+              }
             }
           }
         } catch (e) {
-          console.warn('Could not cache order changes for print:', e)
+          console.warn('Could not apply local order changes for print:', e)
         }
       }
 
-      // 🆕 Check for order changes using order_item_changes table
-      if (order.id) {
+      // For non-reopened prints (or if local apply failed), fetch from DB/cache
+      if (order.id && !localChangesApplied) {
         mappedItems = await getOrderItemsWithChanges(order.id, mappedItems)
       }
 
