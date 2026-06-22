@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Search, RefreshCw, X, Star, ChevronRight,
   ShoppingBag, TrendingUp, Award, CreditCard, Users,
+  Repeat2, UserCheck,
 } from 'lucide-react'
 import themeManager from '../../../lib/themeManager'
 import { authManager } from '../../../lib/authManager'
@@ -186,6 +187,32 @@ export function CustomerInsightsPanel() {
     loadDetail(c)
   }
 
+  // ── summary cards (computed from all customers, ignores search filter) ────────
+  const summary = useMemo(() => {
+    if (customers.length === 0) return null
+    let totalRevenue = 0, totalOrders = 0, loyaltyMembers = 0, repeatCustomers = 0
+    let topSpender = null, topSpenderAmt = 0
+    for (const c of customers) {
+      const s = orderStats[c.id] || {}
+      const l = loyaltyMap[c.id]
+      totalRevenue  += s.netSpent || 0
+      totalOrders   += s.count    || 0
+      if (l?.current_balance > 0) loyaltyMembers++
+      if ((s.count || 0) >= 2)   repeatCustomers++
+      if ((s.netSpent || 0) > topSpenderAmt) { topSpenderAmt = s.netSpent || 0; topSpender = c }
+    }
+    return {
+      totalCustomers: customers.length,
+      totalRevenue,
+      totalOrders,
+      avgOrder:        totalOrders ? totalRevenue / totalOrders : 0,
+      loyaltyMembers,
+      repeatCustomers,
+      topSpender,
+      topSpenderAmt,
+    }
+  }, [customers, orderStats, loyaltyMap])
+
   // ── enriched list (filtered + sorted) ──────────────────────────────────────
   const enriched = useMemo(() => {
     const q = search.toLowerCase()
@@ -245,8 +272,7 @@ export function CustomerInsightsPanel() {
       {/* ── toolbar ──────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between mb-4 gap-2 flex-wrap">
         <span className={`text-sm ${classes.textSecondary}`}>
-          {enriched.length} customer{enriched.length !== 1 ? 's' : ''}
-          {enriched.length > 0 && ` · Rs ${enriched.reduce((s, c) => s + (c.stat.netSpent || 0), 0).toLocaleString('en-PK', { maximumFractionDigits: 0 })} total revenue`}
+          {search ? `${enriched.length} of ${customers.length}` : `${enriched.length}`} customer{enriched.length !== 1 ? 's' : ''}
         </span>
         <div className="flex items-center gap-2 flex-wrap">
           <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border ${isDark ? 'bg-gray-800 border-gray-700' : 'bg-white border-gray-200'}`}>
@@ -281,6 +307,47 @@ export function CustomerInsightsPanel() {
           </button>
         </div>
       </div>
+
+      {/* ── summary cards ────────────────────────────────────────────────────── */}
+      {!loading && summary && (
+        <div className="grid grid-cols-6 gap-2 mb-5">
+          {[
+            { label: 'Customers',       value: summary.totalCustomers,  sub: `${summary.totalOrders} orders`,                    icon: Users,    color: 'purple' },
+            { label: 'Total Revenue',   value: fmt(summary.totalRevenue), sub: `Avg ${fmt(summary.avgOrder)}`,                   icon: TrendingUp, color: 'green' },
+            { label: 'Top Spender',     value: summary.topSpender ? (summary.topSpender.full_name || summary.topSpender.phone || '—') : '—', sub: summary.topSpenderAmt > 0 ? fmt(summary.topSpenderAmt) : '—', icon: Award, color: 'yellow' },
+            { label: 'Loyalty Members', value: summary.loyaltyMembers,  sub: `${customers.length - summary.loyaltyMembers} without`, icon: Star,  color: 'amber' },
+            { label: 'Repeat',          value: summary.repeatCustomers, sub: `${summary.totalCustomers - summary.repeatCustomers} once`, icon: Repeat2, color: 'blue' },
+            { label: 'Credit Accts',    value: customers.filter(c => (c.account_balance || 0) !== 0).length, sub: `${customers.filter(c => (c.credit_limit || 0) > 0).length} w/ limit`, icon: CreditCard, color: 'teal' },
+          ].map(({ label, value, sub, icon: Icon, color }) => {
+            const bgIcon = {
+              purple: isDark ? 'bg-purple-900/30 text-purple-400' : 'bg-purple-100 text-purple-600',
+              green:  isDark ? 'bg-green-900/30 text-green-400'   : 'bg-green-100 text-green-600',
+              yellow: isDark ? 'bg-yellow-900/30 text-yellow-400' : 'bg-yellow-100 text-yellow-600',
+              amber:  isDark ? 'bg-amber-900/30 text-amber-400'   : 'bg-amber-100 text-amber-600',
+              blue:   isDark ? 'bg-blue-900/30 text-blue-400'     : 'bg-blue-100 text-blue-600',
+              teal:   isDark ? 'bg-teal-900/30 text-teal-400'     : 'bg-teal-100 text-teal-600',
+            }[color]
+            const border = {
+              purple: isDark ? 'border-purple-700/30' : 'border-purple-100',
+              green:  isDark ? 'border-green-700/30'  : 'border-green-100',
+              yellow: isDark ? 'border-yellow-700/30' : 'border-yellow-100',
+              amber:  isDark ? 'border-amber-700/30'  : 'border-amber-100',
+              blue:   isDark ? 'border-blue-700/30'   : 'border-blue-100',
+              teal:   isDark ? 'border-teal-700/30'   : 'border-teal-100',
+            }[color]
+            return (
+              <div key={label} className={`rounded-xl border p-2.5 ${isDark ? 'bg-gray-800' : 'bg-white'} ${border}`}>
+                <div className={`w-6 h-6 rounded-md flex items-center justify-center mb-2 ${bgIcon}`}>
+                  <Icon className="w-3 h-3" />
+                </div>
+                <div className={`text-sm font-bold leading-tight ${classes.textPrimary} truncate`}>{String(value)}</div>
+                <div className={`text-[10px] font-medium mt-0.5 ${classes.textSecondary}`}>{label}</div>
+                <div className={`text-[10px] mt-0.5 truncate ${isDark ? 'text-gray-600' : 'text-gray-400'}`}>{sub}</div>
+              </div>
+            )
+          })}
+        </div>
+      )}
 
       {/* ── customer list ─────────────────────────────────────────────────────── */}
       {loading ? (
