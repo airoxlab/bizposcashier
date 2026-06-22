@@ -51,6 +51,7 @@ import { networkPrintListener } from '../../lib/networkPrintListener'
 import ProtectedPage from '../../components/ProtectedPage'
 import PrinterStatusBadge from '../../components/PrinterStatusBadge'
 import FingerprintStatusBadge from '../../components/FingerprintStatusBadge'
+import DashboardUpdateButton from '../../components/DashboardUpdateButton'
 import CashierAnalytics from '../../components/pos/CashierAnalytics'
 import { usePermissions, permissionManager } from '../../lib/permissionManager'
 import { planManager } from '../../lib/planManager'
@@ -668,7 +669,7 @@ export default function Dashboard() {
       <motion.header
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
-        className={`w-full ${themeClasses.header} backdrop-blur-lg 
+        className={`relative w-full ${themeClasses.header} backdrop-blur-lg
                ${themeClasses.border} border-b shadow-lg`}
       >
         <div className="max-w-7xl mx-auto px-6 py-4">
@@ -797,8 +798,12 @@ export default function Dashboard() {
             </div>
 
             {/* Center: Time and Date */}
-            <div className="text-center">
-              <motion.div 
+            <div className="flex items-center justify-center gap-4">
+              {/* Update Button — only renders when an update is available (mock for now) */}
+              <DashboardUpdateButton />
+
+              <div className="text-center">
+              <motion.div
                 initial={{ scale: 0.9 }}
                 animate={{ scale: 1 }}
                 className={`text-4xl font-bold ${themeClasses.textPrimary} mb-1`}
@@ -807,6 +812,7 @@ export default function Dashboard() {
               </motion.div>
               <div className={`text-sm ${themeClasses.textSecondary}`}>
                 {formatDate(currentTime)}
+              </div>
               </div>
             </div>
 

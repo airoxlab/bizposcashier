@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowLeft, Settings, User, Users, Palette, Download,
   Smartphone, Monitor, HardDrive, MessageSquare, CreditCard,
-  Zap, Wifi, WifiOff, FlaskConical, Fingerprint,
+  Zap, Wifi, WifiOff, FlaskConical, Fingerprint, BarChart2,
 } from 'lucide-react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import themeManager from '../../lib/themeManager'
@@ -24,12 +24,14 @@ import { FingerprintPanel } from './fingerprint/page'
 import { UpdatesPanel } from './updates/page'
 import { BackupPanel } from './backup/page'
 import { PlanPanel } from './plan/page'
+import { CustomerInsightsPanel } from './customer-insights/page'
 
 const SIDEBAR_ITEMS = [
   { id: 'personal',          name: 'Personal Profile',   icon: User,          description: 'Manage your account details' },
   { id: 'appearance',        name: 'Appearance',          icon: Palette,       description: 'Customize your interface' },
   { id: 'themes',            name: 'Themes',              icon: Monitor,       description: 'Switch between layout styles' },
   { id: 'customers',         name: 'Customers',           icon: Users,         description: 'Manage customer profiles' },
+  { id: 'customer-insights', name: 'Customer Insights',   icon: BarChart2,     description: 'Analytics & purchase history' },
   { id: 'whatsapp',          name: 'WhatsApp',            icon: MessageSquare, description: 'Messaging & automation' },
   { id: 'customer-account',  name: 'Customer Account',    icon: CreditCard,    description: 'Account alerts & receipts' },
   { id: 'mobile',            name: 'Mobile App',          icon: Smartphone,    description: 'Mobile app integration' },
@@ -40,13 +42,14 @@ const SIDEBAR_ITEMS = [
 ]
 
 // Tabs whose panels make direct supabase reads/writes and will fail when offline.
-const OFFLINE_UNSAFE_TABS = new Set(['personal', 'customers', 'whatsapp', 'customer-account'])
+const OFFLINE_UNSAFE_TABS = new Set(['personal', 'customers', 'customer-insights', 'whatsapp', 'customer-account'])
 
 const PANEL_TITLES = {
   personal:         { title: 'Personal Profile',      sub: 'Manage your account information and store details' },
   appearance:       { title: 'Appearance Settings',   sub: 'Customize your interface theme and appearance' },
   themes:           { title: 'Themes',                sub: 'Choose a layout style for your POS interface' },
-  customers:        { title: 'Customers',             sub: 'View and manage all customer profiles' },
+  customers:           { title: 'Customers',             sub: 'View and manage all customer profiles' },
+  'customer-insights': { title: 'Customer Insights',    sub: 'Purchase history, loyalty points, and order analytics per customer' },
   whatsapp:         { title: 'WhatsApp',              sub: 'Messaging, auto-send notifications & campaign settings' },
   'customer-account': { title: 'Customer Account',   sub: 'Account payment alerts, receipt images & WhatsApp notifications' },
   mobile:           { title: 'Mobile App',            sub: 'Mobile app integration coming soon' },
@@ -242,6 +245,7 @@ function SettingsContent() {
                   {activeTab === 'appearance'        && <AppearancePanel key="appearance" />}
                   {activeTab === 'themes'            && <ThemesPanel key="themes" />}
                   {activeTab === 'customers'         && <CustomersPanel key="customers" />}
+                  {activeTab === 'customer-insights' && <CustomerInsightsPanel key="customer-insights" />}
                   {activeTab === 'whatsapp'          && (
                     <motion.div key="whatsapp" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} transition={{ duration: 0.3 }} className="max-w-5xl mx-auto">
                       <WhatsAppPanel />

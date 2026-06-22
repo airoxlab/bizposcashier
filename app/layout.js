@@ -5,7 +5,6 @@ import GlobalPrintListener from '../components/GlobalPrintListener'
 import GlobalFingerprintListener from '../components/GlobalFingerprintListener'
 import TrialBanner from '../components/TrialBanner'
 import TrialExpiredGate from '../components/TrialExpiredGate'
-import UpdateNotification from '../components/UpdateNotification'
 import NavigationLoader from '../components/NavigationLoader'
 
 export const metadata = {
@@ -44,7 +43,6 @@ export default function RootLayout({ children }) {
       </head>
       <body className="font-sans overflow-x-hidden" suppressHydrationWarning>
         <NavigationLoader />
-        <UpdateNotification />
         <TrialBanner />
         <GlobalPrintListener />
         <GlobalFingerprintListener />

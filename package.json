@@ -1,6 +1,6 @@
 {
   "name": "BizPOS",
-  "version": "2.4.1",
+  "version": "2.4.2",
   "description": "Modern POS Software - BizPOS",
   "main": "electron/main.js",
   "homepage": "./",

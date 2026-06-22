@@ -1,5 +1,11 @@
 'use client';
 
+// ⚠️ NOT IN USE — KEPT AS A BACKUP.
+// This was the old top-of-screen update banner. It is no longer mounted anywhere
+// (it used to be in app/layout.js). The app now surfaces updates through the
+// dashboard header button instead — see components/DashboardUpdateButton.jsx.
+// Left here for reference / easy rollback; safe to delete if no longer needed.
+
 import { useEffect, useState } from 'react';
 import { Download, RefreshCw, AlertTriangle, X } from 'lucide-react';
 import { isAutoUpdateEnabled } from '../lib/updatePrefs';
