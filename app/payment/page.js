@@ -780,11 +780,42 @@ const processOrder = async () => {
   if (selectedPaymentMethod?.requiresCustomer) {
     if (!orderData.customer?.full_name?.trim()) {
       notify.error('Customer must have a name for Account payment!')
+      processingLockRef.current = false
       return
     }
     if (!orderData.customer?.phone?.trim()) {
       notify.error('Customer must have a phone number for Account payment!')
+      processingLockRef.current = false
       return
+    }
+  }
+
+  // Credit-limit enforcement for Customer Account orders.
+  // credit_limit = 0 means "no limit" (the column default); only enforce when > 0.
+  // Skipped offline (can't verify the live balance/limit).
+  if (selectedPaymentMethod?.id === 'account' && orderData.customer?.id && cacheManager.checkOnlineStatus()) {
+    try {
+      const { data: custRow } = await supabase
+        .from('customers')
+        .select('credit_limit')
+        .eq('id', orderData.customer.id)
+        .maybeSingle()
+      const creditLimit = Number(custRow?.credit_limit || 0)
+      if (creditLimit > 0) {
+        const currentBal = Number(customerLedgerBalance || 0)
+        const projected = currentBal + Number(orderData.total || 0)
+        if (projected > creditLimit + 0.01) {
+          notify.error(
+            `Credit limit exceeded. Limit Rs ${creditLimit.toLocaleString()}, ` +
+            `current balance Rs ${currentBal.toLocaleString()}, this order would make it Rs ${projected.toLocaleString()}.`,
+            { duration: 6000 }
+          )
+          processingLockRef.current = false
+          return
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ Credit-limit check skipped:', e.message)
     }
   }
 
@@ -932,7 +963,11 @@ const processOrder = async () => {
         delivery_address: orderData.deliveryAddress || '',
         table_id: orderData.tableId || null,
         total_amount: orderData.total,
-        amount_paid: selectedPaymentMethod.id === 'complimentary' ? 0 : orderData.total,
+        // Unpaid/Account/Complimentary are not settled at this point, so amount_paid
+        // must be 0 (keeps amount_due = total and matches payment_status = Pending).
+        // Previously this set amount_paid = total for unpaid/account on the modify
+        // path, which wrongly zeroed amount_due while the order was still Pending.
+        amount_paid: (selectedPaymentMethod.id === 'complimentary' || selectedPaymentMethod.id === 'unpaid' || selectedPaymentMethod.id === 'account') ? 0 : orderData.total,
         payment_method: selectedPaymentMethod.name,
         payment_status: (selectedPaymentMethod.id === 'unpaid' || selectedPaymentMethod.id === 'account') ? 'Pending' : 'Paid',
         order_status: preservedOrderStatus,
@@ -1068,63 +1103,25 @@ const processOrder = async () => {
         try {
           console.log('💳 [Payment] Updating customer ledger for modified order')
 
-          // Find and delete the old ledger entry for this order
-          const { data: oldLedgerEntry, error: fetchError } = await supabase
-            .from('customer_ledger')
-            .select('*')
-            .eq('order_id', orderData.existingOrderId)
-            .eq('user_id', currentUser.id)
-            .eq('transaction_type', 'debit')
-            .maybeSingle()
-
-          if (fetchError) {
-            console.error('⚠️ [Payment] Error fetching old ledger entry:', fetchError.message)
-          } else if (oldLedgerEntry) {
-            console.log(`💳 [Payment] Found old ledger entry: Rs ${oldLedgerEntry.amount} (will be updated to Rs ${orderData.total})`)
-
-            // Delete the old ledger entry
-            const { error: deleteError } = await supabase
-              .from('customer_ledger')
-              .delete()
-              .eq('id', oldLedgerEntry.id)
-
-            if (deleteError) {
-              console.error('⚠️ [Payment] Error deleting old ledger entry:', deleteError.message)
-            } else {
-              console.log('✅ [Payment] Old ledger entry deleted')
-            }
-          } else {
-            console.log('ℹ️ [Payment] No existing ledger entry found for this order')
-          }
-
-          // Create new ledger entry with updated amount
           const modifyDebitAmount = orderData.total
-          customerLedgerManager.setUserId(currentUser.id)
-          const currentBalance = await customerLedgerManager.getCustomerBalance(orderData.customer.id)
-          const newBalance = currentBalance + modifyDebitAmount
-
           if (modifyDebitAmount > 0) {
-            const { error: ledgerError } = await supabase
-              .from('customer_ledger')
-              .insert({
-                user_id: currentUser.id,
-                customer_id: orderData.customer.id,
-                transaction_type: 'debit',
-                amount: modifyDebitAmount,
-                balance_before: currentBalance,
-                balance_after: newBalance,
-                order_id: orderData.existingOrderId,
-                description: `Order #${orderData.existingOrderNumber} - ${orderData.orderType?.toUpperCase() || 'WALKIN'} (Modified)`,
-                notes: `Order modified - Updated total: Rs ${orderData.total}`,
-                created_by: currentUser.id
-              })
-
-            if (ledgerError) {
-              console.error('⚠️ [Payment] Error creating updated ledger entry:', ledgerError.message)
-            } else {
-              console.log(`✅ [Payment] Updated ledger entry created: Rs ${modifyDebitAmount} (Balance: ${currentBalance} -> ${newBalance})`)
-              await supabase.from('customers').update({ account_balance: newBalance }).eq('id', orderData.customer.id)
-              notify.success(`Updated customer account. New balance: Rs ${newBalance.toFixed(0)}`, { duration: 5000 })
+            // Idempotent + race-safe: updates the order's debit and recomputes the
+            // running balance (no delete-and-reappend double-count).
+            const { data: rpcData, error: rpcErr } = await supabase.rpc('post_customer_order_debit', {
+              p_user_id: currentUser.id,
+              p_customer_id: orderData.customer.id,
+              p_order_id: orderData.existingOrderId,
+              p_amount: modifyDebitAmount,
+              p_description: `Order #${orderData.existingOrderNumber} - ${orderData.orderType?.toUpperCase() || 'WALKIN'} (Modified)`,
+              p_notes: `Order modified - Updated total: Rs ${orderData.total}`,
+              p_created_by: currentUser.id,
+            })
+            const res = typeof rpcData === 'string' ? JSON.parse(rpcData) : rpcData
+            if (rpcErr || !res?.success) {
+              console.error('⚠️ [Payment] post_customer_order_debit failed:', rpcErr?.message || res?.error)
+            } else if (res.action !== 'noop') {
+              console.log(`✅ [Payment] Customer ledger debit (${res.action}); balance: ${res.balance_after}`)
+              notify.success(`Updated customer account. New balance: Rs ${Number(res.balance_after).toFixed(0)}`, { duration: 5000 })
             }
           }
         } catch (ledgerError) {

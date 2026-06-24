@@ -349,6 +349,24 @@ export default function InlineCustomerPanel({
   const labelCls = `block text-xs font-medium mb-1 ${isDark ? 'text-gray-300' : 'text-gray-600'}`
   const quickBtnCls = (active) => `flex-1 py-1 text-xs rounded border transition-all ${active ? 'bg-purple-600 text-white border-purple-600' : isDark ? 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-100'}`
 
+  // Customer account balance pill. Convention (same as Ledger): > 0 = customer
+  // owes (Due / debit, red); < 0 = credit available (green); 0 = nothing to show.
+  const balanceBadge = (rawBalance, big = false) => {
+    const n = Number(rawBalance) || 0
+    if (!n) return null
+    const owes = n > 0
+    const amt = `Rs ${Math.abs(n).toLocaleString('en-PK', { maximumFractionDigits: 0 })}`
+    const sizeCls = big ? 'text-xs px-2 py-0.5' : 'text-[10px] px-1.5 py-0.5'
+    const colorCls = owes
+      ? (isDark ? 'bg-red-900/40 text-red-300' : 'bg-red-100 text-red-700')
+      : (isDark ? 'bg-green-900/40 text-green-300' : 'bg-green-100 text-green-700')
+    return (
+      <span className={`inline-flex items-center rounded-full font-semibold whitespace-nowrap ${sizeCls} ${colorCls}`}>
+        {owes ? `Due ${amt}` : `Credit ${amt}`}
+      </span>
+    )
+  }
+
   // Search UI (shared between full and contentOnly modes)
   const searchUI = (onClose) => (
     <div className="mt-1.5">
@@ -379,10 +397,11 @@ export default function InlineCustomerPanel({
               className={`w-full text-left px-3 py-2 flex items-center gap-2 transition-colors ${isDark ? 'hover:bg-gray-700' : 'hover:bg-gray-50'}`}
             >
               <User className={`w-3 h-3 flex-shrink-0 ${isDark ? 'text-gray-400' : 'text-gray-500'}`} />
-              <div>
-                <div className={`text-xs font-medium ${isDark ? 'text-white' : 'text-gray-800'}`}>{c.full_name}</div>
+              <div className="min-w-0 flex-1">
+                <div className={`text-xs font-medium truncate ${isDark ? 'text-white' : 'text-gray-800'}`}>{c.full_name}</div>
                 <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>{c.phone}</div>
               </div>
+              {balanceBadge(c.account_balance)}
             </button>
           ))}
 
@@ -587,6 +606,11 @@ export default function InlineCustomerPanel({
           {customer?.full_name?.trim() && <div><span className="font-medium">Name:</span> {customer.full_name.trim()}</div>}
           {customer?.phone && <div><span className="font-medium">Phone:</span> {customer.phone}</div>}
           {customer?.email && <div><span className="font-medium">Email:</span> {customer.email}</div>}
+          {!!(Number(customer?.account_balance) || 0) && (
+            <div className="flex items-center gap-1.5 pt-0.5">
+              <span className="font-medium">Balance:</span> {balanceBadge(customer.account_balance, true)}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -640,6 +664,7 @@ export default function InlineCustomerPanel({
           >
             <User className="w-3 h-3 flex-shrink-0" />
             <span className="truncate flex-1 text-left">{customer.full_name?.trim() || customer.phone}</span>
+            {balanceBadge(customer.account_balance)}
             {mode === 'expanded' ? <ChevronUp className="w-3 h-3 flex-shrink-0" /> : <ChevronDown className="w-3 h-3 flex-shrink-0" />}
           </button>
           <button

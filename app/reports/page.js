@@ -270,6 +270,31 @@ export default function ReportsPage() {
     }
   }, [user?.id])
 
+  // Skip the PIN gate entirely if the admin disabled "Require PIN on Reports".
+  // Defaults to requiring the PIN when the flag is unknown (offline / column
+  // missing / fetch error) so reports never become unexpectedly open.
+  useEffect(() => {
+    if (!user?.id || isAuthenticated) return
+    let cancelled = false
+    const cacheKey = 'pos_require_reports_pin'
+    ;(async () => {
+      if (!cacheManager.checkOnlineStatus()) {
+        if (localStorage.getItem(cacheKey) === 'false') setIsAuthenticated(true)
+        return
+      }
+      const { data, error } = await supabase
+        .from('users')
+        .select('require_reports_pin')
+        .eq('id', user.id)
+        .single()
+      if (cancelled || error) return
+      const required = data?.require_reports_pin !== false
+      localStorage.setItem(cacheKey, String(required))
+      if (!required) setIsAuthenticated(true)
+    })()
+    return () => { cancelled = true }
+  }, [user?.id])
+
   useEffect(() => {
     if (user && isAuthenticated) {
       fetchAllReportsData()
@@ -1529,7 +1554,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                 whileHover={{ x: -2 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={() => router.push('/dashboard')}
-                className={`flex items-center ${themeClasses.textSecondary} ${themeClasses.hover} transition-colors mb-8`}
+                className={`flex items-center ${themeClasses.textSecondary} ${themeClasses.hover} transition-colors mb-4`}
               >
                 <ArrowLeft className="w-5 h-5 mr-2" />
                 Back to Dashboard
@@ -1566,8 +1591,8 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
       {/* Left Panel - Reports Sidebar - Matching Orders Page */}
       <div className={`w-80 ${themeClasses.card} shadow-lg ${themeClasses.border} border-r flex flex-col h-full`}>
         {/* Header - Matching Orders Page exactly */}
-        <div className="p-3 border-b border-gray-200 bg-gradient-to-r from-purple-600 to-blue-600">
-          <div className="flex items-center justify-between mb-3">
+        <div className="p-2 border-b border-gray-200 bg-gradient-to-r from-purple-600 to-blue-600">
+          <div className="flex items-center justify-between mb-2">
             <motion.button
               whileHover={{ x: -2 }}
               whileTap={{ scale: 0.98 }}
@@ -1583,7 +1608,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
               whileHover={{ scale: 1.05 }}
               whileTap={{ scale: 0.95 }}
               onClick={toggleTheme}
-              className="p-2 rounded-lg bg-white/10 hover:bg-white/20 transition-all"
+              className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 transition-all"
             >
               <AnimatePresence mode="wait">
                 {isDark ? (
@@ -1611,8 +1636,8 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
             </motion.button>
           </div>
 
-          <div className="mb-3">
-            <h1 className="text-lg font-bold text-white">Business Analytics</h1>
+          <div className="mb-2">
+            <h1 className="text-base font-bold text-white">Business Analytics</h1>
             <p className="text-purple-100 text-xs">Complete financial insights and profit analysis</p>
           </div>
 
@@ -1721,11 +1746,11 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
               exit={{ height: 0, opacity: 0 }}
               className={`overflow-hidden ${themeClasses.border} border-b ${isDark ? 'bg-gray-800/50' : 'bg-gray-50'}`}
             >
-              <div className="p-4 space-y-4">
+              <div className="p-3 space-y-3">
                 {/* Date Filters */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2">
                   <div>
-                    <label className={`block text-sm font-medium ${themeClasses.textPrimary} mb-2`}>From Date</label>
+                    <label className={`block text-xs font-medium ${themeClasses.textPrimary} mb-1`}>From Date</label>
                     <input
                       type="date"
                       value={dateFrom}
@@ -1740,46 +1765,46 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                           setDateTo(d.toISOString().split('T')[0])
                         }
                       }}
-                      className={`w-full px-3 py-2 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm`}
+                      className={`w-full px-2 py-1.5 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-xs`}
                     />
                   </div>
                   <div>
-                    <label className={`block text-sm font-medium ${themeClasses.textPrimary} mb-2`}>To Date</label>
+                    <label className={`block text-xs font-medium ${themeClasses.textPrimary} mb-1`}>To Date</label>
                     <input
                       type="date"
                       value={dateTo}
                       onChange={(e) => setDateTo(e.target.value)}
-                      className={`w-full px-3 py-2 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm`}
+                      className={`w-full px-2 py-1.5 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-xs`}
                     />
                   </div>
                   <div>
-                    <label className={`block text-sm font-medium ${themeClasses.textPrimary} mb-2`}>From Time</label>
+                    <label className={`block text-xs font-medium ${themeClasses.textPrimary} mb-1`}>From Time</label>
                     <input
                       type="time"
                       value={timeFrom}
                       onChange={(e) => setTimeFrom(e.target.value)}
-                      className={`w-full px-3 py-2 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm`}
+                      className={`w-full px-2 py-1.5 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-xs`}
                     />
                   </div>
                   <div>
-                    <label className={`block text-sm font-medium ${themeClasses.textPrimary} mb-2`}>To Time</label>
+                    <label className={`block text-xs font-medium ${themeClasses.textPrimary} mb-1`}>To Time</label>
                     <input
                       type="time"
                       value={timeTo}
                       onChange={(e) => setTimeTo(e.target.value)}
-                      className={`w-full px-3 py-2 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm`}
+                      className={`w-full px-2 py-1.5 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-xs`}
                     />
                   </div>
                 </div>
 
                 {/* Category Filters */}
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-4">
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-2">
                   <div>
-                    <label className={`block text-sm font-medium ${themeClasses.textPrimary} mb-2`}>Order Type</label>
+                    <label className={`block text-xs font-medium ${themeClasses.textPrimary} mb-1`}>Order Type</label>
                     <select
                       value={orderTypeFilter}
                       onChange={(e) => setOrderTypeFilter(e.target.value)}
-                      className={`w-full px-3 py-2 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm`}
+                      className={`w-full px-2 py-1.5 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-xs`}
                     >
                       <option value="All">All Types</option>
                       <option value="Walkin">Walk-in</option>
@@ -1789,11 +1814,11 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                   </div>
 
                   <div>
-                    <label className={`block text-sm font-medium ${themeClasses.textPrimary} mb-2`}>Payment Method</label>
+                    <label className={`block text-xs font-medium ${themeClasses.textPrimary} mb-1`}>Payment Method</label>
                     <select
                       value={paymentMethodFilter}
                       onChange={(e) => setPaymentMethodFilter(e.target.value)}
-                      className={`w-full px-3 py-2 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm`}
+                      className={`w-full px-2 py-1.5 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-xs`}
                     >
                       <option value="All">All Methods</option>
                       <option value="Cash">Cash</option>
@@ -1808,11 +1833,11 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                   </div>
 
                   <div>
-                    <label className={`block text-sm font-medium ${themeClasses.textPrimary} mb-2`}>Order Status</label>
+                    <label className={`block text-xs font-medium ${themeClasses.textPrimary} mb-1`}>Order Status</label>
                     <select
                       value={orderStatusFilter}
                       onChange={(e) => setOrderStatusFilter(e.target.value)}
-                      className={`w-full px-3 py-2 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm`}
+                      className={`w-full px-2 py-1.5 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-xs`}
                     >
                       <option value="All">All Status</option>
                       <option value="Pending">Pending</option>
@@ -1824,11 +1849,11 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                   </div>
 
                   <div>
-                    <label className={`block text-sm font-medium ${themeClasses.textPrimary} mb-2`}>Payment Status</label>
+                    <label className={`block text-xs font-medium ${themeClasses.textPrimary} mb-1`}>Payment Status</label>
                     <select
                       value={paymentStatusFilter}
                       onChange={(e) => setPaymentStatusFilter(e.target.value)}
-                      className={`w-full px-3 py-2 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm`}
+                      className={`w-full px-2 py-1.5 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-xs`}
                     >
                       <option value="All">All Status</option>
                       <option value="Pending">Pending</option>
@@ -1838,11 +1863,11 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                   </div>
 
                   <div>
-                    <label className={`block text-sm font-medium ${themeClasses.textPrimary} mb-2`}>Cashier</label>
+                    <label className={`block text-xs font-medium ${themeClasses.textPrimary} mb-1`}>Cashier</label>
                     <select
                       value={cashierFilter}
                       onChange={(e) => setCashierFilter(e.target.value)}
-                      className={`w-full px-3 py-2 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm`}
+                      className={`w-full px-2 py-1.5 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-xs`}
                     >
                       <option value="All">All Cashiers</option>
                       <option value="">Admin</option>
@@ -1853,11 +1878,11 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                   </div>
 
                   <div>
-                    <label className={`block text-sm font-medium ${themeClasses.textPrimary} mb-2`}>Expense Category</label>
+                    <label className={`block text-xs font-medium ${themeClasses.textPrimary} mb-1`}>Expense Category</label>
                     <select
                       value={expenseCategoryFilter}
                       onChange={(e) => setExpenseCategoryFilter(e.target.value)}
-                      className={`w-full px-3 py-2 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm`}
+                      className={`w-full px-2 py-1.5 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-xs`}
                     >
                       <option value="All">All Categories</option>
                       {expenseCategories.map(category => (
@@ -1867,11 +1892,11 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                   </div>
 
                   <div>
-                    <label className={`block text-sm font-medium ${themeClasses.textPrimary} mb-2`}>Expense Payment</label>
+                    <label className={`block text-xs font-medium ${themeClasses.textPrimary} mb-1`}>Expense Payment</label>
                     <select
                       value={expensePaymentFilter}
                       onChange={(e) => setExpensePaymentFilter(e.target.value)}
-                      className={`w-full px-3 py-2 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm`}
+                      className={`w-full px-2 py-1.5 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-xs`}
                     >
                       <option value="All">All Methods</option>
                       <option value="Cash">Cash</option>
@@ -1925,30 +1950,30 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
         </AnimatePresence>
 
         {/* Main Content */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-3">
           {!loading && (
             <>
               {/* Overview Tab */}
               {activeReportTab === 'overview' && (
                 <>
                   {/* Key Metrics Cards */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
                     <motion.div
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-xl p-3 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-green-100 text-sm">Total Revenue</p>
-                          <p className="text-3xl font-bold">{formatCurrency(salesData.totalRevenue)}</p>
+                          <p className="text-2xl font-bold">{formatCurrency(salesData.totalRevenue)}</p>
                           {salesData.complimentaryCount > 0 && (
                             <p className="text-green-200 text-xs mt-1">
                               {salesData.complimentaryCount} comp order{salesData.complimentaryCount > 1 ? 's' : ''} ({formatCurrency(salesData.complimentaryTotal)}) excluded
                             </p>
                           )}
                         </div>
-                        <DollarSign className="w-12 h-12 text-green-100" />
+                        <DollarSign className="w-9 h-9 text-green-100" />
                       </div>
                     </motion.div>
 
@@ -1956,15 +1981,15 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.1 }}
-                      className="bg-gradient-to-r from-orange-500 to-amber-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-orange-500 to-amber-600 rounded-xl p-3 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-orange-100 text-sm">COGS</p>
-                          <p className="text-3xl font-bold">{formatCurrency(profitData.totalCogs)}</p>
+                          <p className="text-2xl font-bold">{formatCurrency(profitData.totalCogs)}</p>
                           <p className="text-orange-200 text-xs mt-1">Cost of Goods Sold</p>
                         </div>
-                        <Package className="w-12 h-12 text-orange-100" />
+                        <Package className="w-9 h-9 text-orange-100" />
                       </div>
                     </motion.div>
 
@@ -1972,15 +1997,15 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.2 }}
-                      className="bg-gradient-to-r from-red-500 to-pink-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-red-500 to-pink-600 rounded-xl p-3 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-red-100 text-sm">Total Expenses</p>
-                          <p className="text-3xl font-bold">{formatCurrency(expenseData.totalExpenses)}</p>
+                          <p className="text-2xl font-bold">{formatCurrency(expenseData.totalExpenses)}</p>
                           <p className="text-red-200 text-xs mt-1">(Inventory + Other)</p>
                         </div>
-                        <Receipt className="w-12 h-12 text-red-100" />
+                        <Receipt className="w-9 h-9 text-red-100" />
                       </div>
                     </motion.div>
 
@@ -1988,17 +2013,17 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.3 }}
-                      className={`bg-gradient-to-r ${profitData.netProfit >= 0 ? 'from-blue-500 to-cyan-600' : 'from-orange-500 to-red-600'} rounded-3xl p-6 text-white shadow-xl`}
+                      className={`bg-gradient-to-r ${profitData.netProfit >= 0 ? 'from-blue-500 to-cyan-600' : 'from-orange-500 to-red-600'} rounded-xl p-3 text-white shadow-xl`}
                     >
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-blue-100 text-sm">Net Profit</p>
-                          <p className="text-3xl font-bold">{formatCurrency(profitData.netProfit)}</p>
+                          <p className="text-2xl font-bold">{formatCurrency(profitData.netProfit)}</p>
                           <p className="text-blue-100 text-xs mt-1">After COGS + expenses</p>
                         </div>
                         {profitData.netProfit >= 0 ?
-                          <TrendingUp className="w-12 h-12 text-blue-100" /> :
-                          <TrendingDown className="w-12 h-12 text-orange-100" />
+                          <TrendingUp className="w-9 h-9 text-blue-100" /> :
+                          <TrendingDown className="w-9 h-9 text-orange-100" />
                         }
                       </div>
                     </motion.div>
@@ -2007,26 +2032,26 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.4 }}
-                      className="bg-gradient-to-r from-purple-500 to-indigo-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-purple-500 to-indigo-600 rounded-xl p-3 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-purple-100 text-sm">Profit Margin</p>
-                          <p className="text-3xl font-bold">{profitData.profitMargin.toFixed(1)}%</p>
+                          <p className="text-2xl font-bold">{profitData.profitMargin.toFixed(1)}%</p>
                           <p className="text-purple-100 text-xs mt-1">Gross: {profitData.grossMargin.toFixed(1)}%</p>
                         </div>
-                        <Percent className="w-12 h-12 text-purple-100" />
+                        <Percent className="w-9 h-9 text-purple-100" />
                       </div>
                     </motion.div>
                   </div>
 
                   {/* Revenue vs Expenses Chart */}
-                  <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6 mb-8`}>
-                    <h3 className={`text-xl font-bold ${themeClasses.textPrimary} mb-6 flex items-center`}>
+                  <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3 mb-4`}>
+                    <h3 className={`text-base font-bold ${themeClasses.textPrimary} mb-3 flex items-center`}>
                       <Activity className="w-5 h-5 mr-2 text-purple-600" />
                       Revenue vs COGS vs Expenses Overview
                     </h3>
-                    <div className="h-80">
+                    <div className="h-60">
                       <ResponsiveContainer width="100%" height="100%">
                         <ComposedChart data={profitData.dailyProfitLoss}>
                           <CartesianGrid strokeDasharray="3 3" stroke={isDark ? "#374151" : "#e0e7ff"} />
@@ -2068,9 +2093,9 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                   </div>
 
                   {/* Quick Stats Grid */}
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-4">
                     {/* Orders Summary */}
-                    <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6`}>
+                    <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3`}>
                       <h3 className={`text-lg font-bold ${themeClasses.textPrimary} mb-4 flex items-center`}>
                         <ShoppingCart className="w-5 h-5 mr-2 text-blue-600" />
                         Orders Summary
@@ -2092,7 +2117,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                     </div>
 
                     {/* Payment Methods */}
-                    <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6`}>
+                    <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3`}>
                       <h3 className={`text-lg font-bold ${themeClasses.textPrimary} mb-4 flex items-center`}>
                         <CreditCard className="w-5 h-5 mr-2 text-green-600" />
                         Payment Methods
@@ -2114,7 +2139,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                     </div>
 
                     {/* Account Collections (Customer balance payments) */}
-                    <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6`}>
+                    <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3`}>
                       <h3 className={`text-lg font-bold ${themeClasses.textPrimary} mb-4 flex items-center`}>
                         <Wallet className="w-5 h-5 mr-2 text-purple-600" />
                         Account Collections
@@ -2138,7 +2163,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                     </div>
 
                     {/* Top Expense Categories */}
-                    <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6`}>
+                    <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3`}>
                       <h3 className={`text-lg font-bold ${themeClasses.textPrimary} mb-4 flex items-center`}>
                         <Receipt className="w-5 h-5 mr-2 text-red-600" />
                         Top Expenses
@@ -2158,12 +2183,12 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
               {activeReportTab === 'profit-loss' && (
                 <>
                   {/* Profit Metrics */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-4">
                     {/* Revenue */}
                     <motion.div
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-3xl p-5 text-white shadow-xl"
+                      className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-xl p-5 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between mb-1">
                         <p className="text-green-100 text-xs">Total Revenue</p>
@@ -2178,7 +2203,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.05 }}
-                      className="bg-gradient-to-r from-orange-500 to-amber-600 rounded-3xl p-5 text-white shadow-xl"
+                      className="bg-gradient-to-r from-orange-500 to-amber-600 rounded-xl p-5 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between mb-1">
                         <p className="text-orange-100 text-xs">Cost of Goods Sold</p>
@@ -2193,7 +2218,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.1 }}
-                      className={`bg-gradient-to-r ${profitData.grossProfit >= 0 ? 'from-teal-500 to-cyan-600' : 'from-red-500 to-pink-600'} rounded-3xl p-5 text-white shadow-xl`}
+                      className={`bg-gradient-to-r ${profitData.grossProfit >= 0 ? 'from-teal-500 to-cyan-600' : 'from-red-500 to-pink-600'} rounded-xl p-5 text-white shadow-xl`}
                     >
                       <div className="flex items-center justify-between mb-1">
                         <p className="text-teal-100 text-xs">Gross Profit</p>
@@ -2208,7 +2233,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.15 }}
-                      className={`bg-gradient-to-r ${profitData.netProfit >= 0 ? 'from-blue-500 to-indigo-600' : 'from-red-600 to-pink-700'} rounded-3xl p-5 text-white shadow-xl`}
+                      className={`bg-gradient-to-r ${profitData.netProfit >= 0 ? 'from-blue-500 to-indigo-600' : 'from-red-600 to-pink-700'} rounded-xl p-5 text-white shadow-xl`}
                     >
                       <div className="flex items-center justify-between mb-1">
                         <p className="text-blue-100 text-xs">Net Profit/Loss</p>
@@ -2226,7 +2251,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.2 }}
-                      className="bg-gradient-to-r from-purple-500 to-indigo-600 rounded-3xl p-5 text-white shadow-xl"
+                      className="bg-gradient-to-r from-purple-500 to-indigo-600 rounded-xl p-5 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between mb-1">
                         <p className="text-purple-100 text-xs">Net Margin</p>
@@ -2242,8 +2267,8 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                   </div>
 
                   {/* Daily Profit/Loss Chart */}
-                  <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6 mb-8`}>
-                    <h3 className={`text-xl font-bold ${themeClasses.textPrimary} mb-6 flex items-center`}>
+                  <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3 mb-4`}>
+                    <h3 className={`text-base font-bold ${themeClasses.textPrimary} mb-3 flex items-center`}>
                       <LineChart className="w-5 h-5 mr-2 text-purple-600" />
                       Daily Profit & Loss Analysis (with COGS)
                     </h3>
@@ -2292,8 +2317,8 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                   </div>
 
                   {/* Profit/Loss Summary Table */}
-                  <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6`}>
-                    <h3 className={`text-xl font-bold ${themeClasses.textPrimary} mb-6 flex items-center`}>
+                  <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3`}>
+                    <h3 className={`text-base font-bold ${themeClasses.textPrimary} mb-3 flex items-center`}>
                       <FileText className={`w-5 h-5 mr-2 ${themeClasses.textSecondary}`} />
                       Daily Profit/Loss Summary
                     </h3>
@@ -2356,19 +2381,19 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
               {activeReportTab === 'expenses' && (
                 <>
                   {/* Expense Metrics */}
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
                     <motion.div
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="bg-gradient-to-r from-red-500 to-pink-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-red-500 to-pink-600 rounded-xl p-3 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-red-100 text-sm">Total Expenses</p>
-                          <p className="text-3xl font-bold">{formatCurrency(expenseData.totalExpenses)}</p>
+                          <p className="text-2xl font-bold">{formatCurrency(expenseData.totalExpenses)}</p>
                           <p className="text-red-200 text-xs mt-1">(Inventory Purchases + Other Expenses)</p>
                         </div>
-                        <Receipt className="w-12 h-12 text-red-100" />
+                        <Receipt className="w-9 h-9 text-red-100" />
                       </div>
                     </motion.div>
 
@@ -2376,17 +2401,17 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.1 }}
-                      className="bg-gradient-to-r from-orange-500 to-amber-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-orange-500 to-amber-600 rounded-xl p-3 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-orange-100 text-sm">Avg Daily Expense</p>
-                          <p className="text-3xl font-bold">
+                          <p className="text-2xl font-bold">
                             {formatCurrency(expenseData.dailyExpenses.length > 0 ?
                               expenseData.totalExpenses / expenseData.dailyExpenses.length : 0)}
                           </p>
                         </div>
-                        <Calendar className="w-12 h-12 text-orange-100" />
+                        <Calendar className="w-9 h-9 text-orange-100" />
                       </div>
                     </motion.div>
 
@@ -2394,14 +2419,14 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.2 }}
-                      className="bg-gradient-to-r from-purple-500 to-indigo-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-purple-500 to-indigo-600 rounded-xl p-3 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-purple-100 text-sm">Expense Categories</p>
-                          <p className="text-3xl font-bold">{expenseData.expensesByCategory.length}</p>
+                          <p className="text-2xl font-bold">{expenseData.expensesByCategory.length}</p>
                         </div>
-                        <Settings className="w-12 h-12 text-purple-100" />
+                        <Settings className="w-9 h-9 text-purple-100" />
                       </div>
                     </motion.div>
 
@@ -2409,30 +2434,30 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.3 }}
-                      className="bg-gradient-to-r from-blue-500 to-cyan-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-blue-500 to-cyan-600 rounded-xl p-3 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-blue-100 text-sm">Expense to Revenue</p>
-                          <p className="text-3xl font-bold">
+                          <p className="text-2xl font-bold">
                             {salesData.totalRevenue > 0 ?
                               ((expenseData.totalExpenses / salesData.totalRevenue) * 100).toFixed(1) : 0}%
                           </p>
                         </div>
-                        <Percent className="w-12 h-12 text-blue-100" />
+                        <Percent className="w-9 h-9 text-blue-100" />
                       </div>
                     </motion.div>
                   </div>
 
                   {/* Expense Charts */}
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
                     {/* Expenses by Category */}
-                    <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6`}>
-                      <h3 className={`text-xl font-bold ${themeClasses.textPrimary} mb-6 flex items-center`}>
+                    <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3`}>
+                      <h3 className={`text-base font-bold ${themeClasses.textPrimary} mb-3 flex items-center`}>
                         <PieChart className="w-5 h-5 mr-2 text-red-600" />
                         Expenses by Category
                       </h3>
-                      <div className="h-80">
+                      <div className="h-60">
                         <ResponsiveContainer width="100%" height="100%">
                           <RechartsPieChart>
                             <Tooltip
@@ -2463,12 +2488,12 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                     </div>
 
                     {/* Daily Expenses Trend */}
-                    <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6`}>
-                      <h3 className={`text-xl font-bold ${themeClasses.textPrimary} mb-6 flex items-center`}>
+                    <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3`}>
+                      <h3 className={`text-base font-bold ${themeClasses.textPrimary} mb-3 flex items-center`}>
                         <LineChart className="w-5 h-5 mr-2 text-orange-600" />
                         Daily Expense Trends
                       </h3>
-                      <div className="h-80">
+                      <div className="h-60">
                         <ResponsiveContainer width="100%" height="100%">
                           <AreaChart data={expenseData.dailyExpenses}>
                             <CartesianGrid strokeDasharray="3 3" stroke={isDark ? "#374151" : "#e0e7ff"} />
@@ -2507,8 +2532,8 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                   </div>
 
                   {/* Top Expense Categories */}
-                  <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6`}>
-                    <h3 className={`text-xl font-bold ${themeClasses.textPrimary} mb-6 flex items-center`}>
+                  <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3`}>
+                    <h3 className={`text-base font-bold ${themeClasses.textPrimary} mb-3 flex items-center`}>
                       <Star className="w-5 h-5 mr-2 text-yellow-600" />
                       Top Expense Categories
                     </h3>
@@ -2550,9 +2575,9 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
               {activeReportTab === 'daily-pnl' && (
                 <>
                   {/* Daily P&L Section */}
-                  <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6 mb-8`}>
-                    <div className="flex items-center justify-between mb-6">
-                      <h3 className={`text-xl font-bold ${themeClasses.textPrimary} flex items-center`}>
+                  <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3 mb-4`}>
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className={`text-base font-bold ${themeClasses.textPrimary} flex items-center`}>
                         <Target className="w-5 h-5 mr-2 text-purple-600" />
                         Daily Profit & Loss (COGS Based)
                       </h3>
@@ -2576,7 +2601,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       </div>
                     </div>
 
-                    <p className={`text-sm ${themeClasses.textSecondary} mb-6`}>
+                    <p className={`text-sm ${themeClasses.textSecondary} mb-3`}>
                       Shows only <strong>Completed</strong> orders for accurate revenue and COGS calculation
                     </p>
 
@@ -2597,23 +2622,23 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                     ) : dailyPnLData ? (
                       <>
                         {/* P&L Summary Cards */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-                          <div className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-2xl p-4 text-white">
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-3">
+                          <div className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-xl p-4 text-white">
                             <p className="text-green-100 text-xs mb-1">Total Revenue</p>
                             <p className="text-2xl font-bold">{formatCurrency(dailyPnLData.totalRevenue)}</p>
                             <p className="text-green-100 text-xs mt-1">{dailyPnLData.orderCount} completed orders</p>
                           </div>
-                          <div className="bg-gradient-to-r from-orange-500 to-red-600 rounded-2xl p-4 text-white">
+                          <div className="bg-gradient-to-r from-orange-500 to-red-600 rounded-xl p-4 text-white">
                             <p className="text-orange-100 text-xs mb-1">Cost of Goods Sold</p>
                             <p className="text-2xl font-bold">{formatCurrency(dailyPnLData.totalCOGS)}</p>
                             <p className="text-orange-100 text-xs mt-1">Inventory consumed</p>
                           </div>
-                          <div className={`bg-gradient-to-r ${dailyPnLData.netProfit >= 0 ? 'from-purple-500 to-indigo-600' : 'from-red-500 to-pink-600'} rounded-2xl p-4 text-white`}>
+                          <div className={`bg-gradient-to-r ${dailyPnLData.netProfit >= 0 ? 'from-purple-500 to-indigo-600' : 'from-red-500 to-pink-600'} rounded-xl p-4 text-white`}>
                             <p className="text-purple-100 text-xs mb-1">Net Profit</p>
                             <p className="text-2xl font-bold">{formatCurrency(dailyPnLData.netProfit)}</p>
                             <p className="text-purple-100 text-xs mt-1">Revenue - COGS</p>
                           </div>
-                          <div className={`bg-gradient-to-r ${dailyPnLData.profitMargin >= 0 ? 'from-cyan-500 to-blue-600' : 'from-gray-500 to-gray-600'} rounded-2xl p-4 text-white`}>
+                          <div className={`bg-gradient-to-r ${dailyPnLData.profitMargin >= 0 ? 'from-cyan-500 to-blue-600' : 'from-gray-500 to-gray-600'} rounded-xl p-4 text-white`}>
                             <p className="text-cyan-100 text-xs mb-1">Profit Margin</p>
                             <p className="text-2xl font-bold">{dailyPnLData.profitMargin.toFixed(1)}%</p>
                             <p className="text-cyan-100 text-xs mt-1">
@@ -2624,12 +2649,12 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
 
                         {/* P&L Chart */}
                         {dailyPnLData.orderDetails && dailyPnLData.orderDetails.length > 0 && (
-                          <div className="mb-6">
+                          <div className="mb-3">
                             <h4 className={`font-semibold ${themeClasses.textPrimary} mb-4 flex items-center`}>
                               <BarChart3 className="w-4 h-4 mr-2 text-purple-600" />
                               Revenue vs COGS by Order
                             </h4>
-                            <div className="h-80">
+                            <div className="h-60">
                               <ResponsiveContainer width="100%" height="100%">
                                 <BarChart data={dailyPnLData.orderDetails.slice(0, 15)}>
                                   <CartesianGrid strokeDasharray="3 3" stroke={isDark ? "#374151" : "#e0e7ff"} />
@@ -2668,7 +2693,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                               <Activity className="w-4 h-4 mr-2 text-orange-600" />
                               Top Ingredients by Cost
                             </h4>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-80 overflow-y-auto">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-60 overflow-y-auto">
                               {dailyPnLData.ingredientBreakdown.slice(0, 20).map((ingredient, index) => (
                                 <div
                                   key={index}
@@ -2694,7 +2719,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
 
                         {dailyPnLData.orderCount === 0 && (
                           <div className="text-center py-8">
-                            <Target className={`w-12 h-12 ${themeClasses.textSecondary} mx-auto mb-3`} />
+                            <Target className={`w-9 h-9 ${themeClasses.textSecondary} mx-auto mb-3`} />
                             <p className={themeClasses.textSecondary}>No completed orders found for this date</p>
                             <p className={`text-sm ${themeClasses.textSecondary}`}>Select a different date or mark orders as Completed</p>
                           </div>
@@ -2702,7 +2727,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       </>
                     ) : (
                       <div className="text-center py-8">
-                        <Target className={`w-12 h-12 ${themeClasses.textSecondary} mx-auto mb-3`} />
+                        <Target className={`w-9 h-9 ${themeClasses.textSecondary} mx-auto mb-3`} />
                         <p className={themeClasses.textSecondary}>Select a date and click Calculate</p>
                         <p className={`text-sm ${themeClasses.textSecondary}`}>to view Daily P&L with COGS breakdown</p>
                       </div>
@@ -2711,8 +2736,8 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
 
                   {/* Order Details Table */}
                   {dailyPnLData && dailyPnLData.orderDetails && dailyPnLData.orderDetails.length > 0 && (
-                    <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6`}>
-                      <h3 className={`text-xl font-bold ${themeClasses.textPrimary} mb-6 flex items-center`}>
+                    <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3`}>
+                      <h3 className={`text-base font-bold ${themeClasses.textPrimary} mb-3 flex items-center`}>
                         <FileText className="w-5 h-5 mr-2 text-blue-600" />
                         Order-by-Order Breakdown
                       </h3>
@@ -2774,18 +2799,18 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
               {activeReportTab === 'product-performance' && (
                 <>
                   {/* Summary Cards */}
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
                     <motion.div
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="bg-gradient-to-r from-purple-500 to-indigo-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-purple-500 to-indigo-600 rounded-xl p-3 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-purple-100 text-sm">Total Products Sold</p>
-                          <p className="text-3xl font-bold">{productPerformanceData.totalProductsSold.toLocaleString()}</p>
+                          <p className="text-2xl font-bold">{productPerformanceData.totalProductsSold.toLocaleString()}</p>
                         </div>
-                        <ShoppingCart className="w-12 h-12 text-purple-100" />
+                        <ShoppingCart className="w-9 h-9 text-purple-100" />
                       </div>
                     </motion.div>
 
@@ -2793,14 +2818,14 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.1 }}
-                      className="bg-gradient-to-r from-blue-500 to-cyan-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-blue-500 to-cyan-600 rounded-xl p-3 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-blue-100 text-sm">Unique Products</p>
-                          <p className="text-3xl font-bold">{productPerformanceData.totalUniqueProducts}</p>
+                          <p className="text-2xl font-bold">{productPerformanceData.totalUniqueProducts}</p>
                         </div>
-                        <Coffee className="w-12 h-12 text-blue-100" />
+                        <Coffee className="w-9 h-9 text-blue-100" />
                       </div>
                     </motion.div>
 
@@ -2808,14 +2833,14 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.2 }}
-                      className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-xl p-3 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-green-100 text-sm">Avg Product Revenue</p>
-                          <p className="text-3xl font-bold">{formatCurrency(productPerformanceData.averageProductRevenue)}</p>
+                          <p className="text-2xl font-bold">{formatCurrency(productPerformanceData.averageProductRevenue)}</p>
                         </div>
-                        <DollarSign className="w-12 h-12 text-green-100" />
+                        <DollarSign className="w-9 h-9 text-green-100" />
                       </div>
                     </motion.div>
 
@@ -2823,26 +2848,26 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.3 }}
-                      className="bg-gradient-to-r from-orange-500 to-red-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-orange-500 to-red-600 rounded-xl p-3 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-orange-100 text-sm">Best Seller</p>
-                          <p className="text-xl font-bold truncate">
+                          <p className="text-base font-bold truncate">
                             {productPerformanceData.bestSellers[0]?.name || 'N/A'}
                           </p>
                           <p className="text-orange-200 text-xs mt-1">
                             {productPerformanceData.bestSellers[0]?.quantity || 0} sold
                           </p>
                         </div>
-                        <Star className="w-12 h-12 text-orange-100" />
+                        <Star className="w-9 h-9 text-orange-100" />
                       </div>
                     </motion.div>
                   </div>
 
                   {/* Best Sellers Section */}
-                  <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6 mb-8`}>
-                    <h3 className={`text-xl font-bold ${themeClasses.textPrimary} mb-6 flex items-center`}>
+                  <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3 mb-4`}>
+                    <h3 className={`text-base font-bold ${themeClasses.textPrimary} mb-3 flex items-center`}>
                       <TrendingUp className="w-6 h-6 mr-2 text-green-600" />
                       Best Sellers (Top 20 by Quantity)
                     </h3>
@@ -2855,7 +2880,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                     ) : (
                       <>
                         {/* Chart */}
-                        <div className="h-96 mb-6">
+                        <div className="h-96 mb-3">
                           <ResponsiveContainer width="100%" height="100%">
                             <BarChart data={productPerformanceData.bestSellers.slice(0, 10)}>
                               <CartesianGrid strokeDasharray="3 3" stroke={isDark ? "#374151" : "#e0e7ff"} />
@@ -2944,8 +2969,8 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                   </div>
 
                   {/* Worst Sellers Section */}
-                  <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6 mb-8`}>
-                    <h3 className={`text-xl font-bold ${themeClasses.textPrimary} mb-6 flex items-center`}>
+                  <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3 mb-4`}>
+                    <h3 className={`text-base font-bold ${themeClasses.textPrimary} mb-3 flex items-center`}>
                       <TrendingDown className="w-6 h-6 mr-2 text-red-600" />
                       Worst Sellers (Bottom 10 by Quantity)
                     </h3>
@@ -2997,8 +3022,8 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                   </div>
 
                   {/* Top Revenue Products */}
-                  <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6`}>
-                    <h3 className={`text-xl font-bold ${themeClasses.textPrimary} mb-6 flex items-center`}>
+                  <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3`}>
+                    <h3 className={`text-base font-bold ${themeClasses.textPrimary} mb-3 flex items-center`}>
                       <DollarSign className="w-6 h-6 mr-2 text-purple-600" />
                       Top Revenue Generators (Top 20 by Revenue)
                     </h3>
@@ -3011,7 +3036,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                     ) : (
                       <>
                         {/* Pie Chart */}
-                        <div className="h-96 mb-6">
+                        <div className="h-96 mb-3">
                           <ResponsiveContainer width="100%" height="100%">
                             <RechartsPieChart>
                               <Tooltip
@@ -3100,16 +3125,16 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
               {activeReportTab === 'peak-hours' && (
                 <>
                   {/* Summary Cards */}
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
                     <motion.div
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="bg-gradient-to-r from-orange-500 to-red-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-orange-500 to-red-600 rounded-xl p-3 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-orange-100 text-sm">Busiest Hour</p>
-                          <p className="text-3xl font-bold">
+                          <p className="text-2xl font-bold">
                             {peakHoursData.busiestHour ?
                               `${peakHoursData.busiestHour.hour}:00` :
                               'N/A'}
@@ -3118,7 +3143,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                             {peakHoursData.busiestHour?.orderCount || 0} orders
                           </p>
                         </div>
-                        <Clock className="w-12 h-12 text-orange-100" />
+                        <Clock className="w-9 h-9 text-orange-100" />
                       </div>
                     </motion.div>
 
@@ -3126,16 +3151,16 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.1 }}
-                      className="bg-gradient-to-r from-blue-500 to-cyan-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-blue-500 to-cyan-600 rounded-xl p-3 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-blue-100 text-sm">Avg Orders/Hour</p>
-                          <p className="text-3xl font-bold">
+                          <p className="text-2xl font-bold">
                             {peakHoursData.averageOrdersPerHour.toFixed(1)}
                           </p>
                         </div>
-                        <Activity className="w-12 h-12 text-blue-100" />
+                        <Activity className="w-9 h-9 text-blue-100" />
                       </div>
                     </motion.div>
 
@@ -3143,17 +3168,17 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.2 }}
-                      className="bg-gradient-to-r from-purple-500 to-indigo-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-purple-500 to-indigo-600 rounded-xl p-3 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="text-purple-100 text-sm">Total Orders</p>
-                          <p className="text-3xl font-bold">
+                          <p className="text-2xl font-bold">
                             {peakHoursData.totalOrdersAnalyzed.toLocaleString()}
                           </p>
                           <p className="text-purple-200 text-xs mt-1">Analyzed</p>
                         </div>
-                        <ShoppingCart className="w-12 h-12 text-purple-100" />
+                        <ShoppingCart className="w-9 h-9 text-purple-100" />
                       </div>
                     </motion.div>
 
@@ -3161,7 +3186,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.3 }}
-                      className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-xl p-3 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
@@ -3173,14 +3198,14 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                             {peakHoursData.peakDays[0]?.orderCount || 0} orders
                           </p>
                         </div>
-                        <Calendar className="w-12 h-12 text-green-100" />
+                        <Calendar className="w-9 h-9 text-green-100" />
                       </div>
                     </motion.div>
                   </div>
 
                   {/* Hourly Breakdown Chart */}
-                  <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6 mb-8`}>
-                    <h3 className={`text-xl font-bold ${themeClasses.textPrimary} mb-6 flex items-center`}>
+                  <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3 mb-4`}>
+                    <h3 className={`text-base font-bold ${themeClasses.textPrimary} mb-3 flex items-center`}>
                       <Clock className="w-6 h-6 mr-2 text-orange-600" />
                       Hourly Sales Breakdown
                     </h3>
@@ -3193,7 +3218,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                     ) : (
                       <>
                         {/* Bar Chart */}
-                        <div className="h-96 mb-6">
+                        <div className="h-96 mb-3">
                           <ResponsiveContainer width="100%" height="100%">
                             <ComposedChart data={peakHoursData.hourlyData}>
                               <CartesianGrid strokeDasharray="3 3" stroke={isDark ? "#374151" : "#e0e7ff"} />
@@ -3290,8 +3315,8 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                   </div>
 
                   {/* Day of Week Comparison */}
-                  <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6 mb-8`}>
-                    <h3 className={`text-xl font-bold ${themeClasses.textPrimary} mb-6 flex items-center`}>
+                  <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3 mb-4`}>
+                    <h3 className={`text-base font-bold ${themeClasses.textPrimary} mb-3 flex items-center`}>
                       <Calendar className="w-6 h-6 mr-2 text-purple-600" />
                       Day of Week Analysis
                     </h3>
@@ -3304,7 +3329,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                     ) : (
                       <>
                         {/* Bar Chart for Days */}
-                        <div className="h-80 mb-6">
+                        <div className="h-60 mb-3">
                           <ResponsiveContainer width="100%" height="100%">
                             <BarChart data={peakHoursData.dailyData}>
                               <CartesianGrid strokeDasharray="3 3" stroke={isDark ? "#374151" : "#e0e7ff"} />
@@ -3350,7 +3375,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                                 initial={{ opacity: 0, y: 20 }}
                                 animate={{ opacity: 1, y: 0 }}
                                 transition={{ delay: index * 0.1 }}
-                                className={`bg-gradient-to-r ${colors.bg} rounded-2xl p-5 text-white shadow-lg`}
+                                className={`bg-gradient-to-r ${colors.bg} rounded-xl p-5 text-white shadow-lg`}
                               >
                                 <div className="flex items-center justify-between mb-2">
                                   <span className="text-2xl">{colors.medal}</span>
@@ -3358,7 +3383,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                                     #{index + 1}
                                   </span>
                                 </div>
-                                <h4 className={`text-xl font-bold ${colors.text} mb-1`}>
+                                <h4 className={`text-base font-bold ${colors.text} mb-1`}>
                                   {day.day}
                                 </h4>
                                 <p className={`${colors.text} text-sm mb-2`}>
@@ -3376,13 +3401,13 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                   </div>
 
                   {/* Insights & Recommendations */}
-                  <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6`}>
-                    <h3 className={`text-xl font-bold ${themeClasses.textPrimary} mb-6 flex items-center`}>
+                  <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3`}>
+                    <h3 className={`text-base font-bold ${themeClasses.textPrimary} mb-3 flex items-center`}>
                       <Target className="w-6 h-6 mr-2 text-blue-600" />
                       Business Insights
                     </h3>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       {/* Peak Hours Insight */}
                       <div className={`${isDark ? 'bg-orange-900/20 border-orange-700/30' : 'bg-orange-50 border-orange-200'} border-2 rounded-xl p-5`}>
                         <div className="flex items-start gap-3">
@@ -3437,11 +3462,11 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
               {activeReportTab === 'detailed' && (
                 <>
                   {/* Comprehensive Metrics Dashboard */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-8">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
                     <motion.div
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-green-500 to-emerald-600 rounded-xl p-3 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
@@ -3456,7 +3481,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.1 }}
-                      className="bg-gradient-to-r from-blue-500 to-cyan-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-blue-500 to-cyan-600 rounded-xl p-3 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
@@ -3471,7 +3496,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.2 }}
-                      className="bg-gradient-to-r from-red-500 to-pink-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-red-500 to-pink-600 rounded-xl p-3 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
@@ -3486,7 +3511,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.3 }}
-                      className={`bg-gradient-to-r ${profitData.netProfit >= 0 ? 'from-purple-500 to-indigo-600' : 'from-orange-500 to-red-600'} rounded-3xl p-6 text-white shadow-xl`}
+                      className={`bg-gradient-to-r ${profitData.netProfit >= 0 ? 'from-purple-500 to-indigo-600' : 'from-orange-500 to-red-600'} rounded-xl p-3 text-white shadow-xl`}
                     >
                       <div className="flex items-center justify-between">
                         <div>
@@ -3504,7 +3529,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       transition={{ delay: 0.4 }}
-                      className="bg-gradient-to-r from-yellow-500 to-orange-600 rounded-3xl p-6 text-white shadow-xl"
+                      className="bg-gradient-to-r from-yellow-500 to-orange-600 rounded-xl p-3 text-white shadow-xl"
                     >
                       <div className="flex items-center justify-between">
                         <div>
@@ -3517,14 +3542,14 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                   </div>
 
                   {/* Comprehensive Charts */}
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
                     {/* Revenue vs Expenses vs Profit */}
-                    <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6`}>
-                      <h3 className={`text-xl font-bold ${themeClasses.textPrimary} mb-6 flex items-center`}>
+                    <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3`}>
+                      <h3 className={`text-base font-bold ${themeClasses.textPrimary} mb-3 flex items-center`}>
                         <BarChart3 className="w-5 h-5 mr-2 text-purple-600" />
                         Revenue vs Expenses vs Profit
                       </h3>
-                      <div className="h-80">
+                      <div className="h-60">
                         <ResponsiveContainer width="100%" height="100%">
                           <ComposedChart data={profitData.dailyProfitLoss}>
                             <CartesianGrid strokeDasharray="3 3" stroke={isDark ? "#374151" : "#e0e7ff"} />
@@ -3564,12 +3589,12 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                     </div>
 
                     {/* Order Types Distribution */}
-                    <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6`}>
-                      <h3 className={`text-xl font-bold ${themeClasses.textPrimary} mb-6 flex items-center`}>
+                    <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3`}>
+                      <h3 className={`text-base font-bold ${themeClasses.textPrimary} mb-3 flex items-center`}>
                         <Coffee className="w-5 h-5 mr-2 text-green-600" />
                         Order Types Distribution
                       </h3>
-                      <div className="h-80">
+                      <div className="h-60">
                         <ResponsiveContainer width="100%" height="100%">
                           <RechartsPieChart>
                             <Tooltip
@@ -3604,14 +3629,14 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                   </div>
 
                   {/* Detailed Analytics Tables */}
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-4">
                     {/* Top Products */}
-                    <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6`}>
-                      <h3 className={`text-xl font-bold ${themeClasses.textPrimary} mb-6 flex items-center`}>
+                    <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3`}>
+                      <h3 className={`text-base font-bold ${themeClasses.textPrimary} mb-3 flex items-center`}>
                         <TrendingUp className="w-5 h-5 mr-2 text-green-600" />
                         Top Selling Products
                       </h3>
-                      <div className="space-y-3 max-h-80 overflow-y-auto">
+                      <div className="space-y-3 max-h-60 overflow-y-auto">
                         {salesData.topProducts.map((product, index) => (
                           <div key={index} className={`flex items-center justify-between p-3 ${isDark ? 'bg-gray-700 hover:bg-gray-600' : 'bg-gray-50 hover:bg-gray-100'} rounded-xl transition-all`}>
                             <div className="flex items-center">
@@ -3637,12 +3662,12 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                     </div>
 
                     {/* Top Customers */}
-                    <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6`}>
-                      <h3 className={`text-xl font-bold ${themeClasses.textPrimary} mb-6 flex items-center`}>
+                    <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3`}>
+                      <h3 className={`text-base font-bold ${themeClasses.textPrimary} mb-3 flex items-center`}>
                         <Users className="w-5 h-5 mr-2 text-blue-600" />
                         Valuable Customers
                       </h3>
-                      <div className="space-y-3 max-h-80 overflow-y-auto">
+                      <div className="space-y-3 max-h-60 overflow-y-auto">
                         {salesData.topCustomers && salesData.topCustomers.length > 0 ? (
                           salesData.topCustomers.map((customer, index) => (
                             <div key={customer.id} className={`flex items-center justify-between p-3 ${isDark ? 'bg-gray-700 hover:bg-gray-600' : 'bg-gray-50 hover:bg-gray-100'} rounded-xl transition-all`}>
@@ -3666,7 +3691,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                           ))
                         ) : (
                           <div className="text-center py-8">
-                            <Users className={`w-12 h-12 ${themeClasses.textSecondary} mx-auto mb-3`} />
+                            <Users className={`w-9 h-9 ${themeClasses.textSecondary} mx-auto mb-3`} />
                             <p className={themeClasses.textSecondary}>No customer data available</p>
                             <p className={`text-sm ${themeClasses.textSecondary}`}>Most orders are walk-ins</p>
                           </div>
@@ -3676,9 +3701,9 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                   </div>
 
                   {/* Recent Transactions Table */}
-                  <div className={`${themeClasses.card} rounded-3xl ${themeClasses.shadow} ${themeClasses.border} border p-6`}>
-                    <div className="flex items-center justify-between mb-6">
-                      <h3 className={`text-xl font-bold ${themeClasses.textPrimary} flex items-center`}>
+                  <div className={`${themeClasses.card} rounded-xl ${themeClasses.shadow} ${themeClasses.border} border p-3`}>
+                    <div className="flex items-center justify-between mb-3">
+                      <h3 className={`text-base font-bold ${themeClasses.textPrimary} flex items-center`}>
                         <FileText className={`w-5 h-5 mr-2 ${themeClasses.textSecondary}`} />
                         Recent Transactions
                       </h3>

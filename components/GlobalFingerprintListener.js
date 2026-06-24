@@ -276,7 +276,13 @@ export default function GlobalFingerprintListener() {
     })
     if (error) return { action: 'error', error: error.message }
     const row = Array.isArray(data) ? data[0] : data
-    return { action: row?.result_action || 'already', inTime: row?.in_time, outTime: row?.out_time }
+    return {
+      action: row?.result_action || 'already',
+      inTime: row?.in_time,
+      outTime: row?.out_time,
+      status: row?.att_status || null,        // present | late | half_day | absent (from rules)
+      lateMinutes: row?.late_minutes || 0,
+    }
   }
 
   function showResult(data) {
@@ -339,6 +345,21 @@ export default function GlobalFingerprintListener() {
           </div>
           {action === 'completed' && (
             <p className="text-xs text-slate-500 -mt-2 mb-3">Already checked out today — see you next shift</p>
+          )}
+          {/* Attendance rule result (late / half-day / absent) — only when rules flagged it. */}
+          {popup.status && popup.status !== 'present' && action !== 'error' && (
+            <div className="-mt-1 mb-3">
+              <span className={`inline-block px-3 py-1 rounded-full text-sm font-semibold ${
+                popup.status === 'late'     ? 'bg-amber-100 text-amber-700' :
+                popup.status === 'half_day' ? 'bg-orange-100 text-orange-700' :
+                popup.status === 'absent'   ? 'bg-red-100 text-red-700' :
+                'bg-gray-100 text-gray-600'
+              }`}>
+                {popup.status === 'late'     && `Late${popup.lateMinutes ? ` by ${popup.lateMinutes} min` : ''}`}
+                {popup.status === 'half_day' && 'Half Day'}
+                {popup.status === 'absent'   && 'Marked Absent'}
+              </span>
+            </div>
           )}
           {(popup.inTime || popup.outTime) && (
             <div className="flex justify-center gap-6 text-sm text-gray-500">

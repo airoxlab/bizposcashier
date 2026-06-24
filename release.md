@@ -2,3 +2,4 @@ gh release create v2.3.6 "dist\BizPOS-Setup-2.3.6.exe" "dist\BizPOS-Setup-2.3.6.
 
 
 
+look json file of bizpos-software project and give me updated cmnd

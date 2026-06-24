@@ -214,17 +214,20 @@ export default function LedgerTab({ userId, startDate, endDate, prefetchedCustom
     }
 
     // Prepare CSV content
-    const headers = ['Date', 'Description', 'Order #', 'Debit (Dr)', 'Credit (Cr)', 'Balance'];
+    const headers = ['Date', 'Description', 'Order #', 'Collected By', 'Debit (Dr)', 'Credit (Cr)', 'Balance'];
 
     const rows = ledgerData.map(entry => {
       const date = formatDate(entry.created_at);
       const description = entry.description || '';
       const orderNumber = entry.order?.order_number || '-';
+      const collectedBy = entry.payment?.collected_by_name
+        ? `${entry.payment.collected_by_name}${entry.payment.collected_by_role ? ' (' + entry.payment.collected_by_role + ')' : ''}`
+        : '-';
       const debit = entry.transaction_type === 'debit' ? Number(entry.amount || 0) : '';
       const credit = entry.transaction_type === 'credit' ? Number(entry.amount || 0) : '';
       const balance = Number(entry.balance_after || 0);
 
-      return [date, `"${description}"`, orderNumber, debit, credit, balance];
+      return [date, `"${description}"`, orderNumber, `"${collectedBy}"`, debit, credit, balance];
     });
 
     // Add summary at the end
@@ -234,8 +237,8 @@ export default function LedgerTab({ userId, startDate, endDate, prefetchedCustom
     rows.push(['--- Summary ---']);
     rows.push(['Customer Name', `"${selectedCustomer.full_name || ''}"`]);
     rows.push(['Phone', selectedCustomer.phone || '']);
-    rows.push(['Account Balance', '', '', '', '', accountBalance]);
-    rows.push(['Total Unpaid Orders', '', '', '', '', totalUnpaid]);
+    rows.push(['Account Balance', '', '', '', '', '', accountBalance]);
+    rows.push(['Total Unpaid Orders', '', '', '', '', '', totalUnpaid]);
 
     // Create CSV string
     const csvContent = [
@@ -630,6 +633,7 @@ export default function LedgerTab({ userId, startDate, endDate, prefetchedCustom
                   <th className={styles.tableHeader}>Date</th>
                   <th className={styles.tableHeader}>Description</th>
                   <th className={styles.tableHeader}>Order #</th>
+                  <th className={styles.tableHeader}>Collected By</th>
                   <th className={`${styles.tableHeader} text-right`}>Debit (Dr)</th>
                   <th className={`${styles.tableHeader} text-right`}>Credit (Cr)</th>
                   <th className={`${styles.tableHeader} text-right`}>Balance</th>
@@ -638,7 +642,7 @@ export default function LedgerTab({ userId, startDate, endDate, prefetchedCustom
               <tbody className={`divide-y ${classes.border}`}>
                 {ledgerData.length === 0 ? (
                   <tr>
-                    <td colSpan="6" className={`px-6 py-8 text-center ${classes.textSecondary}`}>
+                    <td colSpan="7" className={`px-6 py-8 text-center ${classes.textSecondary}`}>
                       No transactions found
                     </td>
                   </tr>
@@ -656,6 +660,18 @@ export default function LedgerTab({ userId, startDate, endDate, prefetchedCustom
                       </td>
                       <td className={`${styles.tableCell}`}>
                         {entry.order?.order_number || '-'}
+                      </td>
+                      <td className={`${styles.tableCell}`}>
+                        {entry.payment?.collected_by_name ? (
+                          <span>
+                            {entry.payment.collected_by_name}
+                            {entry.payment.collected_by_role && (
+                              <span className={`ml-1 text-xs ${classes.textSecondary} capitalize`}>
+                                ({entry.payment.collected_by_role})
+                              </span>
+                            )}
+                          </span>
+                        ) : '-'}
                       </td>
                       <td className={`${styles.tableCell} text-right font-medium text-red-600`}>
                         {entry.transaction_type === 'debit' ? formatCurrency(entry.amount) : '-'}

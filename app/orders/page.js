@@ -1137,35 +1137,24 @@ export default function OrdersPage() {
             const { default: customerLedgerManager } = await import('../../lib/customerLedgerManager');
             customerLedgerManager.setUserId(user.id);
 
-            const { data: existingEntry } = await supabase
-              .from('customer_ledger')
-              .select('id, amount')
-              .eq('order_id', selectedOrder.id)
-              .eq('user_id', user.id)
-              .eq('transaction_type', 'debit')
-              .maybeSingle();
-
-            let previousBalance = 0;
-            let newBalance = 0;
-            if (!existingEntry) {
-              previousBalance = await customerLedgerManager.getCustomerBalance(selectedOrder.customer_id);
-              newBalance = previousBalance + paymentData.newTotal;
-              await supabase.from('customer_ledger').insert({
-                user_id: user.id,
-                customer_id: selectedOrder.customer_id,
-                transaction_type: 'debit',
-                amount: paymentData.newTotal,
-                balance_before: previousBalance,
-                balance_after: newBalance,
-                order_id: selectedOrder.id,
-                description: `Order #${selectedOrder.order_number} - ${selectedOrder.order_type?.toUpperCase() || 'ORDER'}`,
-                notes: 'Payment recorded via Orders section',
-                created_by: user.id
-              });
-              await supabase.from('customers').update({ account_balance: newBalance }).eq('id', selectedOrder.customer_id);
-            } else {
-              previousBalance = await customerLedgerManager.getCustomerBalance(selectedOrder.customer_id);
-              newBalance = previousBalance;
+            let previousBalance = await customerLedgerManager.getCustomerBalance(selectedOrder.customer_id);
+            let newBalance = previousBalance;
+            // Idempotent + race-safe: inserts the order debit if missing, updates
+            // + recomputes if the total changed, or no-ops if already correct.
+            const { data: rpcData, error: rpcErr } = await supabase.rpc('post_customer_order_debit', {
+              p_user_id: user.id,
+              p_customer_id: selectedOrder.customer_id,
+              p_order_id: selectedOrder.id,
+              p_amount: paymentData.newTotal,
+              p_description: `Order #${selectedOrder.order_number} - ${selectedOrder.order_type?.toUpperCase() || 'ORDER'}`,
+              p_notes: 'Payment recorded via Orders section',
+              p_created_by: user.id,
+            });
+            const res = typeof rpcData === 'string' ? JSON.parse(rpcData) : rpcData;
+            if (rpcErr || !res?.success) {
+              console.error('⚠️ post_customer_order_debit failed:', rpcErr?.message || res?.error);
+            } else if (res.balance_after != null) {
+              newBalance = Number(res.balance_after);
             }
 
             // Fire Account WhatsApp bill (includes balance, receipt image, etc.)
@@ -1436,42 +1425,22 @@ export default function OrdersPage() {
           selectedOrder?.payment_method === 'Account' && selectedOrder?.customer_id) {
         try {
           console.log('💳 [Orders] Reversing customer ledger for cancelled Account order')
-          const { default: customerLedgerManager } = await import('../../lib/customerLedgerManager')
-          customerLedgerManager.setUserId(user.id)
-
-          const orderTotal = parseFloat(selectedOrder.total_amount || selectedOrder.amount_paid || 0)
-          if (orderTotal > 0) {
-            // Credit back the customer's account (reverse the debit)
-            const { data: currentCustomer } = await supabase
-              .from('customers')
-              .select('account_balance')
-              .eq('id', selectedOrder.customer_id)
-              .single()
-
-            const currentBalance = parseFloat(currentCustomer?.account_balance || 0)
-            const newBalance = currentBalance - orderTotal
-
-            // Create reversal ledger entry
-            await supabase.from('customer_ledger').insert({
-              user_id: user.id,
-              customer_id: selectedOrder.customer_id,
-              transaction_type: 'credit',
-              amount: orderTotal,
-              balance_before: currentBalance,
-              balance_after: newBalance,
-              order_id: orderId,
-              description: `Order cancelled - ${selectedOrder.order_number || 'N/A'}${cancelReason ? ` (${cancelReason})` : ''}`,
-              notes: 'Order cancellation - account credit reversal',
-              created_by: user.id
-            })
-
-            // Update customer balance
-            await supabase.from('customers')
-              .update({ account_balance: newBalance })
-              .eq('id', selectedOrder.customer_id)
-
-            console.log(`✅ [Orders] Customer ledger reversed: -Rs ${orderTotal} (New balance: ${newBalance})`)
-            notify.success(`Customer account credited Rs ${orderTotal} (order cancelled)`)
+          // Idempotent RPC: reverses the order's net debit exactly once and
+          // recomputes the running balance. Safe to call more than once.
+          const { data: rpcData, error: rpcErr } = await supabase.rpc('reverse_customer_order_debit', {
+            p_user_id: user.id,
+            p_customer_id: selectedOrder.customer_id,
+            p_order_id: orderId,
+            p_description: `Order cancelled - ${selectedOrder.order_number || 'N/A'}${cancelReason ? ` (${cancelReason})` : ''}`,
+            p_created_by: user.id,
+          })
+          const res = typeof rpcData === 'string' ? JSON.parse(rpcData) : rpcData
+          if (rpcErr || !res?.success) {
+            console.error('❌ [Orders] reverse_customer_order_debit failed:', rpcErr?.message || res?.error)
+            notify.error('Order cancelled but failed to reverse customer account. Please adjust manually.')
+          } else if (res.action === 'reversed') {
+            console.log(`✅ [Orders] Customer ledger reversed: -Rs ${res.amount} (New balance: ${res.balance_after})`)
+            notify.success(`Customer account credited Rs ${res.amount} (order cancelled)`)
           }
         } catch (ledgerError) {
           console.error('❌ [Orders] Failed to reverse customer ledger:', ledgerError)
@@ -1479,13 +1448,14 @@ export default function OrdersPage() {
         }
       } else if (newStatus === 'Cancelled' && !cacheManager.checkOnlineStatus() &&
           selectedOrder?.payment_method === 'Account' && selectedOrder?.customer_id) {
-        // Only queue a credit reversal if the order was already synced to DB (has a real UUID).
+        // Only queue a reversal if the order was already synced to DB (has a real UUID).
         // If the order was created offline and never synced, there is no debit to reverse.
         const isRealUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(orderId)
         const orderTotal = parseFloat(selectedOrder.total_amount || selectedOrder.amount_paid || 0)
         if (isRealUUID && orderTotal > 0) {
+          // type:'reverse' is replayed through reverse_customer_order_debit (idempotent)
           cacheManager.addPendingLedgerEntry({
-            type: 'credit',
+            type: 'reverse',
             customer_id: selectedOrder.customer_id,
             amount: orderTotal,
             order_id: orderId,

@@ -223,6 +223,31 @@ export default function ExpensesPage() {
     setDateTo(to)
   }, [router])
 
+  // Skip the PIN gate entirely if the admin disabled "Require PIN on Expenses".
+  // Defaults to requiring the PIN when the flag is unknown (offline / column
+  // missing / fetch error) so expenses never become unexpectedly open.
+  useEffect(() => {
+    if (!user?.id || isAuthenticated) return
+    let cancelled = false
+    const cacheKey = 'pos_require_expense_pin'
+    ;(async () => {
+      if (!cacheManager.checkOnlineStatus()) {
+        if (localStorage.getItem(cacheKey) === 'false') setIsAuthenticated(true)
+        return
+      }
+      const { data, error } = await supabase
+        .from('users')
+        .select('require_expense_pin')
+        .eq('id', user.id)
+        .single()
+      if (cancelled || error) return
+      const required = data?.require_expense_pin !== false
+      localStorage.setItem(cacheKey, String(required))
+      if (!required) setIsAuthenticated(true)
+    })()
+    return () => { cancelled = true }
+  }, [user?.id])
+
   useEffect(() => {
     if (isAuthenticated) fetchData()
   }, [isAuthenticated, dateFrom, dateTo, categoryFilter, subcategoryFilter, paymentFilter])

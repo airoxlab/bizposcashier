@@ -17,7 +17,12 @@ export default function RecordPaymentModal({ customer, unpaidOrders, customerSum
   const [referenceNumber, setReferenceNumber] = useState('');
   const [notes, setNotes] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [paymentMethods, setPaymentMethods] = useState(['Cash', 'EasyPaisa', 'JazzCash', 'Bank', 'Card']);
+  // Each account is { id, name }. id is the payment_accounts.id to credit in finance
+  // (null for the hard-coded fallback methods when no accounts are configured).
+  const [accounts, setAccounts] = useState([
+    { id: null, name: 'Cash' }, { id: null, name: 'EasyPaisa' },
+    { id: null, name: 'JazzCash' }, { id: null, name: 'Bank' }, { id: null, name: 'Card' },
+  ]);
 
   useEffect(() => {
     if (!userId) return
@@ -27,15 +32,16 @@ export default function RecordPaymentModal({ customer, unpaidOrders, customerSum
     const drawerEnabled = currentUser?.use_cashier_drawer === true ||
       (() => { try { return JSON.parse(localStorage.getItem('pos_cashier_drawer_enabled') || 'false') } catch { return false } })()
 
-    if (drawerEnabled && cashier?.id) {
-      supabase.from('payment_accounts').select('name, payment_method_key')
-        .eq('user_id', userId).eq('cashier_id', cashier.id).eq('is_active', true).order('sort_order')
-        .then(({ data }) => { if (data?.length > 0) setPaymentMethods(data.map(a => a.name)) })
-    } else {
-      supabase.from('payment_accounts').select('name, payment_method_key')
-        .eq('user_id', userId).is('cashier_id', null).eq('is_active', true).order('sort_order')
-        .then(({ data }) => { if (data?.length > 0) setPaymentMethods(data.map(a => a.name)) })
-    }
+    let query = supabase.from('payment_accounts').select('id, name, payment_method_key')
+      .eq('user_id', userId).eq('is_active', true).order('sort_order')
+    query = (drawerEnabled && cashier?.id) ? query.eq('cashier_id', cashier.id) : query.is('cashier_id', null)
+
+    query.then(({ data }) => {
+      if (data?.length > 0) {
+        setAccounts(data.map(a => ({ id: a.id, name: a.name })))
+        setPaymentMethod(data[0].name)
+      }
+    })
   }, []);
 
   const handleAmountChange = (value) => {
@@ -54,18 +60,25 @@ export default function RecordPaymentModal({ customer, unpaidOrders, customerSum
 
     try {
       const currentUser = authManager.getCurrentUser();
+      const selectedAccount = accounts.find(a => a.name === paymentMethod);
 
       const paymentData = {
         amount: Number(amount),
         paymentMethod,
         referenceNumber: referenceNumber || null,
-        notes: notes || null
+        notes: notes || null,
+        // Who collected: cashier name (or owner/admin name) + role
+        collectedByName: authManager.getDisplayName(),
+        collectedByRole: authManager.getRole(),
+        // Finance account to credit (null falls back to no finance posting)
+        accountId: selectedAccount?.id || null,
       };
 
       const result = await ledgerManager.recordPayment(
         userId,
         customer.id,
         paymentData,
+        // received_by must be a users.id (owner), not the cashier id
         currentUser?.id
       );
 
@@ -166,8 +179,8 @@ export default function RecordPaymentModal({ customer, unpaidOrders, customerSum
                 className={styles.formInput}
                 required
               >
-                {paymentMethods.map((method) => (
-                  <option key={method} value={method}>{method}</option>
+                {accounts.map((acc, i) => (
+                  <option key={acc.id || `${acc.name}-${i}`} value={acc.name}>{acc.name}</option>
                 ))}
               </select>
             </div>

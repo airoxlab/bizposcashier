@@ -8,6 +8,23 @@ import { authManager } from '../../lib/authManager'
 import { notify } from '../ui/NotificationSystem'
 import { supabase } from '../../lib/supabase'
 
+// Customer account-balance pill (same convention as the Ledger): > 0 = customer
+// owes (Due, red); < 0 = credit available (green); 0 = nothing shown.
+function customerBalanceBadge(rawBalance, isDark) {
+  const n = Number(rawBalance) || 0
+  if (!n) return null
+  const owes = n > 0
+  const amt = `Rs ${Math.abs(n).toLocaleString('en-PK', { maximumFractionDigits: 0 })}`
+  const colorCls = owes
+    ? (isDark ? 'bg-red-900/40 text-red-300' : 'bg-red-100 text-red-700')
+    : (isDark ? 'bg-green-900/40 text-green-300' : 'bg-green-100 text-green-700')
+  return (
+    <span className={`flex-shrink-0 inline-flex items-center rounded-full font-semibold whitespace-nowrap text-[10px] px-2 py-0.5 ${colorCls}`}>
+      {owes ? `Due ${amt}` : `Credit ${amt}`}
+    </span>
+  )
+}
+
 export default function DeliveryCustomerForm({
   isOpen,
   onClose,
@@ -831,6 +848,7 @@ export default function DeliveryCustomerForm({
                           </p>
                         )}
                       </div>
+                      {customerBalanceBadge(suggestion.account_balance, isDark)}
                       <Check className={`w-4 h-4 ${
                         selectedSuggestionIndex === index
                           ? isDark ? 'text-blue-300' : 'text-blue-700'

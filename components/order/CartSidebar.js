@@ -9,6 +9,23 @@ import InlineCustomerPanel from '../pos/InlineCustomerPanel'
 import CashierAnalytics from '../pos/CashierAnalytics'
 import { permissionManager } from '@/lib/permissionManager'
 
+// Customer account-balance pill (same convention as the Ledger): > 0 = customer
+// owes (Due, red); < 0 = credit available (green); 0 = nothing shown.
+function customerBalanceBadge(rawBalance, isDark) {
+  const n = Number(rawBalance) || 0
+  if (!n) return null
+  const owes = n > 0
+  const amt = `Rs ${Math.abs(n).toLocaleString('en-PK', { maximumFractionDigits: 0 })}`
+  const colorCls = owes
+    ? (isDark ? 'bg-red-900/40 text-red-300' : 'bg-red-100 text-red-700')
+    : (isDark ? 'bg-green-900/40 text-green-300' : 'bg-green-100 text-green-700')
+  return (
+    <span className={`flex-shrink-0 inline-flex items-center rounded-full font-semibold whitespace-nowrap text-[10px] px-1.5 py-0.5 ${colorCls}`}>
+      {owes ? `Due ${amt}` : `Credit ${amt}`}
+    </span>
+  )
+}
+
 export default function CartSidebar({
   cart = [],
   customer,
@@ -252,6 +269,7 @@ export default function CartSidebar({
                 >
                   <User className="w-3 h-3 flex-shrink-0" />
                   <span className="truncate flex-1 text-left">{customer.full_name?.trim() || customer.phone}</span>
+                  {customerBalanceBadge(customer.account_balance, isDark)}
                   {custMode === 'expanded'
                     ? <ChevronUp className="w-3 h-3 flex-shrink-0" />
                     : <ChevronDown className="w-3 h-3 flex-shrink-0" />
@@ -292,6 +310,7 @@ export default function CartSidebar({
             >
               <User className="w-3 h-3 flex-shrink-0" />
               <span className="truncate">{customer.full_name?.trim() || customer.phone}</span>
+              {customerBalanceBadge(customer.account_balance, isDark)}
             </motion.button>
           ) : (
             <motion.button
