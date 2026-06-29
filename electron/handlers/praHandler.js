@@ -29,6 +29,74 @@ async function ensureQrFile(invoiceNumber) {
   return qrPath;
 }
 
+// ---------------------------------------------------------------------------
+// Shared PRA amount calculation — single source of truth for BOTH the live
+// submission (pra:submit) and the proforma preview (pra:preview) so the
+// proforma always shows exactly what PRA will be charged.
+//
+// General rule applied: the restaurant SERVICE CHARGE is part of the value of
+// supply, so it is included in the taxable value and taxed. Because the PRA
+// payload is item-based (and PRA validates that the item amounts sum to the
+// header totals), the service charge is distributed across the line items in
+// proportion to each item's base sale value.
+// ---------------------------------------------------------------------------
+function buildPraItemsAndTotals(orderItems, serviceChargeAmount, taxRate) {
+  const items = orderItems || [];
+  const round2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
+
+  // Base sale value per item = line total - per-item discount.
+  const bases = items.map(item => {
+    const lineTotal = parseFloat(item.total_price || 0);
+    const itemDisc = parseFloat(item.item_discount_amount || 0);
+    return Math.max(0, round2(lineTotal - itemDisc));
+  });
+  const baseSubtotal = round2(bases.reduce((s, v) => s + v, 0));
+  const svc = parseFloat(serviceChargeAmount || 0);
+
+  // Distribute the service charge proportionally; assign any rounding remainder
+  // to the last item so the shares sum EXACTLY to the service charge.
+  const shares = bases.map(b => (baseSubtotal > 0 ? round2(svc * b / baseSubtotal) : 0));
+  if (svc > 0 && shares.length > 0) {
+    const allocated = round2(shares.reduce((s, v) => s + v, 0));
+    shares[shares.length - 1] = round2(shares[shares.length - 1] + (svc - allocated));
+  }
+
+  const payloadItems = items.map((item, idx) => {
+    const saleVal = round2(bases[idx] + shares[idx]);
+    const taxCharged = round2(saleVal * taxRate / 100);
+    const totalAmt = round2(saleVal + taxCharged);
+    return {
+      ItemCode: item.product_id,
+      ItemName: item.product_name,
+      Quantity: item.quantity,
+      PCTCode: (item.products?.pct_code || '').replace(/\./g, ''),
+      TaxRate: taxRate,
+      SaleValue: saleVal,
+      TaxCharged: taxCharged,
+      TotalAmount: totalAmt,
+      Discount: parseFloat(item.item_discount_amount || 0),
+      FurtherTax: 0,
+      InvoiceType: 1,
+      RefUSIN: null,
+    };
+  });
+
+  const totalSaleValue = round2(payloadItems.reduce((s, i) => s + i.SaleValue, 0));
+  const totalTaxCharged = round2(payloadItems.reduce((s, i) => s + i.TaxCharged, 0));
+  const totalBillAmount = round2(payloadItems.reduce((s, i) => s + i.TotalAmount, 0));
+  const totalQuantity = items.reduce((s, i) => s + (parseInt(i.quantity) || 0), 0);
+
+  return {
+    items: payloadItems,
+    baseSubtotal,        // items only, before service charge (for receipt Subtotal line)
+    serviceCharge: svc,  // service charge folded into the taxable value
+    totalSaleValue,      // taxable value = items + service charge
+    totalTaxCharged,
+    totalBillAmount,     // taxable value + tax
+    totalQuantity,
+  };
+}
+
 function registerPRAHandlers(ipcMain) {
   // Main submission handler — bearer token NEVER leaves this process
   ipcMain.handle('pra:submit', async (_event, { order_id, user_id, payment_mode }) => {
@@ -115,7 +183,8 @@ function registerPRAHandlers(ipcMain) {
         .update({ pra_usin: usin, pra_status: 'pending', pra_payment_mode: payment_mode })
         .eq('id', order_id);
 
-      // 7. Build PRA payload
+      // 7. Build PRA payload — service charge is folded into the taxable value
+      //    via the shared helper (same math the proforma preview uses).
       const taxRate = payment_mode === 2
         ? parseFloat(pra.card_tax_rate || 5)
         : parseFloat(pra.cash_tax_rate || 16);
@@ -124,32 +193,12 @@ function registerPRAHandlers(ipcMain) {
       const pad = n => String(n).padStart(2, '0');
       const dateTime = `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())} ${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
 
-      const items = (order.order_items || []).map(item => {
-        const lineTotal = parseFloat(item.total_price || 0);
-        const itemDisc = parseFloat(item.item_discount_amount || 0);
-        const saleVal = Math.round((lineTotal - itemDisc) * 100) / 100;
-        const taxCharged = Math.round(saleVal * taxRate / 100 * 100) / 100;
-        const totalAmt = Math.round((saleVal + taxCharged) * 100) / 100;
-        return {
-          ItemCode: item.product_id,
-          ItemName: item.product_name,
-          Quantity: item.quantity,
-          PCTCode: (item.products.pct_code || '').replace(/\./g, ''),
-          TaxRate: taxRate,
-          SaleValue: saleVal,
-          TaxCharged: taxCharged,
-          TotalAmount: totalAmt,
-          Discount: itemDisc,
-          FurtherTax: 0,
-          InvoiceType: 1,
-          RefUSIN: null,
-        };
-      });
-
-      const totalSaleValue = Math.round(items.reduce((s, i) => s + i.SaleValue, 0) * 100) / 100;
-      const totalTaxCharged = Math.round(items.reduce((s, i) => s + i.TaxCharged, 0) * 100) / 100;
-      const totalBillAmount = Math.round(items.reduce((s, i) => s + i.TotalAmount, 0) * 100) / 100;
-      const totalQuantity = (order.order_items || []).reduce((s, i) => s + i.quantity, 0);
+      const built = buildPraItemsAndTotals(order.order_items, order.service_charge_amount, taxRate);
+      const items = built.items;
+      const totalSaleValue = built.totalSaleValue;
+      const totalTaxCharged = built.totalTaxCharged;
+      const totalBillAmount = built.totalBillAmount;
+      const totalQuantity = built.totalQuantity;
 
       const payload = {
         InvoiceNumber: '',
@@ -249,6 +298,57 @@ function registerPRAHandlers(ipcMain) {
           .update({ pra_status: 'failed', pra_error: err.message })
           .eq('id', order_id);
       } catch (_) {}
+      return { success: false, error: err.message };
+    }
+  });
+
+  // Proforma preview — computes the SAME amounts pra:submit would, WITHOUT
+  // filing anything (no USIN consumed, no DB writes, no API call). Used by the
+  // proforma print so the preview matches the eventual PRA receipt to the rupee.
+  ipcMain.handle('pra:preview', async (_event, { order_id, user_id, payment_mode }) => {
+    try {
+      const { data: pra, error: praErr } = await supabase
+        .from('pra_settings')
+        .select('*')
+        .eq('user_id', user_id)
+        .single();
+      if (praErr || !pra) {
+        return { success: false, error: 'PRA settings not found.' };
+      }
+
+      const { data: order, error: orderErr } = await supabase
+        .from('orders')
+        .select(`
+          id, subtotal, discount_amount, service_charge_amount,
+          order_items (
+            id, product_id, product_name, quantity, final_price, total_price,
+            item_discount_amount,
+            products ( pct_code )
+          )
+        `)
+        .eq('id', order_id)
+        .single();
+      if (orderErr || !order) {
+        return { success: false, error: 'Could not fetch order details.' };
+      }
+
+      const taxRate = payment_mode === 2
+        ? parseFloat(pra.card_tax_rate || 5)
+        : parseFloat(pra.cash_tax_rate || 16);
+
+      const built = buildPraItemsAndTotals(order.order_items, order.service_charge_amount, taxRate);
+
+      return {
+        success: true,
+        tax_rate: taxRate,
+        subtotal: built.baseSubtotal,
+        service_charge: built.serviceCharge,
+        total_sale_value: built.totalSaleValue,
+        total_tax_charged: built.totalTaxCharged,
+        total_bill_amount: built.totalBillAmount,
+      };
+    } catch (err) {
+      console.error('[PRA] Preview error:', err);
       return { success: false, error: err.message };
     }
   });

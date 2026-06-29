@@ -58,14 +58,15 @@ export default function DealFlavorSelectionScreen({
         autoSelectedProducts[product.id] = true
 
         if (hasPreAssignedVariant && product.variantPrice && product.variants?.length > 0) {
-          const basePrice = Math.min(...product.variants.map(v => parseFloat(v.price) || 0))
-          const selectedPrice = parseFloat(product.variantPrice) || 0
-          const adjustment = Math.max(0, selectedPrice - basePrice)
+          // Fixed/locked variant (admin pinned this exact size/flavour and disabled
+          // flavour change). The deal's base price already includes it, so there is
+          // NO "variant upgrade" charge — that only applies when the cashier actively
+          // upsizes a changeable slot (see handleFlavorSelect).
           // Pre-assigned variant: same flavor applied to all slots (all slots share one locked variant)
           for (let i = 0; i < (product.quantity || 1); i++) {
             const key = `${product.id}-${i}`
             autoSelectedFlavors[key] = { name: product.variantName, price: product.variantPrice }
-            autoSelectedAdjustments[key] = adjustment
+            autoSelectedAdjustments[key] = 0
           }
         }
       }

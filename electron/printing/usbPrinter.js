@@ -194,7 +194,11 @@ async function imageToEscPos(imagePath, maxWidth = 384) {
 
 // Generate receipt ESC/POS commands - MATCHING IP PRINTER LAYOUT
 async function generateReceiptESCPOS(orderData, userProfile, assets) {
-  console.log('📄 [usbPrinter.js] Generating CUSTOMER RECEIPT via USB');
+  // Proforma = a pre-fiscalization preview receipt. It is NOT pushed to PRA,
+  // has no fiscal invoice number, and only adds an estimated PRA tax line to
+  // the total. Triggered by orderData.proforma being present.
+  const isProforma = !!orderData.proforma;
+  console.log(`📄 [usbPrinter.js] Generating ${isProforma ? 'PROFORMA INVOICE' : 'CUSTOMER RECEIPT'} via USB`);
   const commands = [];
 
   // Initialize printer
@@ -274,7 +278,7 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
   commands.push(CMD.ALIGN_CENTER);
   commands.push(drawLine('-'));
   commands.push(CMD.BOLD_ON);
-  commands.push(text('ORDER RECEIPT\n'));
+  commands.push(text(isProforma ? 'PROFORMA INVOICE\n' : 'ORDER RECEIPT\n'));
   commands.push(CMD.BOLD_OFF);
   commands.push(drawLine('-'));
 
@@ -470,7 +474,13 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
 
   // Calculate grand total
   const totalDiscounts = discountAmount + loyaltyDiscountAmount;
-  const grandTotal = subtotal - totalDiscounts + serviceChargeAmount + deliveryCharges;
+  // Both the proforma (preview) and a filed PRA push receipt add a PRA tax line
+  // on top of the normal total, so the GRAND TOTAL reflects
+  // items + service charge + delivery + PRA tax. taxInfo holds the tax figures
+  // for whichever applies (proforma block or filed-PRA block).
+  const taxInfo = orderData.proforma || orderData.pra || null;
+  const praTaxAmount = taxInfo ? parseFloat(taxInfo.tax_charged || 0) : 0;
+  const grandTotal = subtotal - totalDiscounts + serviceChargeAmount + deliveryCharges + praTaxAmount;
 
   commands.push(leftRight('Subtotal:', `Rs ${subtotal.toFixed(0)}`));
 
@@ -500,6 +510,13 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
 
   if (orderData.orderType === 'delivery' && deliveryCharges > 0) {
     commands.push(leftRight('Delivery Charges:', `Rs ${deliveryCharges.toFixed(0)}`));
+  }
+
+  // PRA tax row — shown for both the proforma preview and the filed PRA push
+  // receipt, right after the service charge and before the grand total.
+  if (taxInfo) {
+    const praTaxRate = taxInfo.tax_rate;
+    commands.push(leftRight(`PRA Tax (${praTaxRate}%):`, `+Rs ${praTaxAmount.toFixed(0)}`));
   }
 
   // commands.push(drawLine('-'));

@@ -170,6 +170,7 @@ const api = {
 
   // PRA e-IMS fiscalization — token stays in main process, never exposed to renderer
   praSubmit: (data) => ipcRenderer.invoke('pra:submit', data),
+  praPreview: (data) => ipcRenderer.invoke('pra:preview', data),
   praEnsureQr: (data) => ipcRenderer.invoke('pra:ensure-qr', data),
 
   platform: process.platform,

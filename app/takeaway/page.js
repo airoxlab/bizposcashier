@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { cacheManager } from '../../lib/cacheManager'
+import { isDealFullyAuto, buildAutoDealCartItem } from '../../lib/utils/dealHelpers'
 import { triggerWhatsAppAutoSend } from '../../lib/whatsappAutoSend'
 import { triggerAccountAutoSend } from '../../lib/accountAutoSend'
 import { themeManager } from '../../lib/themeManager'
@@ -383,8 +384,15 @@ export default function TakeawayPage() {
     }
 
     await cacheManager.ensureDealProducts(deal.id)
-    setSelectedDeal(deal)
     const products = cacheManager.getDealProducts(deal.id)
+
+    // Nothing for the cashier to choose → add straight to cart, skip the deal screen
+    if (isDealFullyAuto(products)) {
+      handleAddToCart(buildAutoDealCartItem(deal, products))
+      return
+    }
+
+    setSelectedDeal(deal)
     setDealProducts(products)
     setCurrentView('deal')
   }

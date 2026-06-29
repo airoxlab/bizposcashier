@@ -224,6 +224,10 @@ export default function OrdersPage() {
   const [showPRAModal, setShowPRAModal] = useState(false);
   const [praPaymentMode, setPraPaymentMode] = useState(null);
   const [praSubmitting, setPraSubmitting] = useState(false);
+  // Proforma invoice (pre-PRA preview print) — not filed, no fiscal number
+  const [showProformaModal, setShowProformaModal] = useState(false);
+  const [proformaPaymentMode, setProformaPaymentMode] = useState(null);
+  const [proformaPrinting, setProformaPrinting] = useState(false);
 
   const cancellationReasons = [
     "Customer requested cancellation",
@@ -1943,6 +1947,197 @@ export default function OrdersPage() {
     }
   };
 
+  // Print a PROFORMA invoice — a preview receipt shown BEFORE pushing to PRA.
+  // It does NOT submit to PRA, consumes no USIN, and has no fiscal invoice
+  // number. It only estimates the PRA tax (using the same rate logic as the
+  // PRA handler) and adds it as an extra line to the receipt total. The
+  // backend (generateReceiptESCPOS) renders the "PROFORMA INVOICE" title and
+  // tax row whenever orderData.proforma is present — identical for USB, COM
+  // and IP printers since they all share that renderer.
+  const handlePrintProforma = async (paymentMode) => {
+    const ord = selectedOrder;
+    if (!ord) return;
+    try {
+      setProformaPrinting(true);
+
+      if (!user?.id) { setProformaPrinting(false); return; }
+
+      // Always fetch fresh items so the receipt body matches what was filed.
+      let printItems = [];
+      if (ord.id && cacheManager.checkOnlineStatus()) {
+        const { data } = await supabase.from("order_items").select("*").eq("order_id", ord.id).order("created_at");
+        printItems = data || [];
+      }
+      if (!printItems.length) {
+        printItems = ord.order_items || ord.items || [];
+        if (!printItems.length && ord.id) {
+          const cachedOrders = cacheManager.getAllOrders?.() || [];
+          const cached = cachedOrders.find(o => o.id === ord.id);
+          printItems = cached?.order_items || cached?.items || [];
+        }
+      }
+
+      // Get the PRA amounts from the SAME handler that pra:submit uses, so the
+      // proforma previews exactly what PRA will be charged (service charge is
+      // folded into the taxable value per the general rule). Fall back to an
+      // identical local calculation if the preview bridge is unavailable.
+      let taxRate, saleValue, taxCharged, billAmount;
+      const preview = window.electronAPI?.praPreview
+        ? await window.electronAPI.praPreview({ order_id: ord.id, user_id: user.id, payment_mode: paymentMode }).catch(() => null)
+        : null;
+
+      if (preview?.success) {
+        taxRate = preview.tax_rate;
+        saleValue = preview.total_sale_value;   // items + service charge
+        taxCharged = preview.total_tax_charged;
+        billAmount = preview.total_bill_amount;
+      } else {
+        // Local fallback — mirror buildPraItemsAndTotals: per-item sale value,
+        // service charge distributed proportionally, tax on the augmented value.
+        taxRate = paymentMode === 2
+          ? parseFloat(praSettings?.card_tax_rate || 5)
+          : parseFloat(praSettings?.cash_tax_rate || 16);
+        const round2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
+        const bases = printItems.map(it => {
+          const lineTotal = parseFloat(it.total_price ?? it.totalPrice ?? 0);
+          const itemDisc = parseFloat(it.item_discount_amount ?? it.itemDiscountAmount ?? 0);
+          return Math.max(0, round2(lineTotal - itemDisc));
+        });
+        const baseSubtotal = round2(bases.reduce((s, v) => s + v, 0));
+        const svc = parseFloat(ord.service_charge_amount || 0);
+        const shares = bases.map(b => (baseSubtotal > 0 ? round2(svc * b / baseSubtotal) : 0));
+        if (svc > 0 && shares.length > 0) {
+          const allocated = round2(shares.reduce((s, v) => s + v, 0));
+          shares[shares.length - 1] = round2(shares[shares.length - 1] + (svc - allocated));
+        }
+        saleValue = 0;
+        taxCharged = 0;
+        bases.forEach((b, i) => {
+          const sv = round2(b + shares[i]);
+          saleValue += sv;
+          taxCharged += round2(sv * taxRate / 100);
+        });
+        saleValue = round2(saleValue);
+        taxCharged = round2(taxCharged);
+        billAmount = round2(saleValue + taxCharged);
+      }
+
+      printerManager.setUserId(user.id);
+      const printer = await printerManager.getPrinterForPrinting();
+      if (!printer) { setProformaPrinting(false); return; }
+
+      const orderData = {
+        orderNumber: ord.order_number,
+        dailySerial: ord.daily_serial || null,
+        orderType: ord.order_type,
+        customer: ord.customers,
+        deliveryAddress: ord.delivery_address || ord.customers?.addressline || ord.customers?.address,
+        orderInstructions: ord.order_instructions,
+        specialNotes: ord.order_instructions,
+        total: ord.total_amount,
+        subtotal: ord.subtotal,
+        deliveryCharges: ord.delivery_charges || 0,
+        discountAmount: ord.discount_amount || 0,
+        loyaltyDiscountAmount: 0,
+        loyaltyPointsRedeemed: 0,
+        discountType: "amount",
+        serviceChargeAmount: parseFloat(ord.service_charge_amount || 0),
+        serviceChargeType: parseFloat(ord.service_charge_percentage || 0) > 0 ? 'percentage' : 'fixed',
+        serviceChargeValue: parseFloat(ord.service_charge_percentage || 0),
+        tableName: ord.tables?.table_name || (ord.tables?.table_number ? `Table ${ord.tables.table_number}` : '') || '',
+        cart: printItems.map((item) => {
+          if (item.is_deal) {
+            let dealProducts = [];
+            try {
+              if (item.deal_products) {
+                dealProducts = typeof item.deal_products === 'string'
+                  ? JSON.parse(item.deal_products)
+                  : item.deal_products;
+              }
+            } catch (e) {
+              console.error('❌ Failed to parse deal_products:', e);
+            }
+            return {
+              isDeal: true,
+              dealId: item.deal_id,
+              dealName: item.product_name,
+              dealProducts: dealProducts,
+              quantity: item.quantity,
+              totalPrice: item.total_price,
+              finalPrice: item.final_price,
+              itemDiscountType: item.item_discount_type || null,
+              itemDiscountAmount: parseFloat(item.item_discount_amount) || 0,
+              itemInstructions: item.item_instructions || null,
+            };
+          }
+          return {
+            isDeal: false,
+            productName: item.product_name,
+            variantName: item.variant_name,
+            quantity: item.quantity,
+            totalPrice: item.total_price,
+            finalPrice: item.final_price,
+            itemDiscountType: item.item_discount_type || null,
+            itemDiscountAmount: parseFloat(item.item_discount_amount) || 0,
+            itemInstructions: item.item_instructions || null,
+          };
+        }),
+        paymentMethod: ord.payment_method || "Cash",
+        order_taker_name: ord.order_takers?.name ||
+          (ord.order_taker_id
+            ? (cacheManager.getOrderTakers().find(t => t.id === ord.order_taker_id)?.name || null)
+            : null),
+        // Proforma block — drives the title + tax row in generateReceiptESCPOS.
+        proforma: {
+          tax_rate: taxRate,
+          sale_value: saleValue,
+          tax_charged: taxCharged,
+          bill_amount: billAmount,
+          payment_mode: paymentMode,
+        },
+      };
+
+      const userProfileRaw = JSON.parse(localStorage.getItem("user_profile") || localStorage.getItem("user") || "{}");
+      const userRaw = JSON.parse(localStorage.getItem("user") || "{}");
+      const localLogo = localStorage.getItem("store_logo_local");
+      const localQr = localStorage.getItem("qr_code_local");
+      const resolveBool = (key, def = true) => {
+        const v = userProfileRaw?.[key] !== undefined ? userProfileRaw[key] : userRaw?.[key];
+        if (v === false || v === 'false') return false;
+        if (v === true || v === 'true') return true;
+        return def;
+      };
+
+      const userProfile = {
+        store_name: userProfileRaw?.store_name || userRaw?.store_name || '',
+        store_address: userProfileRaw?.store_address || userRaw?.store_address || '',
+        phone: userProfileRaw?.phone || userRaw?.phone || '',
+        store_logo: localLogo || userProfileRaw?.store_logo || null,
+        qr_code: localQr || userProfileRaw?.qr_code || null,
+        hashtag1: userProfileRaw?.hashtag1 || '',
+        hashtag2: userProfileRaw?.hashtag2 || '',
+        show_footer_section: resolveBool('show_footer_section'),
+        show_logo_on_receipt: resolveBool('show_logo_on_receipt'),
+        show_business_name_on_receipt: resolveBool('show_business_name_on_receipt'),
+        show_powered_by_airoxlab: resolveBool('show_powered_by_airoxlab'),
+        phone_secondary: userProfileRaw?.phone_secondary || '',
+        receipt_review_message: userProfileRaw?.receipt_review_message || '',
+        receipt_footer_message: userProfileRaw?.receipt_footer_message || '',
+        cashier_name: ord.cashier_id ? ord.cashiers?.name : null,
+      };
+
+      await printerManager.printReceipt(orderData, userProfile, printer);
+      setShowProformaModal(false);
+      setProformaPaymentMode(null);
+      showSuccess('Proforma Printed', `Order #${ord.order_number}`);
+    } catch (err) {
+      console.error('[Proforma Print]', err);
+      alert('Proforma print error: ' + err.message);
+    } finally {
+      setProformaPrinting(false);
+    }
+  };
+
   const handlePrintReceipt = async (printOrderOverride = null) => {
     if (!selectedOrder && !printOrderOverride) return;
 
@@ -2967,6 +3162,21 @@ export default function OrdersPage() {
                 </div>
 
                 <div className="flex items-center space-x-2">
+                  {/* Proforma Invoice Button — preview before pushing to PRA.
+                      Shown when PRA is on and the order has not been filed yet. */}
+                  {praSettings?.is_enabled && !selectedOrder.pra_invoice_number && (
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => { setShowProformaModal(true); setProformaPaymentMode(null); }}
+                      disabled={proformaPrinting}
+                      className="flex items-center space-x-1.5 px-3 py-2 bg-amber-500 hover:bg-amber-600 disabled:bg-gray-400 text-white rounded-lg transition-all font-medium text-sm"
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      <span>{proformaPrinting ? "Printing..." : "Proforma"}</span>
+                    </motion.button>
+                  )}
+
                   {/* Print PRA Receipt Button — only when PRA toggle is on and order has been filed */}
                   {praSettings?.is_enabled && selectedOrder.pra_invoice_number && (
                     <motion.button
@@ -3229,6 +3439,19 @@ export default function OrdersPage() {
                               <span>Re-Open Order</span>
                             </button>
                           )}
+                          {/* Proforma Invoice — preview print before pushing to PRA */}
+                          {praSettings?.is_enabled &&
+                            !selectedOrder.pra_invoice_number && (
+                              <button
+                                onClick={() => { setShowProformaModal(true); setProformaPaymentMode(null); setShowActionMenu(null); }}
+                                className={`w-full px-4 py-2 text-left hover:${
+                                  isDark ? "bg-gray-700" : "bg-gray-50"
+                                } flex items-center space-x-3 text-sm text-amber-600 transition-colors`}
+                              >
+                                <FileText className="w-4 h-4" />
+                                <span>Proforma Invoice</span>
+                              </button>
+                            )}
                           {/* Push to PRA — only when PRA is enabled and order is Completed and not yet filed */}
                           {praSettings?.is_enabled &&
                             selectedOrder.order_status === 'Completed' &&
@@ -4924,6 +5147,97 @@ export default function OrdersPage() {
                 <>
                   <Send className="w-4 h-4" />
                   <span>Submit to PRA</span>
+                </>
+              )}
+            </motion.button>
+          </div>
+        </div>
+      )}
+
+      {/* Proforma Invoice Payment Mode Selection Modal */}
+      {showProformaModal && selectedOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/50"
+            onClick={() => { if (!proformaPrinting) { setShowProformaModal(false); setProformaPaymentMode(null); } }}
+          />
+          <div className={`relative w-full max-w-sm rounded-2xl shadow-2xl p-6 ${isDark ? "bg-gray-800 border border-gray-700" : "bg-white border border-gray-200"}`}>
+            <div className="flex items-center justify-between mb-5">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center">
+                  <FileText className="w-5 h-5 text-amber-600" />
+                </div>
+                <div>
+                  <h3 className={`font-bold text-lg ${isDark ? "text-white" : "text-gray-900"}`}>Proforma Invoice</h3>
+                  <p className={`text-xs ${isDark ? "text-gray-400" : "text-gray-500"}`}>Order #{selectedOrder.order_number}</p>
+                </div>
+              </div>
+              {!proformaPrinting && (
+                <button
+                  onClick={() => { setShowProformaModal(false); setProformaPaymentMode(null); }}
+                  className={`p-1 rounded-lg ${isDark ? "hover:bg-gray-700 text-gray-400" : "hover:bg-gray-100 text-gray-500"}`}
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              )}
+            </div>
+
+            <p className={`text-sm mb-5 ${isDark ? "text-gray-300" : "text-gray-600"}`}>
+              Select the payment method to preview the receipt with the estimated PRA tax. This is a preview only — it does not file the invoice with PRA.
+            </p>
+
+            <div className="space-y-3 mb-6">
+              <button
+                onClick={() => setProformaPaymentMode(1)}
+                disabled={proformaPrinting}
+                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl border-2 transition-all ${
+                  proformaPaymentMode === 1
+                    ? isDark ? "border-amber-500 bg-amber-900/30" : "border-amber-500 bg-amber-50"
+                    : isDark ? "border-gray-600 hover:border-gray-500 bg-gray-700/30" : "border-gray-200 hover:border-gray-300"
+                }`}
+              >
+                <DollarSign className={`w-5 h-5 ${proformaPaymentMode === 1 ? "text-amber-400" : isDark ? "text-gray-400" : "text-gray-500"}`} />
+                <div className="text-left flex-1">
+                  <p className={`font-medium text-sm ${isDark ? "text-white" : "text-gray-900"}`}>Cash</p>
+                  <p className={`text-xs ${isDark ? "text-gray-400" : "text-gray-500"}`}>Tax rate: {praSettings?.cash_tax_rate || 16}%</p>
+                </div>
+                {proformaPaymentMode === 1 && <CheckCircle className="w-4 h-4 text-amber-600" />}
+              </button>
+
+              <button
+                onClick={() => setProformaPaymentMode(2)}
+                disabled={proformaPrinting}
+                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl border-2 transition-all ${
+                  proformaPaymentMode === 2
+                    ? isDark ? "border-amber-500 bg-amber-900/30" : "border-amber-500 bg-amber-50"
+                    : isDark ? "border-gray-600 hover:border-gray-500 bg-gray-700/30" : "border-gray-200 hover:border-gray-300"
+                }`}
+              >
+                <CreditCard className={`w-5 h-5 ${proformaPaymentMode === 2 ? "text-amber-400" : isDark ? "text-gray-400" : "text-gray-500"}`} />
+                <div className="text-left flex-1">
+                  <p className={`font-medium text-sm ${isDark ? "text-white" : "text-gray-900"}`}>Card</p>
+                  <p className={`text-xs ${isDark ? "text-gray-400" : "text-gray-500"}`}>Tax rate: {praSettings?.card_tax_rate || 5}%</p>
+                </div>
+                {proformaPaymentMode === 2 && <CheckCircle className="w-4 h-4 text-amber-600" />}
+              </button>
+            </div>
+
+            <motion.button
+              whileHover={{ scale: proformaPaymentMode && !proformaPrinting ? 1.02 : 1 }}
+              whileTap={{ scale: proformaPaymentMode && !proformaPrinting ? 0.98 : 1 }}
+              onClick={() => proformaPaymentMode && !proformaPrinting && handlePrintProforma(proformaPaymentMode)}
+              disabled={!proformaPaymentMode || proformaPrinting}
+              className="w-full flex items-center justify-center space-x-2 px-4 py-3 bg-amber-500 hover:bg-amber-600 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all"
+            >
+              {proformaPrinting ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>Printing...</span>
+                </>
+              ) : (
+                <>
+                  <Printer className="w-4 h-4" />
+                  <span>Print Proforma</span>
                 </>
               )}
             </motion.button>
