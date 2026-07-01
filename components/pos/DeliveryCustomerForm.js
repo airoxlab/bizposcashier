@@ -7,6 +7,7 @@ import { cacheManager } from '../../lib/cacheManager'
 import { authManager } from '../../lib/authManager'
 import { notify } from '../ui/NotificationSystem'
 import { supabase } from '../../lib/supabase'
+import AssignRiderButton from '../delivery/AssignRiderButton'
 
 // Customer account-balance pill (same convention as the Ledger): > 0 = customer
 // owes (Due, red); < 0 = credit available (green); 0 = nothing shown.
@@ -935,27 +936,29 @@ export default function DeliveryCustomerForm({
               Delivery Boy
               <span className={`ml-2 text-xs font-normal ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>(Optional)</span>
             </label>
-            <select
-              ref={deliveryBoyRef}
-              value={formData.deliveryBoyId}
-              onChange={(e) => handleInputChange('deliveryBoyId', e.target.value)}
-              onKeyDown={handleKeyDown}
-              disabled={loadingDeliveryBoys}
-              className={`w-full px-4 py-3 rounded-lg border-2 transition-all ${
-                isDark
-                  ? 'bg-gray-800 border-gray-700 text-white focus:border-blue-500'
-                  : 'bg-gray-50 border-gray-200 text-gray-900 focus:border-blue-500'
-              } focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed`}
-            >
-              <option value="">
-                {loadingDeliveryBoys ? 'Loading delivery boys...' : 'Select Delivery Boy (Optional)'}
-              </option>
-              {deliveryBoys.map((boy) => (
-                <option key={boy.id} value={boy.id}>
-                  {boy.name} {boy.phone ? `- ${boy.phone}` : ''}
-                </option>
-              ))}
-            </select>
+            <div className="flex items-center gap-2">
+              <div className="flex-1 min-w-0">
+                <AssignRiderButton
+                  orderType="delivery"
+                  persist={false}
+                  value={formData.deliveryBoyId || null}
+                  riders={deliveryBoys}
+                  fullWidth
+                  onAssigned={(riderId) => handleInputChange('deliveryBoyId', riderId)}
+                />
+              </div>
+              {formData.deliveryBoyId && (
+                <button
+                  type="button"
+                  onClick={() => handleInputChange('deliveryBoyId', '')}
+                  className={`text-xs px-2 py-1.5 rounded-lg border flex-shrink-0 ${
+                    isDark ? 'border-gray-600 text-gray-300' : 'border-gray-300 text-gray-600'
+                  } opacity-70 hover:opacity-100`}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
             {deliveryBoys.length === 0 && !loadingDeliveryBoys && (
               <p className={`text-xs mt-1 ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>
                 No active delivery boys found

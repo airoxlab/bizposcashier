@@ -1,6 +1,6 @@
 const net = require('net');
 const { ensureAssets } = require('../handlers/onDemandAssetDownload');
-const { generateReceiptESCPOS } = require('./usbPrinter');
+const { generateReceiptESCPOS, generateCashReportESCPOS } = require('./usbPrinter');
 
 /**
  * IP Receipt Printer
@@ -168,6 +168,39 @@ function registerReceiptPrinter(ipcMain) {
       return { success: true };
     } catch (error) {
       console.error('Error printing receipt:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Print cash report (Z-report) to an IP thermal printer. Mirrors
+  // printer-print-receipt but generates the report ESC/POS buffer.
+  ipcMain.handle('printer-print-report', async (event, { reportData, userProfile, printerConfig }) => {
+    try {
+      const printerType = printerConfig.printer_type || 'ip';
+      if (printerType === 'usb') {
+        return { success: false, error: 'Use printer-print-usb-report for USB printers' };
+      }
+      const ip = printerConfig.ip_address || printerConfig.ip;
+      const port = parseInt(printerConfig.port || '9100');
+
+      const assets = await ensureAssets(userProfile?.store_logo, userProfile?.qr_code);
+      const buffer = await generateCashReportESCPOS(reportData, userProfile, assets);
+
+      let lastErr;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          await sendRawToIPPrinter(ip, port, buffer);
+          console.log(`✅ [IP Cash Report] sent${attempt > 1 ? ` (attempt ${attempt})` : ''}`);
+          return { success: true };
+        } catch (err) {
+          lastErr = err;
+          console.warn(`⚠️  [IP Cash Report] attempt ${attempt}/2 failed: ${err.message}`);
+          if (attempt < 2) await new Promise(r => setTimeout(r, 1000));
+        }
+      }
+      throw lastErr;
+    } catch (error) {
+      console.error('Error printing cash report:', error);
       return { success: false, error: error.message };
     }
   });

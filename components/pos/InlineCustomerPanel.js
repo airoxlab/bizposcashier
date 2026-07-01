@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { User, X, ChevronDown, ChevronUp, Clock, MapPin, Truck, DollarSign, FileText, Search, Plus, Check } from 'lucide-react'
 import { cacheManager } from '../../lib/cacheManager'
 import { supabase } from '../../lib/supabase'
 import { notify } from '../ui/NotificationSystem'
+import AssignRiderButton from '../delivery/AssignRiderButton'
 
 export default function InlineCustomerPanel({
   orderType = 'walkin',
@@ -345,7 +346,23 @@ export default function InlineCustomerPanel({
 
   const showCreateOption = searchQuery.trim().length >= 2 && suggestions.length === 0 && !showNewCustForm
 
-  const inputCls = `w-full text-xs px-2 py-1.5 rounded-lg border outline-none ${isDark ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-500 focus:border-purple-500' : 'bg-white border-gray-300 text-gray-800 placeholder-gray-400 focus:border-purple-400'}`
+  // Default (pre-typing) list: show the most recent customers so the dropdown is
+  // never empty — users were confused thinking there were no customers. Sorted by
+  // created_at (newest first) with updated_at as a fallback.
+  const isDefaultList = searchQuery.trim().length === 0
+  const recentCustomers = useMemo(() => {
+    return [...allCustomers]
+      .filter(c => c != null)
+      .sort((a, b) => {
+        const ta = new Date(a.created_at || a.updated_at || 0).getTime()
+        const tb = new Date(b.created_at || b.updated_at || 0).getTime()
+        return tb - ta
+      })
+      .slice(0, 4)
+  }, [allCustomers])
+  const displayedCustomers = isDefaultList ? recentCustomers : suggestions
+
+  const inputCls = `w-full text-xs px-2 py-1.5 rounded-lg border outline-none ${isDark ? 'bg-gray-700 border-gray-600 text-white placeholder-gray-500/60 focus:border-purple-500' : 'bg-white border-gray-300 text-gray-800 placeholder-gray-400/70 focus:border-purple-400'}`
   const labelCls = `block text-xs font-medium mb-1 ${isDark ? 'text-gray-300' : 'text-gray-600'}`
   const quickBtnCls = (active) => `flex-1 py-1 text-xs rounded border transition-all ${active ? 'bg-purple-600 text-white border-purple-600' : isDark ? 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-100'}`
 
@@ -387,46 +404,87 @@ export default function InlineCustomerPanel({
         </button>
       </div>
 
-      {/* Results — in-flow (not absolute) so it's never clipped by parent overflow:hidden */}
-      {(suggestions.length > 0 || showCreateOption || showNewCustForm) && (
-        <div className={`mt-1 rounded-lg border overflow-hidden ${isDark ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-200'}`}>
-          {suggestions.map(c => (
-            <button
-              key={c.id}
-              onMouseDown={() => selectCustomer(c)}
-              className={`w-full text-left px-3 py-2 flex items-center gap-2 transition-colors ${isDark ? 'hover:bg-gray-700' : 'hover:bg-gray-50'}`}
-            >
-              <User className={`w-3 h-3 flex-shrink-0 ${isDark ? 'text-gray-400' : 'text-gray-500'}`} />
-              <div className="min-w-0 flex-1">
-                <div className={`text-xs font-medium truncate ${isDark ? 'text-white' : 'text-gray-800'}`}>{c.full_name}</div>
-                <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>{c.phone}</div>
-              </div>
-              {balanceBadge(c.account_balance)}
-            </button>
-          ))}
+      {/* Results — in-flow (not absolute) so it's never clipped by parent overflow:hidden.
+          Always rendered while searching: shows recent customers by default (so the
+          dropdown is never empty/confusing) and an always-visible "Add new customer"
+          action at the bottom. Old search + save-as-new behavior is preserved. */}
+      <div className={`mt-1 rounded-lg border overflow-hidden ${isDark ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-200'}`}>
+        {!showNewCustForm && (
+          <>
+            {/* Section label */}
+            <div className={`px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>
+              {isDefaultList ? 'Recent Customers' : 'Matches'}
+            </div>
 
-          {/* Create new customer option */}
-          {showCreateOption && (
-            <button
-              onMouseDown={() => {
-                // Pre-fill based on input type
-                const q = searchQuery.trim()
-                const looksLikePhone = /^\d+$/.test(q)
-                setNewCustName(looksLikePhone ? '' : q)
-                setNewCustPhone(looksLikePhone ? q : '')
-                setNewCustEmail('')
-                setNewCustAddress('')
-                setNewCustAddressLabel('Home')
-                setShowNewCustForm(true)
-              }}
-              className={`w-full text-left px-3 py-2 flex items-center gap-2 transition-colors border-t ${
-                isDark ? 'hover:bg-gray-700 border-gray-700 text-purple-400' : 'hover:bg-purple-50 border-gray-100 text-purple-600'
-              }`}
-            >
-              <Plus className="w-3 h-3 flex-shrink-0" />
-              <span className="text-xs font-medium">Save &quot;{searchQuery.trim()}&quot; as new customer</span>
-            </button>
-          )}
+            {/* Customer rows (recent list by default, search matches while typing) */}
+            {displayedCustomers.map(c => (
+              <button
+                key={c.id}
+                onMouseDown={() => selectCustomer(c)}
+                className={`w-full text-left px-3 py-2 flex items-center gap-2 transition-colors ${isDark ? 'hover:bg-gray-700' : 'hover:bg-gray-50'}`}
+              >
+                <User className={`w-3 h-3 flex-shrink-0 ${isDark ? 'text-gray-400' : 'text-gray-500'}`} />
+                <div className="min-w-0 flex-1">
+                  <div className={`text-xs font-medium truncate ${isDark ? 'text-white' : 'text-gray-800'}`}>{c.full_name}</div>
+                  <div className={`text-xs ${isDark ? 'text-gray-400' : 'text-gray-500'}`}>{c.phone}</div>
+                </div>
+                {balanceBadge(c.account_balance)}
+              </button>
+            ))}
+
+            {/* Empty hints */}
+            {displayedCustomers.length === 0 && isDefaultList && (
+              <div className={`px-3 py-2 text-xs ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>No customers yet — add your first below</div>
+            )}
+            {displayedCustomers.length === 0 && !isDefaultList && !showCreateOption && (
+              <div className={`px-3 py-2 text-xs ${isDark ? 'text-gray-500' : 'text-gray-400'}`}>No matches found</div>
+            )}
+
+            {/* Create-from-search option (old implementation preserved) */}
+            {showCreateOption && (
+              <button
+                onMouseDown={() => {
+                  // Pre-fill based on input type
+                  const q = searchQuery.trim()
+                  const looksLikePhone = /^\d+$/.test(q)
+                  setNewCustName(looksLikePhone ? '' : q)
+                  setNewCustPhone(looksLikePhone ? q : '')
+                  setNewCustEmail('')
+                  setNewCustAddress('')
+                  setNewCustAddressLabel('Home')
+                  setShowNewCustForm(true)
+                }}
+                className={`w-full text-left px-3 py-2 flex items-center gap-2 transition-colors border-t ${
+                  isDark ? 'hover:bg-gray-700 border-gray-700 text-purple-400' : 'hover:bg-purple-50 border-gray-100 text-purple-600'
+                }`}
+              >
+                <Plus className="w-3 h-3 flex-shrink-0" />
+                <span className="text-xs font-medium">Save &quot;{searchQuery.trim()}&quot; as new customer</span>
+              </button>
+            )}
+
+            {/* Always-available "Add new customer" action (blank form).
+                Hidden only when the search-based "Save … as new customer" is already shown. */}
+            {!showCreateOption && (
+              <button
+                onMouseDown={() => {
+                  setNewCustName('')
+                  setNewCustPhone('')
+                  setNewCustEmail('')
+                  setNewCustAddress('')
+                  setNewCustAddressLabel('Home')
+                  setShowNewCustForm(true)
+                }}
+                className={`w-full text-left px-3 py-2 flex items-center gap-2 transition-colors border-t ${
+                  isDark ? 'hover:bg-gray-700 border-gray-700 text-purple-400' : 'hover:bg-purple-50 border-gray-100 text-purple-600'
+                }`}
+              >
+                <Plus className="w-3 h-3 flex-shrink-0" />
+                <span className="text-xs font-medium">Add new customer</span>
+              </button>
+            )}
+          </>
+        )}
 
           {/* Inline new customer form */}
           {showNewCustForm && (
@@ -493,7 +551,6 @@ export default function InlineCustomerPanel({
             </div>
           )}
         </div>
-      )}
     </div>
   )
 
@@ -556,18 +613,28 @@ export default function InlineCustomerPanel({
           </div>
 
           <div>
-            <label className={labelCls}><Truck className="inline w-3 h-3 mr-1" />Delivery Boy <span className="font-normal opacity-60">(Optional)</span></label>
-            <select
-              value={orderData.deliveryBoyId || ''}
-              onChange={e => update('deliveryBoyId', e.target.value)}
-              disabled={loadingDeliveryBoys}
-              className={`${inputCls} disabled:opacity-50`}
-            >
-              <option value="">{loadingDeliveryBoys ? 'Loading...' : 'Select Delivery Boy (Optional)'}</option>
-              {deliveryBoys.map(b => (
-                <option key={b.id} value={b.id}>{b.name}{b.phone ? ` — ${b.phone}` : ''}</option>
-              ))}
-            </select>
+            <label className={labelCls}><Truck className="inline w-3 h-3 mr-1" />Delivery Rider <span className="font-normal opacity-60">(Optional)</span></label>
+            <div className="flex items-center gap-2">
+              <div className="flex-1 min-w-0">
+                <AssignRiderButton
+                  orderType="delivery"
+                  persist={false}
+                  value={orderData.deliveryBoyId || null}
+                  riders={deliveryBoys}
+                  fullWidth
+                  onAssigned={(riderId) => update('deliveryBoyId', riderId)}
+                />
+              </div>
+              {orderData.deliveryBoyId && (
+                <button
+                  type="button"
+                  onClick={() => update('deliveryBoyId', '')}
+                  className="text-xs px-2 py-1.5 rounded-lg border border-gray-300 dark:border-gray-600 opacity-70 hover:opacity-100 flex-shrink-0"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
             {!loadingDeliveryBoys && deliveryBoys.length === 0 && (
               <p className="text-xs mt-1 opacity-50">No active delivery boys found</p>
             )}

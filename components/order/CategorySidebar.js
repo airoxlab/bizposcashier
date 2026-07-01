@@ -146,37 +146,43 @@ export default function CategorySidebar({
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Orders Icon - For walkin, takeaway, and delivery orders */}
+            {/* Orders Icon - For walkin, takeaway, and delivery orders.
+                Color-coded blue + text label so cashiers know what it does at a glance. */}
             {(orderType === 'walkin' || orderType === 'takeaway' || orderType === 'delivery') && onOrdersClick && (
               <motion.button
                 whileHover={{ scale: 1.08 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={onOrdersClick}
-                className={`p-2.5 rounded-lg transition-all relative ${
+                className={`px-2.5 py-2 rounded-lg transition-all relative flex items-center gap-1.5 border ${
                   showOrdersView
-                    ? (isDark ? 'bg-blue-600/30 border border-blue-500' : 'bg-blue-100 border border-blue-400')
-                    : (isDark ? 'bg-gray-700 hover:bg-gray-600' : 'bg-gray-100 hover:bg-gray-200')
+                    ? (isDark ? 'bg-blue-600/30 border-blue-500' : 'bg-blue-100 border-blue-400')
+                    : (isDark ? 'bg-blue-900/20 border-blue-800/40 hover:bg-blue-900/40' : 'bg-blue-50 border-blue-200 hover:bg-blue-100')
                 }`}
                 title="View pending orders"
               >
-                <ClipboardList className={`w-5 h-5 ${showOrdersView ? (isDark ? 'text-blue-400' : 'text-blue-600') : (isDark ? 'text-gray-300' : 'text-gray-600')}`} />
+                <ClipboardList className={`w-5 h-5 ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
+                <span className={`text-xs font-semibold ${isDark ? 'text-blue-300' : 'text-blue-700'}`}>Orders</span>
               </motion.button>
             )}
 
-            {/* Table Selection Icon - Only for walkin orders */}
+            {/* Table Selection Icon - Only for walkin orders.
+                Color-coded green + text label (shows the picked table name when set). */}
             {orderType === 'walkin' && onTableClick && (
               <motion.button
                 whileHover={{ scale: 1.08 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={onTableClick}
-                className={`p-2.5 rounded-lg transition-all relative ${
+                className={`px-2.5 py-2 rounded-lg transition-all relative flex items-center gap-1.5 border ${
                   selectedTable
-                    ? (isDark ? 'bg-green-600/30 border border-green-500' : 'bg-green-100 border border-green-400')
-                    : (isDark ? 'bg-gray-700 hover:bg-gray-600' : 'bg-gray-100 hover:bg-gray-200')
+                    ? (isDark ? 'bg-green-600/30 border-green-500' : 'bg-green-100 border-green-400')
+                    : (isDark ? 'bg-green-900/20 border-green-800/40 hover:bg-green-900/40' : 'bg-green-50 border-green-200 hover:bg-green-100')
                 }`}
                 title={selectedTable ? `Table: ${selectedTable.table_name || selectedTable.table_number}` : 'Select Table'}
               >
-                <Table2 className={`w-5 h-5 ${selectedTable ? (isDark ? 'text-green-400' : 'text-green-600') : (isDark ? 'text-gray-300' : 'text-gray-600')}`} />
+                <Table2 className={`w-5 h-5 ${isDark ? 'text-green-400' : 'text-green-600'}`} />
+                <span className={`text-xs font-semibold max-w-[80px] truncate ${isDark ? 'text-green-300' : 'text-green-700'}`}>
+                  {selectedTable ? (selectedTable.table_name || `Table ${selectedTable.table_number}`) : 'Table'}
+                </span>
                 {selectedTable && (
                   <div className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-green-500 rounded-full border-2 border-white dark:border-gray-800 shadow-sm"></div>
                 )}

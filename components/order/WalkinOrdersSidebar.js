@@ -11,6 +11,7 @@ import { printerManager } from '../../lib/printerManager'
 import { getOrderChanges, getOrderItemsWithChanges, getCurrentUpdateVersion } from '../../lib/utils/orderChangesTracker'
 import dailySerialManager from '../../lib/utils/dailySerialManager'
 import { getBusinessDate } from '../../lib/utils/businessDayUtils'
+import AssignRiderButton from '../delivery/AssignRiderButton'
 
 // ── Static constants (outside component so they are never re-created) ──────────
 // Special methods that always appear regardless of payment_accounts setup
@@ -1118,20 +1119,36 @@ export default function WalkinOrdersSidebar({
                           </span>
                         </div>
                       )}
-                      <div className={`flex items-center gap-1 mt-1.5 pt-1.5 border-t ${isDark ? 'border-gray-600/60' : 'border-gray-200'}`}>
-                        {order.delivery_boys ? (
-                          <>
-                            <Truck className={`w-3 h-3 flex-shrink-0 ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
-                            <span className={`text-xs font-medium truncate ${isDark ? 'text-blue-400' : 'text-blue-600'}`}>
-                              {order.delivery_boys.name}
-                            </span>
-                          </>
-                        ) : (
-                          <>
-                            <AlertCircle className={`w-3 h-3 flex-shrink-0 ${isDark ? 'text-orange-400' : 'text-orange-600'}`} />
-                            <span className={`text-xs ${isDark ? 'text-orange-400' : 'text-orange-600'}`}>No rider</span>
-                          </>
-                        )}
+                      <div className={`flex items-center justify-between gap-1.5 mt-1.5 pt-1.5 border-t ${isDark ? 'border-gray-600/60' : 'border-gray-200'}`}>
+                        <div className="flex items-center gap-1 min-w-0">
+                          {order.delivery_boys ? (
+                            <>
+                              <Truck className={`w-3 h-3 flex-shrink-0 ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
+                              <span className={`text-xs font-medium truncate ${isDark ? 'text-blue-400' : 'text-blue-600'}`}>
+                                {order.delivery_boys.name}
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <AlertCircle className={`w-3 h-3 flex-shrink-0 ${isDark ? 'text-orange-400' : 'text-orange-600'}`} />
+                              <span className={`text-xs ${isDark ? 'text-orange-400' : 'text-orange-600'}`}>No rider</span>
+                            </>
+                          )}
+                        </div>
+                        {/* Wrapper stops modal/button clicks from bubbling to the card's select handler */}
+                        <div className="flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+                          <AssignRiderButton
+                            order={order}
+                            size="sm"
+                            showName={false}
+                            label={order.delivery_boys ? 'Change' : 'Assign'}
+                            onAssigned={(riderId, riderObj) => {
+                              window.dispatchEvent(new CustomEvent('orderLocallyUpdated', {
+                                detail: { orderId: order.id, patch: { delivery_boy_id: riderId, delivery_boys: riderObj } }
+                              }))
+                            }}
+                          />
+                        </div>
                       </div>
                     </>
                   )}

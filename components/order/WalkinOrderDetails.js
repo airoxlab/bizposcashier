@@ -35,6 +35,7 @@ import { printerManager } from '../../lib/printerManager'
 import InlinePaymentSection from '../pos/InlinePaymentSection'
 import ConvertToDeliveryModal from '../delivery/ConvertToDeliveryModal'
 import ConvertToTakeawayModal from '../delivery/ConvertToTakeawayModal'
+import AssignRiderButton from '../delivery/AssignRiderButton'
 import { cacheManager } from '../../lib/cacheManager'
 import { useRouter } from 'next/navigation'
 import { getOrderChanges, getOrderItemsWithChanges, getCurrentUpdateVersion, clearOrderChangeTracking } from '../../lib/utils/orderChangesTracker'
@@ -74,6 +75,10 @@ export default function WalkinOrderDetails({
   const [isPrintingToken, setIsPrintingToken] = useState(false)
   const [openPrintDropdown, setOpenPrintDropdown] = useState(null) // 'receipt' | 'token'
   const [orderHasChanges, setOrderHasChanges] = useState(false)
+  // Optimistic override for the assigned rider so the panel updates instantly
+  // after assigning without waiting for the parent to re-fetch the joined order.
+  // undefined = fall back to the order prop; object/null = overridden value.
+  const [riderOverride, setRiderOverride] = useState(undefined)
   const router = useRouter()
   const permissions = usePermissions()
   const contentRef = useRef(null)
@@ -258,6 +263,7 @@ export default function WalkinOrderDetails({
       fetchOrderDetails()
       setPaymentCompleted(false)
       setOrderHasChanges(false)
+      setRiderOverride(undefined)
       getOrderChanges(order.id).then(({ hasChanges }) => setOrderHasChanges(hasChanges)).catch(() => {})
     }
   }, [order?.id])
@@ -1367,6 +1373,42 @@ export default function WalkinOrderDetails({
                 )}
               </div>
             </div>
+
+            {/* Delivery Rider — delivery orders only */}
+            {order.order_type === 'delivery' && (() => {
+              const activeRider = riderOverride !== undefined ? riderOverride : (order.delivery_boys || null)
+              const activeRiderId = riderOverride !== undefined ? (riderOverride?.id || null) : (order.delivery_boy_id || null)
+              return (
+                <div className={`${classes.card} ${classes.shadow} shadow-sm ${classes.border} border rounded-lg p-2.5`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-1.5">
+                      <Truck className={`w-3 h-3 ${isDark ? 'text-cyan-400' : 'text-cyan-600'}`} />
+                      <h3 className={`font-bold ${isDark ? 'text-cyan-400' : 'text-cyan-600'} text-[10px]`}>Delivery Rider</h3>
+                    </div>
+                    <AssignRiderButton
+                      order={order}
+                      value={activeRiderId}
+                      size="sm"
+                      showName={false}
+                      onAssigned={(riderId, riderObj) => setRiderOverride(riderObj)}
+                    />
+                  </div>
+                  {activeRider ? (
+                    <div className="space-y-1">
+                      <p className={`font-semibold ${classes.textPrimary} text-xs`}>{activeRider.name}</p>
+                      {activeRider.phone && (
+                        <div className="flex items-center gap-1.5">
+                          <Phone className={`w-2.5 h-2.5 ${classes.textSecondary}`} />
+                          <span className={`text-[10px] ${classes.textSecondary}`}>{activeRider.phone}</span>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className={`text-[10px] ${classes.textSecondary}`}>No rider assigned yet</p>
+                  )}
+                </div>
+              )
+            })()}
 
             {/* Payment Summary */}
             <div className={`${classes.card} ${classes.shadow} shadow-sm ${classes.border} border rounded-lg p-2.5 ${isDark ? 'bg-green-900/10' : 'bg-green-50'}`}>

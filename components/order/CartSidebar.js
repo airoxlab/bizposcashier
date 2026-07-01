@@ -283,7 +283,7 @@ export default function CartSidebar({
                 </button>
               </div>
             ) : (
-              /* No customer: Add Customer dashed button */
+              /* No customer: "Customer" dashed button (opens the search/add panel) */
               <button
                 onClick={() => { setShowInstructionPanel(false); setShowOrderTakerDropdown(false); setCustMode(m => m === 'searching' ? 'idle' : 'searching') }}
                 className={`flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg text-xs font-medium border transition-all ${
@@ -293,7 +293,7 @@ export default function CartSidebar({
                 }`}
               >
                 <User className="w-3 h-3" />
-                <span>{custMode === 'searching' ? 'Cancel' : selectedTable ? 'Customer' : 'Add Customer'}</span>
+                <span>{custMode === 'searching' ? 'Cancel' : 'Customer'}</span>
               </button>
             )
           )}
@@ -389,8 +389,13 @@ export default function CartSidebar({
                   </span>
                 </>
               ) : (
-                /* Icon-only when no taker selected — saves space for customer name */
-                <UserCheck className="w-3.5 h-3.5 flex-shrink-0" title={requireOrderTaker ? 'Select order taker (required)' : 'Select order taker'} />
+                /* No taker selected: icon + label so cashiers know what it is.
+                   Label hides when a customer is selected so the customer name keeps
+                   the space (same pattern as the Note button above). */
+                <>
+                  <UserCheck className="w-3.5 h-3.5 flex-shrink-0" title={requireOrderTaker ? 'Select order taker (required)' : 'Select order taker'} />
+                  {!(inlineCustomer && customer) && <span>{requireOrderTaker ? 'Order Taker *' : 'Order Taker'}</span>}
+                </>
               )}
             </motion.button>
           )}

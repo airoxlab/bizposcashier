@@ -62,6 +62,7 @@ import InlinePaymentSection from "../../components/pos/InlinePaymentSection";
 import SplitPaymentModal from "../../components/pos/SplitPaymentModal";
 import ConvertToDeliveryModal from "../../components/delivery/ConvertToDeliveryModal";
 import ConvertToTakeawayModal from "../../components/delivery/ConvertToTakeawayModal";
+import AssignRiderButton from "../../components/delivery/AssignRiderButton";
 import NotificationSystem, { notify } from "../../components/ui/NotificationSystem";
 import { getOrderItemsWithChanges, getOrderChanges, getCurrentUpdateVersion, clearOrderChangeTracking } from '../../lib/utils/orderChangesTracker';
 import SendBillButton from '../../components/pos/SendBillButton';
@@ -3853,7 +3854,7 @@ export default function OrdersPage() {
                     </div>
                   )}
 
-                  {selectedOrder.order_type === "delivery" && selectedOrder.delivery_boys && (
+                  {selectedOrder.order_type === "delivery" && (
                     <div
                       className={`${
                         isDark
@@ -3861,42 +3862,62 @@ export default function OrdersPage() {
                           : "bg-cyan-50 border-cyan-200"
                       } rounded-xl p-4 border`}
                     >
-                      <h4
-                        className={`font-semibold ${
-                          isDark ? "text-cyan-300" : "text-cyan-900"
-                        } mb-3 flex items-center`}
-                      >
-                        <Truck className="w-5 h-5 mr-2" />
-                        Delivery Boy
-                      </h4>
-                      <div className="space-y-2">
-                        <p
-                          className={`${
-                            isDark ? "text-cyan-200" : "text-cyan-800"
-                          } font-semibold`}
+                      <div className="flex items-center justify-between mb-3">
+                        <h4
+                          className={`font-semibold ${
+                            isDark ? "text-cyan-300" : "text-cyan-900"
+                          } flex items-center`}
                         >
-                          {selectedOrder.delivery_boys.name}
-                        </p>
-                        {selectedOrder.delivery_boys.phone && (
-                          <p
-                            className={`${
-                              isDark ? "text-cyan-300" : "text-cyan-700"
-                            } flex items-center text-sm`}
-                          >
-                            <Phone className="w-4 h-4 mr-2" />
-                            {selectedOrder.delivery_boys.phone}
-                          </p>
-                        )}
-                        {selectedOrder.delivery_boys.vehicle_type && (
-                          <p
-                            className={`${
-                              isDark ? "text-cyan-300" : "text-cyan-700"
-                            } text-sm capitalize`}
-                          >
-                            Vehicle: {selectedOrder.delivery_boys.vehicle_type}
-                          </p>
-                        )}
+                          <Truck className="w-5 h-5 mr-2" />
+                          Delivery Rider
+                        </h4>
+                        <AssignRiderButton
+                          order={selectedOrder}
+                          size="sm"
+                          onAssigned={(riderId, riderObj) => {
+                            setSelectedOrder((prev) =>
+                              prev
+                                ? { ...prev, delivery_boy_id: riderId, delivery_boys: riderObj }
+                                : prev
+                            );
+                            fetchOrders(true);
+                          }}
+                        />
                       </div>
+                      {selectedOrder.delivery_boys ? (
+                        <div className="space-y-2">
+                          <p
+                            className={`${
+                              isDark ? "text-cyan-200" : "text-cyan-800"
+                            } font-semibold`}
+                          >
+                            {selectedOrder.delivery_boys.name}
+                          </p>
+                          {selectedOrder.delivery_boys.phone && (
+                            <p
+                              className={`${
+                                isDark ? "text-cyan-300" : "text-cyan-700"
+                              } flex items-center text-sm`}
+                            >
+                              <Phone className="w-4 h-4 mr-2" />
+                              {selectedOrder.delivery_boys.phone}
+                            </p>
+                          )}
+                          {selectedOrder.delivery_boys.vehicle_type && (
+                            <p
+                              className={`${
+                                isDark ? "text-cyan-300" : "text-cyan-700"
+                              } text-sm capitalize`}
+                            >
+                              Vehicle: {selectedOrder.delivery_boys.vehicle_type}
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <p className={`text-sm ${isDark ? "text-cyan-300/70" : "text-cyan-700"}`}>
+                          No rider assigned yet
+                        </p>
+                      )}
                     </div>
                   )}
 

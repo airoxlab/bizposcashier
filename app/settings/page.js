@@ -6,6 +6,7 @@ import {
   ArrowLeft, Settings, User, Users, Palette, Download,
   Smartphone, Monitor, HardDrive, MessageSquare, CreditCard,
   Zap, Wifi, WifiOff, FlaskConical, Fingerprint, BarChart2, Receipt,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import themeManager from '../../lib/themeManager'
@@ -26,9 +27,11 @@ import { BackupPanel } from './backup/page'
 import { PlanPanel } from './plan/page'
 import { CustomerInsightsPanel } from './customer-insights/page'
 import { PraReceiptPanel } from './pra-receipt/page'
+import { PosSettingsPanel } from './pos-settings/page'
 
 const SIDEBAR_ITEMS = [
   { id: 'personal',          name: 'Personal Profile',   icon: User,          description: 'Manage your account details' },
+  { id: 'pos-settings',      name: 'POS & Orders',        icon: SlidersHorizontal, description: 'Order behavior, printing & charges' },
   { id: 'appearance',        name: 'Appearance',          icon: Palette,       description: 'Customize your interface' },
   { id: 'themes',            name: 'Themes',              icon: Monitor,       description: 'Switch between layout styles' },
   { id: 'customers',         name: 'Customers',           icon: Users,         description: 'Manage customer profiles' },
@@ -44,10 +47,11 @@ const SIDEBAR_ITEMS = [
 ]
 
 // Tabs whose panels make direct supabase reads/writes and will fail when offline.
-const OFFLINE_UNSAFE_TABS = new Set(['personal', 'customers', 'customer-insights', 'whatsapp', 'customer-account', 'pra-receipt'])
+const OFFLINE_UNSAFE_TABS = new Set(['personal', 'pos-settings', 'customers', 'customer-insights', 'whatsapp', 'customer-account', 'pra-receipt'])
 
 const PANEL_TITLES = {
   personal:         { title: 'Personal Profile',      sub: 'Manage your account information and store details' },
+  'pos-settings':   { title: 'POS & Order Settings',  sub: 'Order behavior, auto-print, charges, KDS alerts & drawer — applies to the whole store' },
   appearance:       { title: 'Appearance Settings',   sub: 'Customize your interface theme and appearance' },
   themes:           { title: 'Themes',                sub: 'Choose a layout style for your POS interface' },
   customers:           { title: 'Customers',             sub: 'View and manage all customer profiles' },
@@ -245,6 +249,7 @@ function SettingsContent() {
               ) : (
                 <>
                   {activeTab === 'personal'         && <PersonalPanel key="personal" />}
+                  {activeTab === 'pos-settings'      && <PosSettingsPanel key="pos-settings" />}
                   {activeTab === 'appearance'        && <AppearancePanel key="appearance" />}
                   {activeTab === 'themes'            && <ThemesPanel key="themes" />}
                   {activeTab === 'customers'         && <CustomersPanel key="customers" />}

@@ -1210,6 +1210,130 @@ async function printKitchenTokenToUSB(port, orderData, userProfile) {
   }
 }
 
+// Generate cash-report / shift-close (Z-report) ESC/POS commands.
+// Reuses the same header/logo block and leftRight/drawLine helpers as the
+// customer receipt so it looks consistent, but renders a structured cash-up
+// (per-tender expected/counted/over-short) instead of order line items.
+async function generateCashReportESCPOS(reportData, userProfile, assets) {
+  console.log('🧾 [usbPrinter.js] Generating CASH REPORT');
+  const commands = [];
+  const money = (n) => 'Rs ' + Math.round(Number(n) || 0).toLocaleString('en-PK');
+  const fmtDT = (iso) => {
+    try {
+      return new Date(iso).toLocaleString('en-PK', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true });
+    } catch { return String(iso || ''); }
+  };
+
+  commands.push(CMD.INIT);
+
+  // ── LOGO (same rule + 2-feed spacing as the receipt) ──
+  const showLogoOnReceipt = userProfile?.show_logo_on_receipt !== false;
+  if (showLogoOnReceipt && assets && assets.logo && fs.existsSync(assets.logo)) {
+    try {
+      commands.push(CMD.ALIGN_CENTER);
+      const logoData = await imageToEscPos(assets.logo, 576);
+      if (logoData) { commands.push(logoData); commands.push(CMD.FEED); commands.push(CMD.FEED); }
+    } catch (e) { console.error('[usbPrinter.js] Cash report logo error:', e.message); }
+  }
+
+  // ── STORE NAME (auto-scaled to one line, then a blank line — same as receipt) ──
+  const storeName = (reportData.storeName || userProfile?.store_name || 'POS SYSTEM').toUpperCase();
+  commands.push(CMD.ALIGN_CENTER);
+  commands.push(CMD.BOLD_ON);
+  if (storeName.length <= 21) { commands.push(CMD.DOUBLE_ON); commands.push(text(storeName + '\n')); commands.push(CMD.DOUBLE_OFF); }
+  else if (storeName.length <= 42) { commands.push(CMD.DOUBLE_HEIGHT); commands.push(text(storeName + '\n')); commands.push(CMD.NORMAL); }
+  else commands.push(text(storeName + '\n'));
+  commands.push(CMD.BOLD_OFF);
+  commands.push(CMD.FEED);
+
+  // ── TITLE (centered bold between rules, like the "ORDER RECEIPT" header) ──
+  commands.push(CMD.ALIGN_CENTER);
+  commands.push(drawLine('-'));
+  commands.push(CMD.BOLD_ON);
+  commands.push(CMD.DOUBLE_HEIGHT);
+  commands.push(text((reportData.title || 'CASH REPORT') + '\n'));
+  commands.push(CMD.NORMAL);
+  if (reportData.subtitle) commands.push(text(reportData.subtitle + '\n'));
+  commands.push(CMD.BOLD_OFF);
+  commands.push(drawLine('-'));
+
+  // ── META (key/value rows, like the receipt order-details block) ──
+  commands.push(leftRight('Cashier:', String(reportData.cashierName || '')));
+  commands.push(leftRight('Shift start:', fmtDT(reportData.shiftStart)));
+  commands.push(leftRight('Printed:', fmtDT(reportData.printedAt || reportData.shiftEnd)));
+  commands.push(leftRight('Orders:', String(reportData.orderCount ?? 0)));
+
+  const lines = Array.isArray(reportData.lines) ? reportData.lines : [];
+  const cashLine = lines.find(l => l.isCash);
+  const nonCash = lines.filter(l => !l.isCash);
+
+  // Section header styled exactly like the receipt "ITEMS" block:
+  // rule, centered bold title, rule.
+  const sectionHeader = (title) => {
+    commands.push(drawLine('-'));
+    commands.push(CMD.BOLD_ON);
+    commands.push(text(title + '\n'));
+    commands.push(CMD.BOLD_OFF);
+    commands.push(drawLine('-'));
+  };
+
+  // ── CASH DRAWER — the physically counted, reconciled tender ──
+  if (cashLine) {
+    sectionHeader(((cashLine.name || 'CASH') + ' (DRAWER)').toUpperCase());
+    commands.push(leftRight('Opening float', money(reportData.openingFloat)));
+    commands.push(leftRight('+ Cash sales', money(reportData.cashSales ?? cashLine.sales)));
+    commands.push(leftRight('- Cash payouts', money(reportData.cashPayouts)));
+    commands.push(CMD.BOLD_ON);
+    commands.push(leftRight('= Expected in drawer', money(cashLine.expected)));
+    commands.push(CMD.BOLD_OFF);
+    commands.push(leftRight('Counted', money(cashLine.counted)));
+    const os = Number(cashLine.overShort) || 0;
+    const osLabel = os === 0 ? 'BALANCED' : os > 0 ? 'OVER ' + money(os) : 'SHORT ' + money(Math.abs(os));
+    commands.push(CMD.BOLD_ON);
+    commands.push(leftRight('OVER/(SHORT)', osLabel));
+    commands.push(CMD.BOLD_OFF);
+  }
+
+  // ── OTHER TENDERS — for reconciliation, not physically counted ──
+  if (nonCash.length) {
+    sectionHeader('OTHER TENDERS');
+    nonCash.forEach(l => {
+      commands.push(leftRight(String(l.name || ''), money(l.expected)));
+      const os = Number(l.overShort) || 0;
+      if (os !== 0) {
+        const osLabel = os > 0 ? 'over ' + money(os) : 'short ' + money(Math.abs(os));
+        commands.push(leftRight('  counted ' + money(l.counted), osLabel));
+      }
+    });
+  }
+
+  // ── TOTAL COLLECTED (sum of tender sales this shift, excl. opening float) ──
+  commands.push(drawLine('='));
+  commands.push(CMD.BOLD_ON);
+  commands.push(leftRight('TOTAL COLLECTED', money(reportData.totalCollected)));
+  commands.push(CMD.BOLD_OFF);
+  commands.push(drawLine('='));
+
+  // ── SIGNATURES (left aligned) ──
+  commands.push(CMD.ALIGN_LEFT);
+  commands.push(CMD.FEED);
+  commands.push(leftText('Cashier sign: _____________________'));
+  commands.push(CMD.FEED);
+  commands.push(leftText('Received by:  _____________________'));
+  commands.push(CMD.FEED);
+
+  // ── FOOTER ──
+  commands.push(CMD.ALIGN_CENTER);
+  if (userProfile?.show_powered_by_airoxlab !== false) {
+    commands.push(text('Powered by airoxlab.com\n'));
+  }
+  commands.push(CMD.FEED);
+  commands.push(CMD.FEED);
+  commands.push(CMD.CUT);
+
+  return Buffer.concat(commands);
+}
+
 // Print receipt to USB printer
 function registerUSBPrinter(ipcMain) {
   ipcMain.handle('printer-print-usb', async (event, { orderData, userProfile, printerConfig }) => {
@@ -1263,6 +1387,34 @@ function registerUSBPrinter(ipcMain) {
       const tokenData = await generateKitchenTokenESCPOS(orderData, userProfile);
       await sendToWindowsPrinter(printerName, tokenData);
       return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Print cash report (Z-report) to USB printer
+  ipcMain.handle('printer-print-usb-report', async (event, { reportData, userProfile, printerConfig }) => {
+    try {
+      console.log('🎯 [usbPrinter.js] IPC: printer-print-usb-report');
+      const port = printerConfig.usb_port || printerConfig.usb_device_path || 'COM3';
+      const assets = await ensureAssets(userProfile?.store_logo, userProfile?.qr_code);
+      const reportBuf = await generateCashReportESCPOS(reportData, userProfile, assets);
+      await sendToUSBPort(port, reportBuf);
+      return { success: true };
+    } catch (error) {
+      console.error('[usbPrinter.js] IPC error (usb report):', error.message);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Print cash report (Z-report) to Windows USB printer
+  ipcMain.handle('printer-print-windows-usb-report', async (event, { reportData, userProfile, printerConfig }) => {
+    try {
+      const printerName = printerConfig.usb_printer_name;
+      if (!printerName) return { success: false, error: 'No Windows printer name configured' };
+      const assets = await ensureAssets(userProfile?.store_logo, userProfile?.qr_code);
+      const reportBuf = await generateCashReportESCPOS(reportData, userProfile, assets);
+      return await sendToWindowsPrinter(printerName, reportBuf);
     } catch (error) {
       return { success: false, error: error.message };
     }
@@ -1332,5 +1484,6 @@ module.exports = {
   sendToWindowsPrinter,
   sendToUSBPort,
   generateReceiptESCPOS,
-  generateKitchenTokenESCPOS
+  generateKitchenTokenESCPOS,
+  generateCashReportESCPOS
 };
