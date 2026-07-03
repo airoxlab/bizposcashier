@@ -617,6 +617,7 @@ const fetchExpenseData = async () => {
         tax_rate,
         category_id,
         subcategory_id,
+        source_type,
         created_at,
         category:expense_categories (
           id,
@@ -965,7 +966,13 @@ const fetchCOGS = async (completedOrders = []) => {
     }
   }
 
-  const processExpenseData = (expenses, stockPurchases = []) => {
+  const processExpenseData = (expensesRaw, stockPurchases = []) => {
+    // Exclude supplier-payment mirror rows from P&L analytics — settling a
+    // supplier balance is an AP payment, not a P&L expense (its cost is already
+    // recognised as COGS), so it must not inflate expenses or dent net profit.
+    // The expense LOG (rawExpenses) is unaffected and still shows the record.
+    const expenses = (expensesRaw || []).filter(e => e.source_type !== 'supplier_payment')
+
     // Calculate total from regular expenses
     const totalRegularExpenses = expenses.reduce((sum, expense) => sum + parseFloat(expense.total_amount || expense.amount || 0), 0)
 

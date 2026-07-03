@@ -61,6 +61,9 @@ const TEMPLATE_VARS = [
   { label: '{takeaway_time}',      desc: 'Estimated takeaway pickup time' },
   { label: '{delivery_time}',      desc: 'Estimated delivery time' },
   { label: '{order_instructions}', desc: 'Special instructions from customer' },
+  { label: '{rider_name}',         desc: 'Assigned rider name (Delivery)' },
+  { label: '{rider_phone}',        desc: 'Assigned rider phone (Delivery)' },
+  { label: '{rider_vehicle}',      desc: 'Rider vehicle type (Delivery)' },
 ]
 
 const ORDER_TYPES = [
@@ -91,6 +94,10 @@ const DEFAULT_SETTINGS = {
   auto_send_walkin_ready: false,
   auto_send_takeaway_ready: true,
   auto_send_delivery_ready: true,
+  // Rider-assigned trigger (delivery only)
+  auto_send_on_rider_assigned: false,
+  auto_send_delivery_rider_assigned: true,
+  delivery_rider_assigned_template: `Hi {customer_name}! 🛵\n\nA rider has been assigned to your delivery order #{order_number}.\n\n🧑 Rider: {rider_name}\n📞 Contact: {rider_phone}\n\nThey are on the way with your order — please keep your phone reachable.\n— {business_name}`,
   // Review link
   include_review_link: true,
   // Campaign
@@ -327,6 +334,9 @@ export function WhatsAppPanel() {
       .replace(/\{takeaway_time\}/g,      activeTemplateType === 'takeaway' ? '1:30 PM' : '')
       .replace(/\{delivery_time\}/g,      activeTemplateType === 'delivery' ? '2:00 PM' : '')
       .replace(/\{order_instructions\}/g, 'No onions please')
+      .replace(/\{rider_name\}/g,         activeTemplateType === 'delivery' ? 'Bilal Ahmed' : '')
+      .replace(/\{rider_phone\}/g,        activeTemplateType === 'delivery' ? '0300 1234567' : '')
+      .replace(/\{rider_vehicle\}/g,      activeTemplateType === 'delivery' ? 'Motorbike' : '')
   }
 
   const tabs = [
@@ -550,7 +560,15 @@ export function WhatsAppPanel() {
                 {ORDER_TYPES.map(t => (
                   <button
                     key={t.key}
-                    onClick={() => setActiveTemplateType(t.key)}
+                    onClick={() => {
+                      setActiveTemplateType(t.key)
+                      // 'rider_assigned' only exists for delivery — bounce back
+                      // to Completed if the user leaves the Delivery type.
+                      if (t.key !== 'delivery' && activeTemplateStatus === 'rider_assigned') {
+                        setActiveTemplateStatus('completed')
+                        setPreviewVisible(false)
+                      }
+                    }}
                     className={`flex flex-col items-center gap-2 p-4 rounded-2xl border transition-all ${
                       activeTemplateType === t.key
                         ? `border-transparent bg-gradient-to-br ${t.color} shadow-lg`
@@ -593,13 +611,17 @@ export function WhatsAppPanel() {
                 </div>
               </div>
 
-              {/* Status sub-tabs — 4 options */}
-              <div className={`grid grid-cols-4 gap-1 p-1 rounded-xl border ${isDark ? 'bg-gray-900/40 border-gray-700/40' : 'bg-gray-100 border-gray-200'}`}>
+              {/* Status sub-tabs — 4 for dine-in/takeaway, +Rider Assigned for delivery */}
+              <div className={`grid ${activeTemplateType === 'delivery' ? 'grid-cols-5' : 'grid-cols-4'} gap-1 p-1 rounded-xl border ${isDark ? 'bg-gray-900/40 border-gray-700/40' : 'bg-gray-100 border-gray-200'}`}>
                 {[
                   { key: 'completed',  label: 'Completed',  icon: CheckCircle, activeCls: isDark ? 'bg-green-500/20 border border-green-500/30 text-green-400' : 'bg-green-50 border border-green-200 text-green-600' },
                   { key: 'preparing',  label: 'Preparing',  icon: Clock,       activeCls: isDark ? 'bg-orange-500/20 border border-orange-500/30 text-orange-400' : 'bg-orange-50 border border-orange-200 text-orange-600' },
                   { key: 'dispatched', label: 'Dispatched', icon: Truck,       activeCls: isDark ? 'bg-blue-500/20 border border-blue-500/30 text-blue-400' : 'bg-blue-50 border border-blue-200 text-blue-600' },
                   { key: 'ready',      label: 'Ready',      icon: Zap,         activeCls: isDark ? 'bg-amber-500/20 border border-amber-500/30 text-amber-400' : 'bg-amber-50 border border-amber-200 text-amber-600' },
+                  // Delivery-only extra status
+                  ...(activeTemplateType === 'delivery'
+                    ? [{ key: 'rider_assigned', label: 'Rider', icon: Truck, activeCls: isDark ? 'bg-orange-500/20 border border-orange-500/30 text-orange-400' : 'bg-orange-50 border border-orange-200 text-orange-600' }]
+                    : []),
                 ].map(s => {
                   const SIcon = s.icon
                   return (
@@ -626,6 +648,7 @@ export function WhatsAppPanel() {
                   preparing:  { cls: isDark ? 'bg-orange-500/8 border border-orange-500/15 text-orange-400' : 'bg-orange-50 border border-orange-200 text-orange-600', text: 'Sent when order status changes to Preparing — notifies customer their order has started.' },
                   dispatched: { cls: isDark ? 'bg-blue-500/8 border border-blue-500/15 text-blue-400' : 'bg-blue-50 border border-blue-200 text-blue-600',     text: activeTemplateType === 'walkin' ? 'Sent when order is Dispatched — food is on its way to the table.' : activeTemplateType === 'takeaway' ? 'Sent when order is Dispatched — order is packed, customer can collect.' : 'Sent when order is Dispatched — rider is heading to the customer.' },
                   ready:      { cls: isDark ? 'bg-amber-500/8 border border-amber-500/15 text-amber-400' : 'bg-amber-50 border border-amber-200 text-amber-600',   text: activeTemplateType === 'walkin' ? 'Sent when order is Ready — table is being served.' : activeTemplateType === 'takeaway' ? 'Sent when order is Ready — notifies customer to come collect.' : 'Sent when order is Ready — rider is on the way.' },
+                  rider_assigned: { cls: isDark ? 'bg-orange-500/8 border border-orange-500/15 text-orange-400' : 'bg-orange-50 border border-orange-200 text-orange-600', text: 'Sent when a rider is assigned to a delivery order — tells the customer who is bringing their order. Use {rider_name} and {rider_phone}.' },
                 }
                 const h = hints[activeTemplateStatus] || hints.completed
                 return <div className={`rounded-xl px-4 py-2.5 text-xs ${h.cls}`}>{h.text}</div>
@@ -636,7 +659,7 @@ export function WhatsAppPanel() {
                 <div className="flex items-center justify-between mb-3">
                   <p className={`${tp} font-semibold text-sm capitalize`}>
                     {ORDER_TYPES.find(t => t.key === activeTemplateType)?.label}
-                    {' — '}{activeTemplateStatus} Template
+                    {' — '}{activeTemplateStatus === 'rider_assigned' ? 'Rider Assigned' : activeTemplateStatus} Template
                   </p>
                   <button
                     onClick={() => setPreviewVisible(p => !p)}
@@ -802,6 +825,45 @@ export function WhatsAppPanel() {
                   </div>
                 )
               })}
+
+              {/* Rider Assigned — delivery-only trigger (template lives in the Templates tab) */}
+              {(() => {
+                const isOn = settings.auto_send_on_rider_assigned
+                const onColor = isDark ? 'border-orange-500/30 bg-orange-500/5' : 'border-orange-200 bg-orange-50'
+                const iconOnCls = isDark ? 'bg-orange-500/20 text-orange-400' : 'bg-orange-100 text-orange-500'
+                const statusCls = isDark ? 'text-orange-400' : 'text-orange-600'
+                const footerCls = isDark ? 'text-orange-400/70' : 'text-orange-600/70'
+                return (
+                  <div className={`rounded-2xl border overflow-hidden ${isOn ? onColor : cardBg}`}>
+                    {/* Header */}
+                    <div className="flex items-center justify-between p-5">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${isOn ? iconOnCls : isDark ? 'bg-gray-700 text-gray-400' : 'bg-gray-200 text-gray-400'}`}>
+                          <Truck size={18} />
+                        </div>
+                        <div>
+                          <p className={`${tp} font-bold text-sm`}>Rider Assigned</p>
+                          <p className={`${ts} text-xs`}>
+                            Send when a rider is assigned · <span className={`font-semibold ${statusCls}`}>Delivery only</span>
+                          </p>
+                        </div>
+                      </div>
+                      <Toggle
+                        checked={isOn}
+                        onChange={() => setSettings(p => ({ ...p, auto_send_on_rider_assigned: !p.auto_send_on_rider_assigned }))}
+                        isDark={isDark}
+                      />
+                    </div>
+                    {/* Footer */}
+                    <div className={`border-t px-5 py-2.5 flex items-center gap-2 ${isDark ? 'border-gray-700/40' : 'border-gray-200'}`}>
+                      <Info size={12} className={`flex-shrink-0 ${footerCls}`} />
+                      <p className={`text-xs ${footerCls}`}>
+                        Fires on Assign / Change Rider. Template: <span className="font-semibold">Delivery → Rider</span> — edit under Templates tab.
+                      </p>
+                    </div>
+                  </div>
+                )
+              })()}
 
               {/* Review link */}
               <div className={`rounded-2xl border p-5 ${cardBg}`}>

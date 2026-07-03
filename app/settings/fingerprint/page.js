@@ -692,6 +692,10 @@ function EnrollTab({ userId, onEnrolledChange }) {
                 ? <p className="italic text-gray-400">No events…</p>
                 : log.map((l, i) => <p key={i} className="leading-snug">{l}</p>)}
             </div>
+            <a href="/fingerprint"
+              className="mt-2 inline-flex items-center gap-1 text-[11px] text-violet-600 dark:text-violet-400 hover:underline">
+              <Fingerprint className="w-3 h-3" /> Advanced tools (compare / test scanner)
+            </a>
           </div>
         </div>
       </div>
@@ -751,6 +755,9 @@ function SettingsTab({ userId }) {
         fingerprint_sound_enabled:            cfg.fingerprint_sound_enabled,
       }).eq('id', userId)
       if (error) throw error
+      // Tell the app-wide kiosk listener to re-read settings NOW — otherwise
+      // the new values (incl. the enable toggle) only apply after a restart.
+      window.dispatchEvent(new CustomEvent('fp:settings-changed'))
       toast.success('Settings saved')
     } catch { toast.error('Failed to save settings') }
     finally { setSaving(false) }

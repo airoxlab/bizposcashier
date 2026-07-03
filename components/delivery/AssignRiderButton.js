@@ -8,6 +8,7 @@ import { supabase } from '../../lib/supabase'
 import { cacheManager } from '../../lib/cacheManager'
 import { authManager } from '../../lib/authManager'
 import { themeManager } from '../../lib/themeManager'
+import { triggerWhatsAppAutoSend } from '../../lib/whatsappAutoSend'
 import { notify } from '../ui/NotificationSystem'
 import Modal from '../ui/Modal'
 
@@ -137,6 +138,26 @@ export default function AssignRiderButton({
       )
 
       notify.success('Rider assigned successfully')
+
+      // Auto-send the rider's details to the customer over WhatsApp (delivery
+      // only, opt-in via Settings → WhatsApp → Auto-Send). Fire-and-forget so
+      // it never blocks the assignment. Only fire when the rider actually
+      // CHANGED (first assign = change from unassigned; re-saving the same rider
+      // sends nothing). The sender also dedups per (order, rider) as a backstop.
+      if (selectedRider !== currentRiderId) {
+        const currentUser = authManager.getCurrentUser()
+        triggerWhatsAppAutoSend(
+          { ...order, delivery_boy_id: selectedRider, order_type: 'delivery' },
+          currentUser?.id,
+          'RiderAssigned'
+        )
+          .then((r) => {
+            if (r?.success) notify.success('WhatsApp: rider details sent to customer')
+            else if (r && r.silent === false && r.error) notify.error(`WhatsApp: ${r.error}`)
+          })
+          .catch((err) => console.error('[AssignRider] WA auto-send error:', err?.message))
+      }
+
       onAssigned?.(selectedRider, riderObj)
       setIsOpen(false)
     } catch (err) {

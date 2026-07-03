@@ -25,13 +25,14 @@ import {
   ChevronUp,
   Sun,
   Moon,
-  Truck
+  CreditCard
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
 import { authManager } from '../../lib/authManager'
 import { cacheManager } from '../../lib/cacheManager'
 import Modal from '../../components/ui/Modal'
+import SearchableDropdown from '../../components/ui/SearchableDropdown'
 import PinPad from '../../components/ui/PinPad'
 import OwnerFingerprintUnlock from '../../components/ui/OwnerFingerprintUnlock'
 import ConfirmModal from '../../components/ui/ConfirmModal'
@@ -120,6 +121,8 @@ export default function ExpensesPage() {
 
   // Suppliers
   const [suppliers, setSuppliers] = useState([])
+  const [supplierBalances, setSupplierBalances] = useState({}) // { [supplierId]: balance }
+  const [payingSupplier, setPayingSupplier] = useState(false)
 
   // UI states
   const [showAddExpense, setShowAddExpense] = useState(false)
@@ -171,6 +174,15 @@ export default function ExpensesPage() {
     bank: 'Bank',
     card: 'Card',
     'petty cash': 'Petty Cash',
+  }
+
+  // supplier_payments.payment_method is NOT NULL and constrained to this set.
+  // Mirrors components/inventory/SupplierPaymentModal.js so a supplier payment
+  // recorded from the Expenses page is identical to one from the Suppliers page.
+  const VALID_SUPPLIER_METHODS = ['Cash', 'EasyPaisa', 'JazzCash', 'Bank', 'Cheque']
+  const resolveSupplierMethod = (key) => {
+    if (!key) return 'Cash'
+    return VALID_SUPPLIER_METHODS.find(v => v.toLowerCase() === key.toLowerCase().trim()) || 'Cash'
   }
 
   // Offline
@@ -504,7 +516,22 @@ export default function ExpensesPage() {
       if (!user?.id) return
       const { data } = await supabase.from('suppliers').select('id, name').eq('user_id', user.id).order('name')
       setSuppliers(data || [])
+      fetchSupplierBalances()
     } catch { /* silent */ }
+  }
+
+  // Outstanding balance per supplier — authoritative source used across the app
+  // (admin finance + supplier ledger). Reads supplier_payments for payments, so
+  // it always agrees with a payment recorded here (which writes supplier_payments).
+  const fetchSupplierBalances = async () => {
+    try {
+      if (!user?.id || !cacheManager.checkOnlineStatus()) return
+      const { data, error } = await supabase.rpc('get_supplier_balances', { p_user_ids: [user.id] })
+      if (error) throw error
+      const map = {}
+      ;(data || []).forEach(row => { map[row.supplier_id] = parseFloat(row.balance || 0) })
+      setSupplierBalances(map)
+    } catch { /* silent — balance display is best-effort */ }
   }
 
   // ─── Expense CRUD ──────────────────────────────────────────────────────────
@@ -513,7 +540,155 @@ export default function ExpensesPage() {
     return amount + (amount * expenseForm.taxRate) / 100
   }
 
+  // ─── Pay a supplier balance from the Expenses page ──────────────────────────
+  // Writes the SAME records the Suppliers → Record Payment flow does, so balances
+  // stay consistent everywhere, PLUS an expense breadcrumb so the payout is kept
+  // in the expense history and flows into the shift Cash Report / analytics.
+  //
+  // Money movement is intentionally single-sourced:
+  //   • supplier_payments (carries payment_account_id) → its trigger debits the
+  //     payment account exactly once + is read by get_supplier_balances.
+  //   • supplier_ledger credit (payment_id link)       → reduces the ledger-view
+  //     balance shown on the Ledgers / Suppliers pages.
+  //   • expenses (payment_account_id = NULL)           → NO second account debit;
+  //     it only exists as a record + a cash payout in the Cash Report (which
+  //     matches on cashier_id + payment_method, not the account id).
+  const doSupplierPayment = async () => {
+    if (payingSupplier) return // guard against double-submit
+    if (!cacheManager.checkOnlineStatus()) {
+      notify.warning('Paying a supplier requires an internet connection.')
+      return
+    }
+    const supplier = suppliers.find(s => s.id === expenseForm.supplierId)
+    const account  = paymentAccounts.find(a => a.id === expenseForm.paymentAccountId)
+    const amount   = parseFloat(expenseForm.amount)
+    if (!supplier)                { notify.warning('Select a supplier'); return }
+    if (!account)                 { notify.warning('Select a payment account'); return }
+    if (!amount || amount <= 0)   { notify.warning('Enter a valid amount'); return }
+
+    setPayingSupplier(true)
+    try {
+      const cashier = authManager.getCashier()
+      const isAdmin = authManager.getRole() === 'admin'
+      const actorName = isAdmin
+        ? (user.customer_name || user.name || 'Admin')
+        : (cashier?.name || 'Cashier')
+      const actorLabel = isAdmin ? 'Admin' : 'Cashier'
+      const paymentDate = expenseForm.expenseDate || localDateStr(new Date())
+      const ledgerDesc = `Paid from Expense by ${actorName} (${actorLabel})`
+
+      // 1) supplier_payments — canonical payment record (trigger debits account)
+      const { data: payment, error: payErr } = await supabase
+        .from('supplier_payments')
+        .insert({
+          user_id:            user.id,
+          supplier_id:        supplier.id,
+          purchase_order_id:  null,
+          payment_account_id: account.id,
+          payment_method:     resolveSupplierMethod(account.payment_method_key),
+          amount_paid:        amount,
+          amount_settled:     amount,
+          amount_unapplied:   0,
+          payment_date:       paymentDate,
+          notes:              ledgerDesc,
+          paid_by:            isAdmin ? user.id : null,
+          paid_by_cashier_id: isAdmin ? null : (cashier?.id ?? null),
+        })
+        .select().single()
+      if (payErr) throw payErr
+
+      // 2) supplier_ledger credit — reduces the ledger-view balance
+      const { data: lastEntry } = await supabase
+        .from('supplier_ledger')
+        .select('balance_after')
+        .eq('supplier_id', supplier.id)
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(1).maybeSingle()
+
+      const balanceBefore = parseFloat(lastEntry?.balance_after ?? 0)
+      const balanceAfter  = Math.max(0, balanceBefore - amount)
+
+      const { error: ledgerErr } = await supabase.from('supplier_ledger').insert({
+        user_id:           user.id,
+        supplier_id:       supplier.id,
+        purchase_order_id: null,
+        payment_id:        payment.id,
+        transaction_type:  'credit',
+        transaction_date:  paymentDate,
+        amount,
+        balance_before:    balanceBefore,
+        balance_after:     balanceAfter,
+        description:       ledgerDesc,
+        created_by:        user.id,
+      })
+      if (ledgerErr) {
+        // Compensating rollback: undo the payment so the two balance sources
+        // never diverge (get_supplier_balances reads supplier_payments; the
+        // ledger view sums supplier_ledger). Deleting the payment also fires
+        // auto_reverse_supplier_payment_debit, restoring the account balance.
+        await supabase.from('supplier_payments').delete().eq('id', payment.id)
+        throw ledgerErr
+      }
+
+      // 3) expense breadcrumb — NO payment_account_id (avoids a double account
+      //    debit). payment_method = account name so a cash account is picked up
+      //    as a cash payout in the shift Cash Report. Tagged source_type=
+      //    'supplier_payment' so accrual reports (admin P&L / balance-sheet /
+      //    trial-balance) can EXCLUDE it — settling a supplier is not a P&L
+      //    expense and would otherwise double-count against COGS. Cash-out views
+      //    (cash report, z-cash-report, expense log) still include it.
+      const { error: expErr } = await supabase.from('expenses').insert({
+        user_id:            user.id,
+        cashier_id:         cashier?.id || null,
+        amount,
+        category_id:        expenseForm.categoryId || null,
+        subcategory_id:     expenseForm.subcategoryId || null,
+        description:        expenseForm.description?.trim() || `${ledgerDesc} — to ${supplier.name}`,
+        payment_method:     account.name,
+        payment_account_id: null,
+        supplier_id:        supplier.id,
+        source_type:        'supplier_payment',
+        source_id:          payment.id,
+        tax_rate:           0,
+        tax_amount:         0,
+        total_amount:       amount,
+        expense_date:       paymentDate,
+        expense_time:       new Date().toTimeString().split(' ')[0],
+      })
+
+      // The payment is fully recorded once steps 1 & 2 succeed. A failed
+      // breadcrumb only costs the Cash Report line — it must NOT be reported as
+      // a failed payment (which would tempt a retry and double-pay the supplier).
+      setShowAddExpense(false)
+      setEditingExpense(null)
+      resetExpenseForm()
+      fetchExpenses()
+      fetchSupplierBalances()
+      fetchPaymentAccounts()
+      if (expErr) {
+        console.error('Supplier payment recorded but expense breadcrumb failed:', expErr?.message || expErr)
+        notify.warning(`Paid Rs. ${amount.toFixed(2)} to ${supplier.name}, but the expense record could not be saved — it won't show in the Cash Report.`)
+      } else {
+        notify.success(`Paid Rs. ${amount.toFixed(2)} to ${supplier.name}`)
+      }
+    } catch (error) {
+      const msg = error?.message || error?.details || 'Unknown error'
+      console.error('Error paying supplier:', msg)
+      notify.error(`Failed to pay supplier: ${msg}`)
+    } finally {
+      setPayingSupplier(false)
+    }
+  }
+
   const handleSaveExpense = async () => {
+    // Supplier selected AND a real payment account chosen → this is a payment
+    // toward the supplier's balance, not a new unpaid purchase. (Not on edit —
+    // editing an existing row must never mint a fresh payment.)
+    if (!editingExpense && expenseForm.supplierId && expenseForm.paymentAccountId) {
+      await doSupplierPayment()
+      return
+    }
     try {
       const effectivePaymentMethod = expenseForm.supplierId ? 'Unpaid' : expenseForm.paymentMethod
       if (!expenseForm.amount || !expenseForm.categoryId || !effectivePaymentMethod) {
@@ -1370,37 +1545,31 @@ export default function ExpensesPage() {
                   <div>
                     <label className={`block text-sm font-semibold ${themeClasses.textPrimary} mb-1.5`}>
                       Link to Supplier
-                      <span className={`ml-2 text-xs font-normal ${themeClasses.textSecondary}`}>optional — marks as unpaid in supplier ledger</span>
+                      <span className={`ml-2 text-xs font-normal ${themeClasses.textSecondary}`}>optional — pay their balance or record as unpaid</span>
                     </label>
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        onClick={() => setExpenseForm(f => ({ ...f, supplierId: '', paymentMethod: f.supplierId ? '' : f.paymentMethod }))}
-                        className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
-                          !expenseForm.supplierId
-                            ? 'bg-gray-500 border-gray-500 text-white'
-                            : isDark ? 'bg-gray-700 border-gray-600 text-gray-300 hover:border-gray-500' : 'bg-white border-gray-200 text-gray-600 hover:border-gray-400'
-                        }`}
-                      >
-                        None
-                      </button>
-                      {suppliers.map(s => (
-                        <button
-                          key={s.id}
-                          onClick={() => setExpenseForm(f => ({ ...f, supplierId: s.id, paymentMethod: 'Unpaid', paymentAccountId: '' }))}
-                          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
-                            expenseForm.supplierId === s.id
-                              ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm'
-                              : isDark ? 'bg-gray-700 border-gray-600 text-gray-200 hover:border-indigo-500' : 'bg-white border-gray-200 text-gray-700 hover:border-indigo-400'
-                          }`}
-                        >
-                          <Truck className="w-3 h-3" />
-                          {s.name}
-                        </button>
-                      ))}
-                    </div>
+                    <SearchableDropdown
+                      value={expenseForm.supplierId}
+                      options={[
+                        { id: '', label: 'None — no supplier' },
+                        ...suppliers.map(s => {
+                          const bal = supplierBalances[s.id]
+                          return {
+                            id: s.id,
+                            label: s.name,
+                            sublabel: (bal != null && bal > 0) ? `Rs ${bal.toFixed(0)}` : undefined,
+                          }
+                        }),
+                      ]}
+                      placeholder="Select a supplier..."
+                      searchPlaceholder="Search suppliers..."
+                      onChange={(id) => setExpenseForm(f => ({ ...f, supplierId: id, paymentMethod: '', paymentAccountId: '' }))}
+                      isDark={isDark}
+                      panelWidth="w-full"
+                      triggerCls={`px-4 py-3 ${themeClasses.input} border rounded-xl focus:ring-2 focus:ring-purple-500 text-sm`}
+                    />
                     {expenseForm.supplierId && (
-                      <p className={`mt-1.5 text-xs ${isDark ? 'text-amber-400' : 'text-amber-600'}`}>
-                        This expense will be recorded as unpaid in the supplier ledger. Pay via Suppliers → Record Payment.
+                      <p className={`mt-1.5 text-xs ${themeClasses.textSecondary}`}>
+                        Pick a payment account below to pay this supplier and deduct their balance, or choose <span className="font-semibold">Unpaid</span> to add it to what you owe.
                       </p>
                     )}
                   </div>
@@ -1409,14 +1578,9 @@ export default function ExpensesPage() {
                 {/* Pay From Account */}
                 <div>
                   <label className={`block text-sm font-semibold ${themeClasses.textPrimary} mb-2`}>
-                    {expenseForm.supplierId ? 'Payment' : 'Pay From Account *'}
+                    {expenseForm.supplierId ? 'Pay Supplier From Account' : 'Pay From Account *'}
                   </label>
-                  {expenseForm.supplierId ? (
-                    <div className={`flex items-center gap-2 px-4 py-3 rounded-xl border-2 ${isDark ? 'bg-amber-900/20 border-amber-700' : 'bg-amber-50 border-amber-300'}`}>
-                      <Clock className={`w-4 h-4 ${isDark ? 'text-amber-400' : 'text-amber-600'}`} />
-                      <span className={`text-sm font-semibold ${isDark ? 'text-amber-300' : 'text-amber-700'}`}>Unpaid — linked to supplier</span>
-                    </div>
-                  ) : paymentAccounts.length > 0 ? (
+                  {paymentAccounts.length > 0 ? (
                     <div className="grid grid-cols-2 gap-2">
                       {paymentAccounts.map((account) => (
                         <button
@@ -1458,9 +1622,58 @@ export default function ExpensesPage() {
                   ) : (
                     <div className={`text-xs ${themeClasses.textSecondary} text-center py-4`}>Loading accounts...</div>
                   )}
+
+                  {/* Supplier payment preview / unpaid notice */}
+                  {expenseForm.supplierId && (() => {
+                    const sup = suppliers.find(s => s.id === expenseForm.supplierId)
+                    const curBal = supplierBalances[expenseForm.supplierId]
+                    const payAmt = parseFloat(expenseForm.amount) || 0
+                    if (expenseForm.paymentAccountId) {
+                      const newBal = curBal != null ? Math.max(0, curBal - payAmt) : null
+                      return (
+                        <div className={`mt-2 rounded-xl p-3 border ${isDark ? 'bg-blue-900/20 border-blue-800' : 'bg-blue-50 border-blue-200'}`}>
+                          <p className={`text-xs font-semibold ${isDark ? 'text-blue-300' : 'text-blue-700'}`}>
+                            Paying {sup?.name} — deducts their balance
+                          </p>
+                          <div className="mt-1 space-y-0.5 text-xs">
+                            {curBal != null && (
+                              <div className="flex justify-between">
+                                <span className={themeClasses.textSecondary}>Current balance:</span>
+                                <span className={themeClasses.textPrimary}>PKR {curBal.toFixed(2)}</span>
+                              </div>
+                            )}
+                            <div className="flex justify-between">
+                              <span className={themeClasses.textSecondary}>Paying now:</span>
+                              <span className="font-semibold text-green-600 dark:text-green-400">− PKR {payAmt.toFixed(2)}</span>
+                            </div>
+                            {newBal != null && (
+                              <div className={`flex justify-between font-bold border-t pt-0.5 ${isDark ? 'border-blue-800' : 'border-blue-200'}`}>
+                                <span className={themeClasses.textPrimary}>New balance:</span>
+                                <span className={themeClasses.textPrimary}>PKR {newBal.toFixed(2)}</span>
+                              </div>
+                            )}
+                            {curBal != null && payAmt > curBal && (
+                              <p className={`pt-0.5 text-[11px] ${isDark ? 'text-amber-400' : 'text-amber-600'}`}>
+                                Overpaying by PKR {(payAmt - curBal).toFixed(2)} — recorded as an advance to the supplier.
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    }
+                    if (expenseForm.paymentMethod === 'Unpaid') {
+                      return (
+                        <p className={`mt-2 text-xs ${isDark ? 'text-amber-400' : 'text-amber-600'}`}>
+                          Recorded as unpaid — added to {sup?.name}&apos;s balance in the supplier ledger.
+                        </p>
+                      )
+                    }
+                    return null
+                  })()}
                 </div>
 
-                {/* Tax Rate */}
+                {/* Tax Rate — not applicable when paying down a supplier balance */}
+                {!(expenseForm.supplierId && expenseForm.paymentAccountId) && (
                 <div>
                   <label className={`block text-sm font-semibold ${themeClasses.textPrimary} mb-1.5`}>Tax Rate (%)</label>
                   <input
@@ -1474,9 +1687,10 @@ export default function ExpensesPage() {
                     step="0.01"
                   />
                 </div>
+                )}
 
                 {/* Total preview */}
-                {expenseForm.amount && (
+                {expenseForm.amount && !(expenseForm.supplierId && expenseForm.paymentAccountId) && (
                   <div className={`rounded-xl p-3 border ${isDark ? 'bg-green-900/50 border-green-700' : 'bg-green-50 border-green-200'}`}>
                     <h4 className={`font-semibold text-sm ${isDark ? 'text-green-300' : 'text-green-900'} mb-1.5`}>Total Calculation</h4>
                     <div className="space-y-1 text-xs">
@@ -1531,15 +1745,30 @@ export default function ExpensesPage() {
                   >
                     Cancel
                   </button>
-                  <motion.button
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    onClick={handleSaveExpense}
-                    className="flex-1 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white font-semibold py-3 px-4 rounded-xl shadow-lg hover:shadow-xl transition-all"
-                  >
-                    <Save className="w-4 h-4 mr-2 inline" />
-                    {editingExpense ? 'Update' : 'Save'} Expense
-                  </motion.button>
+                  {(() => {
+                    const isSupplierPayment = !editingExpense && !!expenseForm.supplierId && !!expenseForm.paymentAccountId
+                    return (
+                      <motion.button
+                        whileHover={{ scale: payingSupplier ? 1 : 1.02 }}
+                        whileTap={{ scale: payingSupplier ? 1 : 0.98 }}
+                        onClick={handleSaveExpense}
+                        disabled={payingSupplier}
+                        className={`flex-1 text-white font-semibold py-3 px-4 rounded-xl shadow-lg hover:shadow-xl transition-all disabled:opacity-60 ${
+                          isSupplierPayment
+                            ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700'
+                            : 'bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700'
+                        }`}
+                      >
+                        {payingSupplier ? (
+                          <><Clock className="w-4 h-4 mr-2 inline animate-spin" /> Paying...</>
+                        ) : isSupplierPayment ? (
+                          <><CreditCard className="w-4 h-4 mr-2 inline" /> Pay Supplier</>
+                        ) : (
+                          <><Save className="w-4 h-4 mr-2 inline" /> {editingExpense ? 'Update' : 'Save'} Expense</>
+                        )}
+                      </motion.button>
+                    )
+                  })()}
                 </div>
               </div>
             </motion.div>

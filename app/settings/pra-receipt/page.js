@@ -91,8 +91,15 @@ export function PraReceiptPanel() {
         setSettings(DEFAULTS)
       }
     } catch (err) {
-      console.error('[PRA Receipt Settings] load error:', err)
-      toast.error('Failed to load receipt settings')
+      // Supabase/PostgREST errors log as an opaque {} — surface the real fields.
+      const msg = err?.message || err?.code || (err ? JSON.stringify(err) : 'unknown error')
+      console.error('[PRA Receipt Settings] load error:', msg, err?.code || '', err)
+      // 42703 = "column does not exist" → the DB migration hasn't been applied.
+      if (err?.code === '42703') {
+        toast.error('PRA receipt settings need a database update — ask your admin to run migration 025.')
+      } else {
+        toast.error('Failed to load receipt settings: ' + msg)
+      }
     } finally {
       setLoading(false)
     }

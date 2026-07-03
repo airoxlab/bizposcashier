@@ -804,13 +804,9 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
 
   if (hasChanges) {
     // ---- MODIFIED ORDER LAYOUT ----
-    // Top: CHANGES section (only what changed)
+    // Only what changed. The big "NEW ITEMS" / "REMOVED ITEMS" section headings
+    // below are the loud indicator, so no separate "CHANGES" title is needed.
     commands.push(CMD.ALIGN_CENTER);
-    commands.push(CMD.BOLD_ON);
-    commands.push(CMD.DOUBLE_HEIGHT);
-    commands.push(text('CHANGES\n'));
-    commands.push(CMD.NORMAL);
-    commands.push(CMD.BOLD_OFF);
     commands.push(drawLine('='));
 
     const changedItems = orderData.items.filter(
@@ -822,8 +818,13 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
     // so kitchen knows exactly how many more to make.
     const addedItems = changedItems.filter(i => i.changeType === 'added' || i.changeType === 'modified');
     if (addedItems.length > 0) {
+      // Big, bold, centered heading so the kitchen can never miss/confuse the
+      // section. DOUBLE_ON = 2x width + 2x height (9 chars -> 18 cols, fits 42).
+      commands.push(CMD.ALIGN_CENTER);
       commands.push(CMD.BOLD_ON);
-      commands.push(leftText('NEW ITEMS:'));
+      commands.push(CMD.DOUBLE_ON);
+      commands.push(leftText('NEW ITEMS'));
+      commands.push(CMD.DOUBLE_OFF);
       commands.push(CMD.BOLD_OFF);
       for (const item of addedItems) {
         if (item.changeType === 'modified') {
@@ -840,8 +841,14 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
     const removedItems = changedItems.filter(i => i.changeType === 'removed');
     if (removedItems.length > 0) {
       if (addedItems.length > 0) commands.push(text('\n'));
+      // Same big, bold, centered treatment — this is the one that caused the
+      // confusion (a "removed" token mistaken for food to make), so it must read
+      // unmistakably as REMOVED. DOUBLE_ON = 2x (13 chars -> 26 cols, fits 42).
+      commands.push(CMD.ALIGN_CENTER);
       commands.push(CMD.BOLD_ON);
-      commands.push(leftText('REMOVED:'));
+      commands.push(CMD.DOUBLE_ON);
+      commands.push(leftText('REMOVED ITEMS'));
+      commands.push(CMD.DOUBLE_OFF);
       commands.push(CMD.BOLD_OFF);
       for (const item of removedItems) {
         printItem(item, '- ');
@@ -1257,6 +1264,15 @@ async function generateCashReportESCPOS(reportData, userProfile, assets) {
   commands.push(CMD.BOLD_OFF);
   commands.push(drawLine('-'));
 
+  // Built while offline = split legs / payouts / float were unavailable.
+  // Mark it so a manager can't mistake a partial report for a complete one.
+  if (reportData.offline) {
+    commands.push(CMD.BOLD_ON);
+    commands.push(text('* OFFLINE - PARTIAL DATA *\n'));
+    commands.push(CMD.BOLD_OFF);
+    commands.push(drawLine('-'));
+  }
+
   // ── META (key/value rows, like the receipt order-details block) ──
   commands.push(leftRight('Cashier:', String(reportData.cashierName || '')));
   commands.push(leftRight('Shift start:', fmtDT(reportData.shiftStart)));
@@ -1282,7 +1298,10 @@ async function generateCashReportESCPOS(reportData, userProfile, assets) {
     sectionHeader(((cashLine.name || 'CASH') + ' (DRAWER)').toUpperCase());
     commands.push(leftRight('Opening float', money(reportData.openingFloat)));
     commands.push(leftRight('+ Cash sales', money(reportData.cashSales ?? cashLine.sales)));
-    commands.push(leftRight('- Cash payouts', money(reportData.cashPayouts)));
+    // Always printed (even Rs 0) — a zero on paper is auditable, a missing
+    // line is ambiguous. Acct payments = customer credit collected in cash.
+    commands.push(leftRight('+ Acct payments (cash)', money(reportData.accountCashPayments)));
+    commands.push(leftRight('- Cash payouts (exp)', money(reportData.cashPayouts)));
     commands.push(CMD.BOLD_ON);
     commands.push(leftRight('= Expected in drawer', money(cashLine.expected)));
     commands.push(CMD.BOLD_OFF);
@@ -1294,11 +1313,19 @@ async function generateCashReportESCPOS(reportData, userProfile, assets) {
     commands.push(CMD.BOLD_OFF);
   }
 
-  // ── OTHER TENDERS — for reconciliation, not physically counted ──
+  // ── OTHER ACCOUNTS — full movement per account: sales + payments in − payouts ──
   if (nonCash.length) {
-    sectionHeader('OTHER TENDERS');
+    sectionHeader('OTHER ACCOUNTS');
     nonCash.forEach(l => {
       commands.push(leftRight(String(l.name || ''), money(l.expected)));
+      const pin  = Number(l.payIn)  || 0;
+      const pout = Number(l.payOut) || 0;
+      // Show the movement that built the figure when it isn't sales alone.
+      if (pin > 0 || pout > 0) {
+        commands.push(leftRight('  sales', money(l.sales)));
+        if (pin > 0)  commands.push(leftRight('  + payments in', money(pin)));
+        if (pout > 0) commands.push(leftRight('  - payouts', money(pout)));
+      }
       const os = Number(l.overShort) || 0;
       if (os !== 0) {
         const osLabel = os > 0 ? 'over ' + money(os) : 'short ' + money(Math.abs(os));
@@ -1307,10 +1334,18 @@ async function generateCashReportESCPOS(reportData, userProfile, assets) {
     });
   }
 
-  // ── TOTAL COLLECTED (sum of tender sales this shift, excl. opening float) ──
+  // ── TOTALS — movement across ALL accounts this shift ──
+  const tSales = Number(reportData.totalCollected) || 0;
+  const tIn    = Number(reportData.totalPayIn)  || 0;
+  const tOut   = Number(reportData.totalPayOut) || 0;
   commands.push(drawLine('='));
   commands.push(CMD.BOLD_ON);
-  commands.push(leftRight('TOTAL COLLECTED', money(reportData.totalCollected)));
+  commands.push(leftRight('TOTAL SALES (ORDERS)', money(tSales)));
+  commands.push(CMD.BOLD_OFF);
+  commands.push(leftRight('+ Payments in (all)', money(tIn)));
+  commands.push(leftRight('- Payouts (all)', money(tOut)));
+  commands.push(CMD.BOLD_ON);
+  commands.push(leftRight('= NET (ALL ACCOUNTS)', money(tSales + tIn - tOut)));
   commands.push(CMD.BOLD_OFF);
   commands.push(drawLine('='));
 

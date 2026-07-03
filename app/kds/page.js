@@ -36,7 +36,8 @@ import {
   Table2,
   Printer,
   ArrowUpDown,
-  Truck
+  Truck,
+  Plus
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
@@ -47,11 +48,116 @@ import { printerManager } from '../../lib/printerManager'
 import dailySerialManager from '../../lib/utils/dailySerialManager'
 import { getTodaysBusinessDate, filterOrdersByBusinessDate, getBusinessDayRange } from '../../lib/utils/businessDayUtils'
 import { getOrderChanges, getOrderItemsWithChanges, getCurrentUpdateVersion } from '../../lib/utils/orderChangesTracker'
+import { fetchOpenAmendments, updateAmendmentStatus } from '../../lib/utils/kdsAmendments'
 import { triggerWhatsAppAutoSend } from '../../lib/whatsappAutoSend'
 import NotificationSystem, { notify } from '../../components/ui/NotificationSystem'
 import ProtectedPage from '../../components/ProtectedPage'
 import PlanGate from '../../components/ui/PlanGate'
 import FingerprintStatusBadge from '../../components/FingerprintStatusBadge'
+
+// A KDS "amendment ticket" card — the delta-only sub-order (e.g. #002 (A))
+// spawned when an already-cooking order is edited. Green = items to ADD, red =
+// items CHANGED/removed. Rendered in the KDS columns alongside real order cards.
+// `amendment` is enriched with parent context (_serial/_tableName/_customerName/
+// _orderType/_parentExists) by the amendmentsByStatus memo.
+function AmendmentCard({ amendment, isDark, classes, onBump, onPrint }) {
+  const isAddon = amendment.kind === 'addon'
+  const cur = amendment.kitchen_status || 'Placed'
+  const nextMap = { Placed: 'Preparing', Preparing: 'Ready', Ready: 'Collected' }
+  const nextLabelMap = { Preparing: 'Start', Ready: 'Mark Ready', Collected: 'Done' }
+  const next = nextMap[cur]
+  const serial = amendment._serial ? dailySerialManager.formatSerial(amendment._serial) : ''
+  const items = Array.isArray(amendment.items) ? amendment.items : []
+
+  const accent = isAddon
+    ? (isDark ? 'border-green-500 bg-green-900/20' : 'border-green-400 bg-green-50')
+    : (isDark ? 'border-red-500 bg-red-900/20' : 'border-red-400 bg-red-50')
+  const bannerBg = isAddon ? 'bg-green-500' : 'bg-red-500'
+  const itemTone = isAddon
+    ? (isDark ? 'text-green-300' : 'text-green-700')
+    : (isDark ? 'text-red-300' : 'text-red-700')
+
+  return (
+    <div className={`rounded-xl border-2 overflow-hidden shadow-sm ${accent}`}>
+      {/* Banner: what this ticket is + which order it belongs to */}
+      <div className={`${bannerBg} text-white px-3 py-1 flex items-center justify-between`}>
+        <span className="text-[11px] font-extrabold flex items-center gap-1 tracking-wide uppercase">
+          {isAddon ? <Plus className="w-3 h-3" /> : <AlertTriangle className="w-3 h-3" />}
+          {isAddon ? 'Add-on' : 'Change'}
+          {amendment.letter ? ` (${amendment.letter})` : ''}
+        </span>
+        <span className="text-[10px] font-bold opacity-95">
+          → {serial ? `${serial} ` : ''}#{amendment.order_number}
+        </span>
+      </div>
+
+      <div className="p-2.5">
+        {/* Parent context so the chef maps it back to the live order */}
+        <div className={`flex items-center gap-1.5 mb-1.5 text-[10px] ${classes.textSecondary} flex-wrap`}>
+          <span className={`font-bold px-1.5 py-0.5 rounded uppercase ${isDark ? 'bg-gray-700 text-gray-200' : 'bg-gray-200 text-gray-700'}`}>
+            {amendment._orderType === 'takeaway' ? 'Takeaway' : amendment._orderType === 'delivery' ? 'Delivery' : 'Walk-in'}
+          </span>
+          {amendment._customerName && <span className={`${classes.textPrimary} font-medium`}>{amendment._customerName}</span>}
+          {amendment._tableName && <span className={isDark ? 'text-purple-400' : 'text-purple-600'}>· {amendment._tableName}</span>}
+          {!amendment._parentExists && <span className="text-[9px] italic opacity-70">(order closed)</span>}
+        </div>
+
+        {/* Delta line items */}
+        <div className={`rounded-lg mb-2 px-2 py-1.5 ${isDark ? 'bg-gray-900/40' : 'bg-white/70'} space-y-1`}>
+          {items.map((it, i) => {
+            const removed = it.changeType === 'removed'
+            const reduced = it.changeType === 'reduced'
+            const sign = isAddon ? '+' : removed ? '−' : '~'
+            return (
+              <div key={i}>
+                <div className={`text-xs flex items-start gap-1.5 ${itemTone}`}>
+                  <span className="font-extrabold text-sm leading-tight min-w-[28px]">
+                    {sign}{it.quantity}x
+                  </span>
+                  <span className={`flex-1 font-semibold ${removed ? 'line-through opacity-80' : ''}`}>
+                    {it.name}{it.variant ? ` (${it.variant})` : ''}
+                    {reduced && (
+                      <span className="ml-1 font-normal opacity-80">
+                        <span className="line-through">{it.oldQuantity}x</span> → <span className="font-bold">{it.newQuantity}x</span>
+                      </span>
+                    )}
+                  </span>
+                </div>
+                {it.instructions && (
+                  <div className={`ml-7 mt-0.5 flex items-start gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded ${isDark ? 'bg-orange-500/10 text-orange-400' : 'bg-orange-50 text-orange-600'}`}>
+                    <FileText className="w-2.5 h-2.5 flex-shrink-0 mt-0.5" />
+                    <span>{it.instructions}</span>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+
+        {/* Actions: optional delta print + bump to next status */}
+        <div className="flex gap-1.5">
+          {amendment._parentExists && onPrint && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onPrint(amendment) }}
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 ${isDark ? 'bg-gray-700 hover:bg-gray-600 text-gray-200' : 'bg-gray-200 hover:bg-gray-300 text-gray-700'}`}
+              title="Print this add-on"
+            >
+              <Printer className="w-3 h-3" />
+            </button>
+          )}
+          {next && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onBump(amendment.id, next, amendment.order_id) }}
+              className={`flex-1 py-1.5 rounded-lg text-xs font-bold text-white ${isAddon ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'}`}
+            >
+              {nextLabelMap[next]}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 export default function KDSPage() {
   const router = useRouter()
@@ -82,6 +188,10 @@ export default function KDSPage() {
   // Orders currently printing — used to disable per-order Print buttons so
   // rapid double-clicks don't fire multiple kitchen-token print jobs.
   const [printingOrderIds, setPrintingOrderIds] = useState(new Set())
+  // KDS amendment tickets (delta-only sub-orders spawned when an already-cooking
+  // order is edited). Kept in a ref too for stale-closure-free reads in handlers.
+  const [amendments, setAmendments] = useState([])
+  const amendmentsRef = useRef([])
   const audioRef = useRef(null)
   const alertAudioRef = useRef(null)
   const lastSoundTimeRef = useRef(0)
@@ -102,6 +212,21 @@ export default function KDSPage() {
   const saveUpdatedIds = (ids) => {
     try {
       localStorage.setItem('kds_updated_orders', JSON.stringify([...ids]))
+    } catch {}
+  }
+
+  // "Acknowledged" orders — their KDS add-on tickets were finished, so the parent
+  // should NOT be re-flagged as UPDATED (a fresh edit un-acknowledges it again).
+  const getAckIds = () => {
+    try {
+      return new Set(JSON.parse(localStorage.getItem('kds_ack_orders') || '[]'))
+    } catch {
+      return new Set()
+    }
+  }
+  const saveAckIds = (ids) => {
+    try {
+      localStorage.setItem('kds_ack_orders', JSON.stringify([...ids]))
     } catch {}
   }
 
@@ -197,6 +322,7 @@ export default function KDSPage() {
     // Load orders with user data immediately
     if (userData?.id) {
       loadOrders(false, userData.id)
+      loadAmendments(userData.id)
     }
 
     // Setup auto-refresh
@@ -204,6 +330,7 @@ export default function KDSPage() {
     if (autoRefresh && userData?.id) {
       refreshTimer = setInterval(() => {
         loadOrders(true, userData.id) // Silent refresh
+        loadAmendments(userData.id)
       }, refreshInterval * 1000)
     }
 
@@ -251,7 +378,25 @@ export default function KDSPage() {
             stored.add(orderId)
             saveUpdatedIds(stored)
             setUpdatedOrderIds(new Set(stored))
+            // A fresh edit un-acknowledges the order so the parent re-flags UPDATED.
+            const ack = getAckIds()
+            if (ack.delete(orderId)) saveAckIds(ack)
           }
+        }
+      )
+      .subscribe()
+
+    // Subscribe to kds_amendments changes — new add-on tickets and status bumps
+    // (from this or any other KDS screen) so every station stays in sync.
+    const amendmentsSubscription = supabase
+      .channel('kds-amendments')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'kds_amendments' },
+        (payload) => {
+          if (userData?.id) loadAmendments(userData.id)
+          // Alert the kitchen that a new sub-order landed in the queue
+          if (payload.eventType === 'INSERT') playNotificationSound()
         }
       )
       .subscribe()
@@ -262,6 +407,7 @@ export default function KDSPage() {
       }
       subscription.unsubscribe()
       itemsSubscription.unsubscribe()
+      amendmentsSubscription.unsubscribe()
     }
   }, [router, autoRefresh, refreshInterval])
 
@@ -269,6 +415,11 @@ export default function KDSPage() {
   useEffect(() => {
     kdsNewOrderSoundRef.current = kdsNewOrderSound
   }, [kdsNewOrderSound])
+
+  // Keep amendmentsRef in sync for stale-closure-free reads in handlers/guards
+  useEffect(() => {
+    amendmentsRef.current = amendments
+  }, [amendments])
 
   // No need to reload on filter change - using memoization for instant filtering
 
@@ -476,10 +627,16 @@ export default function KDSPage() {
       // Restore UPDATED tags from localStorage, keeping only IDs still active on KDS
       const storedIds = getStoredUpdatedIds()
 
+      // Acknowledged orders (add-on tickets finished) shouldn't re-flag as UPDATED.
+      // Prune the ack set to orders still active on KDS so it can't grow forever.
+      const ackIds = new Set([...getAckIds()].filter(id => activeOrders.some(o => o.id === id)))
+      saveAckIds(ackIds)
+
       // Also seed from order_changes cache — catches orders modified before KDS was opened
       try {
         const cachedChanges = JSON.parse(localStorage.getItem('order_changes') || '{}')
         activeOrders.forEach(o => {
+          if (ackIds.has(o.id)) return
           const changes = cachedChanges[o.id]
           if (changes && changes.length > 0) storedIds.add(o.id)
         })
@@ -487,7 +644,7 @@ export default function KDSPage() {
 
       const validIds = new Set(
         [...storedIds].filter(id =>
-          activeOrders.some(o => o.id === id)
+          activeOrders.some(o => o.id === id) && !ackIds.has(id)
         )
       )
       saveUpdatedIds(validIds) // prune stale IDs
@@ -526,6 +683,35 @@ export default function KDSPage() {
       setLoading(false)
     }
   }, [user?.id, notificationsEnabled])
+
+  // Load open KDS amendment tickets for today's business day (same range as orders)
+  const loadAmendments = useCallback(async (userId = user?.id) => {
+    if (!userId) return
+    try {
+      let businessStartTime = '10:00'
+      let businessEndTime = '03:00'
+      try {
+        const userProfile = localStorage.getItem('user_profile')
+        if (userProfile) {
+          const profile = JSON.parse(userProfile)
+          businessStartTime = profile.business_start_time || '10:00'
+          businessEndTime = profile.business_end_time || '03:00'
+        }
+      } catch (_) {}
+
+      const todaysBusinessDate = getTodaysBusinessDate(businessStartTime, businessEndTime)
+      const range = getBusinessDayRange(todaysBusinessDate, businessStartTime, businessEndTime)
+
+      const data = await fetchOpenAmendments({
+        userId,
+        startDateTime: range.startDateTime,
+        endDateTime: range.endDateTime,
+      })
+      setAmendments(data)
+    } catch (e) {
+      console.warn('KDS amendments load failed:', e?.message)
+    }
+  }, [user?.id])
 
   // Memoized filtered orders - instant filtering without re-fetch
   const filteredOrders = useMemo(() => {
@@ -612,6 +798,38 @@ export default function KDSPage() {
     }
   }, [allOrders, searchTerm, sortOrder, updatedOrderIds])
 
+  // Amendment tickets grouped into the same KDS columns as orders, enriched with
+  // parent-order context (serial/table/customer) so the chef can map each back.
+  const amendmentsByStatus = useMemo(() => {
+    const orderById = {}
+    allOrders.forEach(o => { orderById[o.id] = o })
+    const s = searchTerm.toLowerCase().replace('#', '')
+    const group = { Placed: [], Preparing: [], Ready: [] }
+
+    amendments.forEach(a => {
+      const parent = orderById[a.order_id]
+      if (s) {
+        const on = (a.order_number || '').toLowerCase()
+        const serial = parent?.daily_serial ? String(parent.daily_serial) : ''
+        if (!on.includes(s) && !serial.includes(s)) return
+      }
+      const enriched = {
+        ...a,
+        _serial: parent?.daily_serial || null,
+        _orderType: parent?.order_type || 'walkin',
+        _tableName: parent?.tables?.table_name || (parent?.tables?.table_number ? `T${parent.tables.table_number}` : null),
+        _customerName: parent?.customers?.full_name || '',
+        _parentExists: !!parent,
+      }
+      const key = a.kitchen_status || 'Placed'
+      if (group[key]) group[key].push(enriched)
+    })
+
+    // Newest add-ons first within each column
+    const sortA = (arr) => arr.sort((x, y) => new Date(y.created_at) - new Date(x.created_at))
+    return { Placed: sortA(group.Placed), Preparing: sortA(group.Preparing), Ready: sortA(group.Ready) }
+  }, [amendments, allOrders, searchTerm])
+
   const showNotification = (title, body) => {
     if ('Notification' in window && Notification.permission === 'granted') {
       new Notification(title, { body, icon: '/icon.png' })
@@ -669,6 +887,19 @@ export default function KDSPage() {
   }
 
   const updateOrderStatus = async (orderId, newKitchenStatus) => {
+    // Guard: don't let an order be dismissed (Collected) while it still has open
+    // add-on tickets — otherwise the food goes out missing the added items.
+    if (newKitchenStatus === 'Collected') {
+      const openAddons = amendmentsRef.current.filter(
+        a => a.order_id === orderId && a.kitchen_status !== 'Collected'
+      )
+      if (openAddons.length > 0) {
+        notify.warning(
+          `This order has ${openAddons.length} pending add-on ticket${openAddons.length > 1 ? 's' : ''}. Finish ${openAddons.length > 1 ? 'them' : 'it'} first.`
+        )
+        return
+      }
+    }
     try {
       const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true
 
@@ -734,6 +965,50 @@ export default function KDSPage() {
       console.error('Error updating kitchen status:', error)
       notify.error('Failed to update order status')
     }
+  }
+
+  // Advance an amendment ticket's own kitchen status (null → Preparing → Ready →
+  // Collected). When the last open add-on for an order is finished, acknowledge
+  // the parent so its UPDATED highlight clears.
+  const bumpAmendment = async (amendmentId, newStatus, orderId) => {
+    try {
+      // Optimistic local update — drop it from the board once Collected
+      setAmendments(prev =>
+        newStatus === 'Collected'
+          ? prev.filter(a => a.id !== amendmentId)
+          : prev.map(a => (a.id === amendmentId ? { ...a, kitchen_status: newStatus } : a))
+      )
+
+      const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true
+      if (isOnline) {
+        await updateAmendmentStatus(amendmentId, newStatus)
+      }
+
+      if (newStatus === 'Collected' && orderId) {
+        // amendmentsRef still holds the pre-optimistic list; we explicitly exclude
+        // this ticket, so the check is correct regardless of ref-sync timing.
+        const stillOpen = amendmentsRef.current.some(
+          a => a.order_id === orderId && a.id !== amendmentId && a.kitchen_status !== 'Collected'
+        )
+        if (!stillOpen) {
+          const ack = getAckIds(); ack.add(orderId); saveAckIds(ack)
+          const upd = getStoredUpdatedIds(); upd.delete(orderId); saveUpdatedIds(upd)
+          setUpdatedOrderIds(new Set(upd))
+        }
+      }
+    } catch (error) {
+      console.error('Error updating amendment status:', error)
+      notify.error('Failed to update add-on ticket')
+      loadAmendments()
+    }
+  }
+
+  // Print just the delta for an amendment — reuses the parent order's changes-only
+  // kitchen docket (which prints exactly the added/changed items + version letter).
+  const printAmendment = (amendment) => {
+    const parent = allOrders.find(o => o.id === amendment.order_id)
+    if (!parent) return
+    printDocket(parent, null, { changesOnly: true, updateVersion: amendment.letter })
   }
 
   const getElapsedTime = (createdAt) => {
@@ -1190,7 +1465,7 @@ export default function KDSPage() {
   }
 
   // Status Column Component for Column View
-  const StatusColumn = ({ title, icon: Icon, status, orders, config, onOrderClick, onStatusUpdate, onPrintDocket, classes, isDark, updatedIds, changesMap, timedOutIds, printingIds }) => {
+  const StatusColumn = ({ title, icon: Icon, status, orders, config, onOrderClick, onStatusUpdate, onPrintDocket, classes, isDark, updatedIds, changesMap, timedOutIds, printingIds, amendments = [], onAmendmentBump, onAmendmentPrint }) => {
     const updatedCount = updatedIds ? orders.filter(o => updatedIds.has(o.id)).length : 0
 
     return (
@@ -1206,6 +1481,12 @@ export default function KDSPage() {
                 {updatedCount} modified
               </span>
             )}
+            {amendments.length > 0 && (
+              <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-500 text-white animate-pulse">
+                <Plus className="w-2.5 h-2.5" />
+                {amendments.length} add-on
+              </span>
+            )}
           </div>
           <span className={`px-2 py-0.5 rounded-full text-sm font-bold ${config.badge}`}>
             {orders.length}
@@ -1214,7 +1495,18 @@ export default function KDSPage() {
 
         {/* Orders List - Scrollable */}
         <div className="flex-1 overflow-y-auto p-2 space-y-2">
-          {orders.length === 0 ? (
+          {/* Amendment tickets (delta-only sub-orders) float above real orders */}
+          {amendments.map((a) => (
+            <AmendmentCard
+              key={`amd-${a.id}`}
+              amendment={a}
+              isDark={isDark}
+              classes={classes}
+              onBump={onAmendmentBump}
+              onPrint={onAmendmentPrint}
+            />
+          ))}
+          {orders.length === 0 && amendments.length === 0 ? (
             <div className="text-center py-8">
               <Icon className={`w-8 h-8 mx-auto mb-2 ${classes.textSecondary} opacity-50`} />
               <p className={`text-sm ${classes.textSecondary}`}>No orders</p>
@@ -1462,6 +1754,11 @@ export default function KDSPage() {
     )
   }
 
+  // Amendment tickets to surface in tab view for the active status filter
+  const tabAmendments = statusFilter === 'All'
+    ? [...amendmentsByStatus.Placed, ...amendmentsByStatus.Preparing, ...amendmentsByStatus.Ready]
+    : (amendmentsByStatus[statusFilter] || [])
+
   return (
     <PlanGate feature="kds">
     <ProtectedPage permissionKey="KDS" pageName="Kitchen Display System">
@@ -1612,18 +1909,35 @@ export default function KDSPage() {
       {viewMode === 'tabs' ? (
         // Tab View - Single status at a time
         <div className="max-w-7xl mx-auto p-6">
-          {filteredOrders.length === 0 ? (
-            <div className="text-center py-20">
-              <div className={`w-24 h-24 rounded-full ${isDark ? 'bg-gray-700' : 'bg-gray-200'} flex items-center justify-center mx-auto mb-6`}>
-                <ChefHat className={`w-12 h-12 ${classes.textSecondary}`} />
-              </div>
-              <h3 className={`text-2xl font-bold ${classes.textPrimary} mb-2`}>
-                No Active Orders
-              </h3>
-              <p className={`${classes.textSecondary} text-lg`}>
-                All orders are completed or no new orders yet
-              </p>
+          {/* Amendment tickets for the active filter */}
+          {tabAmendments.length > 0 && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-4">
+              {tabAmendments.map((a) => (
+                <AmendmentCard
+                  key={`amd-${a.id}`}
+                  amendment={a}
+                  isDark={isDark}
+                  classes={classes}
+                  onBump={bumpAmendment}
+                  onPrint={printAmendment}
+                />
+              ))}
             </div>
+          )}
+          {filteredOrders.length === 0 ? (
+            tabAmendments.length === 0 && (
+              <div className="text-center py-20">
+                <div className={`w-24 h-24 rounded-full ${isDark ? 'bg-gray-700' : 'bg-gray-200'} flex items-center justify-center mx-auto mb-6`}>
+                  <ChefHat className={`w-12 h-12 ${classes.textSecondary}`} />
+                </div>
+                <h3 className={`text-2xl font-bold ${classes.textPrimary} mb-2`}>
+                  No Active Orders
+                </h3>
+                <p className={`${classes.textSecondary} text-lg`}>
+                  All orders are completed or no new orders yet
+                </p>
+              </div>
+            )
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {filteredOrders.map((order) => (
@@ -1642,6 +1956,9 @@ export default function KDSPage() {
               icon={Clock}
               status="Placed"
               orders={ordersByStatus.Placed}
+              amendments={amendmentsByStatus.Placed}
+              onAmendmentBump={bumpAmendment}
+              onAmendmentPrint={printAmendment}
               config={getStatusConfig(null)}
               onOrderClick={(order) => {
                 setSelectedOrder(order)
@@ -1663,6 +1980,9 @@ export default function KDSPage() {
               icon={ChefHat}
               status="Preparing"
               orders={ordersByStatus.Preparing}
+              amendments={amendmentsByStatus.Preparing}
+              onAmendmentBump={bumpAmendment}
+              onAmendmentPrint={printAmendment}
               config={getStatusConfig('Preparing')}
               onOrderClick={(order) => {
                 setSelectedOrder(order)
@@ -1684,6 +2004,9 @@ export default function KDSPage() {
               icon={Package}
               status="Ready"
               orders={ordersByStatus.Ready}
+              amendments={amendmentsByStatus.Ready}
+              onAmendmentBump={bumpAmendment}
+              onAmendmentPrint={printAmendment}
               config={getStatusConfig('Ready')}
               onOrderClick={(order) => {
                 setSelectedOrder(order)

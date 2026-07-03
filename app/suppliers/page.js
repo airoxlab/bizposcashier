@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ArrowLeft, Plus, Search, Edit2, Trash2, Loader2, X, Check, Phone, Mail, MapPin, CreditCard, TrendingDown, TrendingUp, BookOpen } from 'lucide-react'
+import { ArrowLeft, Plus, Search, Edit2, Trash2, Loader2, X, Check, Phone, Mail, MapPin, CreditCard, TrendingDown, TrendingUp, BookOpen, ShoppingCart, Wallet } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
 import { authManager } from '../../lib/authManager'
@@ -21,8 +21,11 @@ export default function SuppliersPage() {
   const [selectedSupplier, setSelectedSupplier] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
 
-  // Ledger state for selected supplier
+  // Ledger / purchases / payments state for selected supplier
   const [supplierLedger, setSupplierLedger]       = useState([])
+  const [supplierPOs, setSupplierPOs]             = useState([])
+  const [supplierPayments, setSupplierPayments]   = useState([])
+  const [detailTab, setDetailTab]                 = useState('ledger')
   const [ledgerLoading, setLedgerLoading]         = useState(false)
   const [showPaymentModal, setShowPaymentModal]   = useState(false)
 
@@ -171,24 +174,41 @@ export default function SuppliersPage() {
     setFormData({ name: '', phone: '', email: '', address: '', opening_amount: 0 })
   }
 
-  const loadSupplierLedger = async (supplierId) => {
+  const loadSupplierDetail = async (supplierId) => {
     try {
       setLedgerLoading(true)
-      const { data } = await supabase
-        .from('supplier_ledger')
-        .select('*')
-        .eq('supplier_id', supplierId)
-        .order('transaction_date', { ascending: false })
-        .limit(10)
-      setSupplierLedger(data || [])
+      const [ledRes, poRes, payRes] = await Promise.all([
+        supabase
+          .from('supplier_ledger')
+          .select('*')
+          .eq('supplier_id', supplierId)
+          .order('transaction_date', { ascending: false })
+          .limit(200),
+        supabase
+          .from('purchase_orders')
+          .select('id,po_number,po_date,status,total_amount,total_items')
+          .eq('supplier_id', supplierId)
+          .order('po_date', { ascending: false })
+          .limit(100),
+        supabase
+          .from('supplier_payments')
+          .select('id,payment_number,reference_number,payment_method,amount_paid,payment_date,notes')
+          .eq('supplier_id', supplierId)
+          .order('payment_date', { ascending: false })
+          .limit(100),
+      ])
+      setSupplierLedger(ledRes.data || [])
+      setSupplierPOs(poRes.data || [])
+      setSupplierPayments(payRes.data || [])
     } catch { /* silent */ }
     finally { setLedgerLoading(false) }
   }
 
   const handleSelectSupplier = (supplier) => {
     setSelectedSupplier(supplier)
-    if (supplier?.id) loadSupplierLedger(supplier.id)
-    else setSupplierLedger([])
+    setDetailTab('ledger')
+    if (supplier?.id) loadSupplierDetail(supplier.id)
+    else { setSupplierLedger([]); setSupplierPOs([]); setSupplierPayments([]) }
   }
 
   const openEditModal = (supplier) => {
@@ -366,67 +386,175 @@ export default function SuppliersPage() {
                   ))}
                 </div>
 
-                {/* Transactions table — same style as ledger */}
+                {/* Ledger / Purchases / Payments — tabbed detail (mirrors admin Supplier Insights) */}
                 {canViewLedger && <motion.div
                   initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
                   className={`${themeClasses.card} rounded-xl border ${themeClasses.border} overflow-hidden`}
                 >
-                  <div className={`flex items-center justify-between px-4 py-3 border-b ${themeClasses.border} ${isDark ? 'bg-gray-800/50' : 'bg-gray-50'}`}>
-                    <p className={`text-sm font-semibold ${themeClasses.textPrimary}`}>Recent Transactions</p>
+                  {/* Tab header */}
+                  <div className={`flex items-center justify-between px-2 border-b ${themeClasses.border} ${isDark ? 'bg-gray-800/50' : 'bg-gray-50'}`}>
+                    <div className="flex">
+                      {[
+                        { id: 'ledger',    label: 'Ledger',    Icon: BookOpen,     count: supplierLedger.length },
+                        { id: 'purchases', label: 'Purchases', Icon: ShoppingCart, count: supplierPOs.length },
+                        { id: 'payments',  label: 'Payments',  Icon: Wallet,       count: supplierPayments.length },
+                      ].map(({ id, label, Icon, count }) => (
+                        <button
+                          key={id}
+                          onClick={() => setDetailTab(id)}
+                          className={`flex items-center gap-1.5 px-3 py-3 text-xs font-semibold border-b-2 transition-colors ${
+                            detailTab === id
+                              ? 'border-amber-500 text-amber-500'
+                              : `border-transparent ${themeClasses.textSecondary} hover:text-amber-500`
+                          }`}
+                        >
+                          <Icon className="w-3.5 h-3.5" />
+                          {label}
+                          {count > 0 && (
+                            <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${
+                              detailTab === id
+                                ? 'bg-amber-500/15 text-amber-500'
+                                : isDark ? 'bg-gray-700 text-gray-400' : 'bg-gray-200 text-gray-500'
+                            }`}>{count}</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
                     <button
                       onClick={() => router.push('/ledgers')}
-                      className="text-xs font-medium text-amber-500 hover:text-amber-400"
+                      className="text-xs font-medium text-amber-500 hover:text-amber-400 pr-3"
                     >
                       View All →
                     </button>
                   </div>
+
                   {ledgerLoading ? (
                     <div className="flex items-center justify-center py-10">
                       <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
                     </div>
-                  ) : supplierLedger.length === 0 ? (
-                    <div className={`flex flex-col items-center justify-center py-10 ${themeClasses.textSecondary}`}>
-                      <BookOpen className="w-8 h-8 mb-2 opacity-25" />
-                      <p className="text-xs">No transactions yet</p>
-                    </div>
                   ) : (
                     <div className="overflow-x-auto">
-                      <table className="w-full">
-                        <thead>
-                          <tr className={`border-b ${themeClasses.border} ${isDark ? 'bg-gray-800' : 'bg-gray-50'}`}>
-                            {['Date', 'Type', 'Description', 'Amount'].map(h => (
-                              <th key={h} className={`px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide ${themeClasses.textSecondary}`}>{h}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody className={`divide-y ${isDark ? 'divide-gray-700/60' : 'divide-gray-100'}`}>
-                          {supplierLedger.map(entry => {
-                            const isDebit = entry.transaction_type === 'debit' || entry.transaction_type === 'purchase'
-                            return (
-                              <tr key={entry.id} className={`transition-colors ${isDark ? 'hover:bg-gray-700/40' : 'hover:bg-gray-50'}`}>
-                                <td className={`px-4 py-2.5 text-xs ${themeClasses.textSecondary} whitespace-nowrap`}>
-                                  {new Date(entry.transaction_date).toLocaleDateString('en-PK')}
-                                </td>
-                                <td className="px-4 py-2.5">
-                                  <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
-                                    isDebit
-                                      ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400'
-                                      : 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400'
-                                  }`}>
-                                    {isDebit ? '↓ Purchase' : '↑ Payment'}
-                                  </span>
-                                </td>
-                                <td className={`px-4 py-2.5 text-xs ${themeClasses.textSecondary} max-w-[220px] truncate`}>
-                                  {entry.description || '—'}
-                                </td>
-                                <td className={`px-4 py-2.5 text-sm text-right font-bold ${isDebit ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>
-                                  {isDebit ? '−' : '+'} Rs.&nbsp;{parseFloat(entry.amount || 0).toFixed(0)}
-                                </td>
+                      {/* LEDGER */}
+                      {detailTab === 'ledger' && (
+                        supplierLedger.length === 0 ? (
+                          <div className={`flex flex-col items-center justify-center py-10 ${themeClasses.textSecondary}`}>
+                            <BookOpen className="w-8 h-8 mb-2 opacity-25" />
+                            <p className="text-xs">No transactions yet</p>
+                          </div>
+                        ) : (
+                          <table className="w-full">
+                            <thead>
+                              <tr className={`border-b ${themeClasses.border} ${isDark ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                                {['Date', 'Type', 'Description', 'Amount'].map(h => (
+                                  <th key={h} className={`px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide ${themeClasses.textSecondary}`}>{h}</th>
+                                ))}
                               </tr>
-                            )
-                          })}
-                        </tbody>
-                      </table>
+                            </thead>
+                            <tbody className={`divide-y ${isDark ? 'divide-gray-700/60' : 'divide-gray-100'}`}>
+                              {supplierLedger.map(entry => {
+                                const isDebit = entry.transaction_type === 'debit' || entry.transaction_type === 'purchase'
+                                return (
+                                  <tr key={entry.id} className={`transition-colors ${isDark ? 'hover:bg-gray-700/40' : 'hover:bg-gray-50'}`}>
+                                    <td className={`px-4 py-2.5 text-xs ${themeClasses.textSecondary} whitespace-nowrap`}>
+                                      {new Date(entry.transaction_date).toLocaleDateString('en-PK')}
+                                    </td>
+                                    <td className="px-4 py-2.5">
+                                      <span className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
+                                        isDebit
+                                          ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400'
+                                          : 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400'
+                                      }`}>
+                                        {isDebit ? '↓ Purchase' : '↑ Payment'}
+                                      </span>
+                                    </td>
+                                    <td className={`px-4 py-2.5 text-xs ${themeClasses.textSecondary} max-w-[220px] truncate`}>
+                                      {entry.description || '—'}
+                                    </td>
+                                    <td className={`px-4 py-2.5 text-sm text-right font-bold ${isDebit ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>
+                                      {isDebit ? '−' : '+'} Rs.&nbsp;{parseFloat(entry.amount || 0).toFixed(0)}
+                                    </td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                          </table>
+                        )
+                      )}
+
+                      {/* PURCHASES */}
+                      {detailTab === 'purchases' && (
+                        supplierPOs.length === 0 ? (
+                          <div className={`flex flex-col items-center justify-center py-10 ${themeClasses.textSecondary}`}>
+                            <ShoppingCart className="w-8 h-8 mb-2 opacity-25" />
+                            <p className="text-xs">No purchase orders</p>
+                          </div>
+                        ) : (
+                          <table className="w-full">
+                            <thead>
+                              <tr className={`border-b ${themeClasses.border} ${isDark ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                                {['PO #', 'Date', 'Status', 'Items', 'Total'].map(h => (
+                                  <th key={h} className={`px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide ${themeClasses.textSecondary}`}>{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody className={`divide-y ${isDark ? 'divide-gray-700/60' : 'divide-gray-100'}`}>
+                              {supplierPOs.map(po => (
+                                <tr key={po.id} className={`transition-colors ${isDark ? 'hover:bg-gray-700/40' : 'hover:bg-gray-50'}`}>
+                                  <td className={`px-4 py-2.5 text-xs font-mono ${themeClasses.textPrimary} whitespace-nowrap`}>{po.po_number || '—'}</td>
+                                  <td className={`px-4 py-2.5 text-xs ${themeClasses.textSecondary} whitespace-nowrap`}>
+                                    {po.po_date ? new Date(po.po_date).toLocaleDateString('en-PK') : '—'}
+                                  </td>
+                                  <td className="px-4 py-2.5">
+                                    <span className={`inline-flex items-center text-xs font-semibold px-2 py-0.5 rounded-full capitalize ${
+                                      po.status === 'received' ? 'bg-green-50 dark:bg-green-900/20 text-green-600 dark:text-green-400'
+                                      : po.status === 'cancelled' ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400'
+                                      : 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400'
+                                    }`}>{po.status || '—'}</span>
+                                  </td>
+                                  <td className={`px-4 py-2.5 text-xs ${themeClasses.textSecondary}`}>{po.total_items ?? '—'}</td>
+                                  <td className={`px-4 py-2.5 text-sm text-right font-bold ${themeClasses.textPrimary}`}>
+                                    Rs.&nbsp;{parseFloat(po.total_amount || 0).toFixed(0)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )
+                      )}
+
+                      {/* PAYMENTS */}
+                      {detailTab === 'payments' && (
+                        supplierPayments.length === 0 ? (
+                          <div className={`flex flex-col items-center justify-center py-10 ${themeClasses.textSecondary}`}>
+                            <Wallet className="w-8 h-8 mb-2 opacity-25" />
+                            <p className="text-xs">No payments recorded</p>
+                          </div>
+                        ) : (
+                          <table className="w-full">
+                            <thead>
+                              <tr className={`border-b ${themeClasses.border} ${isDark ? 'bg-gray-800' : 'bg-gray-50'}`}>
+                                {['Date', 'Reference', 'Method', 'Amount'].map(h => (
+                                  <th key={h} className={`px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide ${themeClasses.textSecondary}`}>{h}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody className={`divide-y ${isDark ? 'divide-gray-700/60' : 'divide-gray-100'}`}>
+                              {supplierPayments.map(p => (
+                                <tr key={p.id} className={`transition-colors ${isDark ? 'hover:bg-gray-700/40' : 'hover:bg-gray-50'}`}>
+                                  <td className={`px-4 py-2.5 text-xs ${themeClasses.textSecondary} whitespace-nowrap`}>
+                                    {p.payment_date ? new Date(p.payment_date).toLocaleDateString('en-PK') : '—'}
+                                  </td>
+                                  <td className={`px-4 py-2.5 text-xs ${themeClasses.textPrimary}`}>{p.reference_number || `#${p.payment_number ?? ''}`}</td>
+                                  <td className={`px-4 py-2.5 text-xs capitalize ${themeClasses.textSecondary}`}>{p.payment_method || '—'}</td>
+                                  <td className="px-4 py-2.5 text-sm text-right font-bold text-green-600 dark:text-green-400">
+                                    + Rs.&nbsp;{parseFloat(p.amount_paid || 0).toFixed(0)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        )
+                      )}
                     </div>
                   )}
                 </motion.div>}
@@ -534,7 +662,7 @@ export default function SuppliersPage() {
           supplier={selectedSupplier}
           onPaymentRecorded={() => {
             setShowPaymentModal(false)
-            if (selectedSupplier?.id) loadSupplierLedger(selectedSupplier.id)
+            if (selectedSupplier?.id) loadSupplierDetail(selectedSupplier.id)
           }}
         />
       )}

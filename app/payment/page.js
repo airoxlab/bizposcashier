@@ -1140,6 +1140,31 @@ const processOrder = async () => {
         if (result?.success) {
           console.log(`💾 Cached ${result.changesCount} item changes for reprint (DB already written by modify_order_atomic)`)
         }
+
+        // 🧾 Spawn a KDS amendment ticket (sub-order) for this edit so the kitchen
+        // can't miss a late change to an order it's already preparing. Guarded by
+        // the order's current kitchen_status — createAmendmentsForEdit skips it if
+        // the order is still Placed (change already rides the parent card) or is
+        // already Collected. saveChangesOffline() above bumped the version letter,
+        // so getCurrentUpdateVersion() now returns the letter for this ticket.
+        try {
+          const { createAmendmentsForEdit } = await import('../../lib/utils/kdsAmendments')
+          const { data: koRow } = await supabase
+            .from('orders')
+            .select('kitchen_status')
+            .eq('id', orderData.existingOrderId)
+            .single()
+          await createAmendmentsForEdit({
+            orderId: orderData.existingOrderId,
+            orderNumber: orderData.existingOrderNumber,
+            userId: currentUser?.id,
+            letter: getCurrentUpdateVersion(orderData.existingOrderId),
+            detailedChanges: orderData.detailedChanges,
+            kitchenStatus: koRow?.kitchen_status || null,
+          })
+        } catch (amendErr) {
+          console.warn('⚠️ [KDS] amendment ticket skipped:', amendErr?.message)
+        }
       }
 
       finalOrderId = orderData.existingOrderId
@@ -2539,6 +2564,17 @@ if (orderComplete) {
               size="lg"
             />
           )}
+
+          {/* Row 4: Go to Dashboard (full width) */}
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={() => router.push('/dashboard')}
+            className="w-full px-6 py-3 bg-gradient-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 text-white font-semibold rounded-xl transition-all duration-200 flex items-center justify-center"
+          >
+            <LayoutGrid className="w-5 h-5 mr-2" />
+            Go to Dashboard
+          </motion.button>
         </div>
       </motion.div>
     </div>

@@ -6,12 +6,17 @@ import {
   Users, Search, Plus, RefreshCw, X, Check,
   Edit2, MapPin, Trash2, Home, Building2,
   Upload, FileText, AlertCircle, CheckCircle2, Download,
+  Wallet, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import themeManager from '../../../lib/themeManager'
 import { authManager } from '../../../lib/authManager'
 import { supabase } from '../../../lib/supabase'
 import { notify } from '../../../components/ui/NotificationSystem'
+import { ledgerManager } from '../../../lib/ledgerManager'
+import RecordPaymentModal from '../../../components/reports/RecordPaymentModal'
+
+const PAGE_SIZE = 12
 
 const blankForm = { full_name: '', phone: '', email: '', addressline: '', account_balance: 0 }
 
@@ -65,6 +70,16 @@ export function CustomersPanel() {
   const [addingAddress, setAddingAddress] = useState(false)
 
   const [deleteTarget, setDeleteTarget] = useState(null)
+
+  // Record Payment modal (reuses the same modal + ledgerManager as the Reports ledger page)
+  const [paymentCustomer, setPaymentCustomer] = useState(null)
+  const [paymentSummary, setPaymentSummary] = useState(null)
+  const [paymentUnpaidOrders, setPaymentUnpaidOrders] = useState([])
+  const [paymentLoadingId, setPaymentLoadingId] = useState(null)
+
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1)
+
   const [showCsvModal, setShowCsvModal] = useState(false)
   const [csvStep, setCsvStep] = useState('upload') // upload | map | done
   const [csvData, setCsvData] = useState({ headers: [], rows: [] })
@@ -145,6 +160,43 @@ export function CustomersPanel() {
     } finally {
       setDeleteTarget(null)
     }
+  }
+
+  // Open the shared Record Payment modal for a customer. We fetch the authoritative
+  // ledger summary + unpaid orders (single source of truth) exactly like the Reports
+  // ledger page, so the modal reads the real account_balance and posts a proper entry.
+  const openPaymentModal = async (customer) => {
+    const uid = authManager.getCurrentUser()?.id
+    if (!uid) { notify.error('Not signed in'); return }
+    setPaymentLoadingId(customer.id)
+    try {
+      const [summaryRes, unpaidRes] = await Promise.all([
+        ledgerManager.getCustomerLedgerSummary(uid, customer.id),
+        ledgerManager.getUnpaidOrders(uid, customer.id),
+      ])
+      const summary = summaryRes?.success
+        ? summaryRes.data
+        : { customer_id: customer.id, account_balance: customer.account_balance || 0, credit_limit: customer.credit_limit || 0 }
+      setPaymentSummary(summary)
+      setPaymentUnpaidOrders(unpaidRes?.success ? (unpaidRes.data || []) : [])
+      setPaymentCustomer(customer)
+    } catch {
+      notify.error('Failed to load customer balance')
+    } finally {
+      setPaymentLoadingId(null)
+    }
+  }
+
+  const closePaymentModal = () => {
+    setPaymentCustomer(null)
+    setPaymentSummary(null)
+    setPaymentUnpaidOrders([])
+  }
+
+  // After the modal records a payment, refresh the list so balances reflect the new entry.
+  const handlePaymentRecorded = () => {
+    closePaymentModal()
+    loadCustomers()
   }
 
   const openEditCustomer = (c) => {
@@ -354,7 +406,7 @@ export function CustomersPanel() {
             <Search className={`w-3.5 h-3.5 ${isDark ? 'text-gray-400' : 'text-gray-500'}`} />
             <input
               value={customerSearch}
-              onChange={e => setCustomerSearch(e.target.value)}
+              onChange={e => { setCustomerSearch(e.target.value); setCurrentPage(1) }}
               placeholder="Search name or phone..."
               className={`text-xs bg-transparent outline-none w-44 ${isDark ? 'text-white placeholder-gray-500' : 'text-gray-800 placeholder-gray-400'}`}
             />
@@ -744,6 +796,10 @@ export function CustomersPanel() {
         const filtered = customers.filter(c =>
           !q || (c.full_name || '').toLowerCase().includes(q) || (c.phone || '').includes(q) || (c.email || '').toLowerCase().includes(q)
         )
+        const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+        const page = Math.min(currentPage, totalPages)
+        const startIndex = (page - 1) * PAGE_SIZE
+        const paginated = filtered.slice(startIndex, startIndex + PAGE_SIZE)
         if (filtered.length === 0) return (
           <div className={`rounded-xl border py-12 text-center ${isDark ? 'border-gray-700' : 'border-gray-200'}`}>
             <Users className={`w-10 h-10 mx-auto mb-3 ${isDark ? 'text-gray-600' : 'text-gray-300'}`} />
@@ -763,7 +819,7 @@ export function CustomersPanel() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((c, i) => (
+                {paginated.map((c, i) => (
                   <tr key={c.id} className={`border-b transition-colors ${isDark ? 'border-gray-700/50 hover:bg-gray-800/60' : 'border-gray-100 hover:bg-purple-50/40'} ${i % 2 === 1 ? isDark ? 'bg-gray-800/20' : 'bg-gray-50/40' : ''}`}>
                     <td className={`px-3 py-2.5 font-medium ${classes.textPrimary}`}>{c.full_name || '—'}</td>
                     <td className={`px-3 py-2.5 ${classes.textSecondary}`}>{c.phone || '—'}</td>
@@ -774,6 +830,16 @@ export function CustomersPanel() {
                     <td className={`px-3 py-2.5 ${(c.account_balance || 0) !== 0 ? 'text-blue-500 font-medium' : classes.textSecondary}`}>Rs {(c.account_balance || 0).toFixed(0)}</td>
                     <td className="px-3 py-2.5">
                       <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => openPaymentModal(c)}
+                          disabled={paymentLoadingId === c.id}
+                          title="Record Payment"
+                          className={`p-1.5 rounded-lg transition-colors disabled:opacity-50 ${isDark ? 'hover:bg-emerald-900/30 text-emerald-400' : 'hover:bg-emerald-50 text-emerald-600'}`}
+                        >
+                          {paymentLoadingId === c.id
+                            ? <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            : <Wallet className="w-3.5 h-3.5" />}
+                        </button>
                         <button onClick={() => openEditCustomer(c)} title="Edit" className={`p-1.5 rounded-lg transition-colors ${isDark ? 'hover:bg-gray-700 text-blue-400' : 'hover:bg-blue-50 text-blue-600'}`}>
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
@@ -789,9 +855,50 @@ export function CustomersPanel() {
                 ))}
               </tbody>
             </table>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className={`flex items-center justify-between px-3 py-2.5 border-t ${isDark ? 'border-gray-700 bg-gray-800/40' : 'border-gray-200 bg-gray-50/60'}`}>
+                <span className={`text-[11px] ${classes.textSecondary}`}>
+                  Showing {startIndex + 1}–{Math.min(startIndex + PAGE_SIZE, filtered.length)} of {filtered.length}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => setCurrentPage(page - 1)}
+                    disabled={page <= 1}
+                    className={`p-1.5 rounded-lg border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${isDark ? 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                  </button>
+                  <span className={`px-2 text-[11px] font-medium ${classes.textPrimary}`}>
+                    Page {page} of {totalPages}
+                  </span>
+                  <button
+                    onClick={() => setCurrentPage(page + 1)}
+                    disabled={page >= totalPages}
+                    className={`p-1.5 rounded-lg border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${isDark ? 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                  >
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )
       })()}
+
+      {/* Record Payment modal — same component & ledgerManager as the Reports ledger page */}
+      {paymentCustomer && (
+        <RecordPaymentModal
+          customer={paymentCustomer}
+          unpaidOrders={paymentUnpaidOrders}
+          customerSummary={paymentSummary}
+          userId={authManager.getCurrentUser()?.id}
+          onClose={closePaymentModal}
+          onPaymentRecorded={handlePaymentRecorded}
+        />
+      )}
+
       {/* Delete confirmation modal */}
       <AnimatePresence>
         {deleteTarget && (

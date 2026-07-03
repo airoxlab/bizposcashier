@@ -113,7 +113,10 @@ export default function GlobalFingerprintListener() {
       if (cancelled) return
       if (!initedRef.current) { ensureInit(); return }       // keep polling until logged in
       ticks++
-      if (!pausedRef.current && ticks % 15 === 0) loadTemplates() // ~every 60s
+      // ~every 60s: refresh templates, then (re)start scanning — without the
+      // maybeStart() the kiosk stayed dormant after the FIRST-ever enrollment
+      // because nothing kicked acquisition once templates appeared.
+      if (!pausedRef.current && ticks % 15 === 0) loadTemplates().then(() => maybeStart())
     }, 4000)
 
     return () => {
@@ -188,18 +191,46 @@ export default function GlobalFingerprintListener() {
       window.dispatchEvent(new CustomEvent('fp:device-status', { detail: { connected: false } }))
     })
     reader.on('AcquisitionStopped', () => { scanningRef.current = false })
-    try { await reader.enumerateDevices() } catch {}
+    // A reader already plugged in at startup fires no DeviceConnected event —
+    // surface it from the enumerate result so the settings panel / badges
+    // don't show a false "No reader" while the kiosk toggle is off.
+    try {
+      const devs = await reader.enumerateDevices()
+      if (devs?.length) {
+        window.__fpDeviceConnected = true
+        window.dispatchEvent(new CustomEvent('fp:device-status', { detail: { connected: true } }))
+      }
+    } catch {}
   }
 
   // Pause when any fingerprint UI (enroll tab in settings) takes the reader.
   useEffect(() => {
     const handler = (e) => {
       fpUiRef.current = !!e.detail?.active
-      if (fpUiRef.current) stopAcquire()
-      else if (!pausedRef.current && initedRef.current) maybeStart()
+      if (fpUiRef.current) { stopAcquire(); return }
+      if (pausedRef.current || !initedRef.current) return
+      // The enroll UI just closed — pull templates BEFORE resuming so a person
+      // enrolled seconds ago is recognized (and so the very first enrollment
+      // actually starts the kiosk instead of seeing an empty template list).
+      loadTemplates().then(() => maybeStart())
     }
     window.addEventListener('fp:ui-mode', handler)
     return () => window.removeEventListener('fp:ui-mode', handler)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Settings saved in the Fingerprint settings tab apply live — without this
+  // the kiosk kept the values loaded at init until an app restart.
+  useEffect(() => {
+    const handler = () => {
+      if (!initedRef.current) { ensureInit(); return }
+      loadSettings().then(() => {
+        if (!settingsRef.current.enabled) { stopAcquire(); return }
+        loadTemplates().then(() => maybeStart())
+      })
+    }
+    window.addEventListener('fp:settings-changed', handler)
+    return () => window.removeEventListener('fp:settings-changed', handler)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -256,7 +287,9 @@ export default function GlobalFingerprintListener() {
     } finally {
       setTimeout(() => {
         busyRef.current = false
-        if (!pausedRef.current) { stopAcquire().then(startAcquire) }
+        // maybeStart (not startAcquire) so the restart respects the same
+        // guards as everywhere else — enroll UI open, kiosk disabled, paused.
+        if (!pausedRef.current) { stopAcquire().then(() => maybeStart()) }
       }, RESCAN_DELAY_MS)
     }
   }, [])
