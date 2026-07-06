@@ -9,6 +9,7 @@ import { triggerAccountAutoSend } from '../../lib/accountAutoSend'
 import { themeManager } from '../../lib/themeManager'
 import { authManager } from '../../lib/authManager'
 import { printerManager } from '../../lib/printerManager'
+import { mapKitchenItems, buildKitchenTokenPayload, buildKitchenUserProfile, buildProductCategoryMap } from '../../lib/utils/printPayload'
 import { supabase } from '../../lib/supabase'
 import { notify } from '../../components/ui/NotificationSystem'
 import Modal from '../../components/ui/Modal'
@@ -17,6 +18,7 @@ import VariantSelectionScreen from '../../components/order/VariantSelectionScree
 import DealFlavorSelectionScreen from '../../components/order/DealFlavorSelectionScreen'
 import CartSidebar from '../../components/order/CartSidebar'
 import WalkinOrdersSidebar from '../../components/order/WalkinOrdersSidebar'
+import AddProductModal from '../../components/order/AddProductModal'
 import WalkinOrderDetails from '../../components/order/WalkinOrderDetails'
 import TableSelectionPanel from '../../components/order/TableSelectionPanel'
 import loyaltyManager from '../../lib/loyaltyManager'
@@ -116,6 +118,7 @@ export default function NewOrderPage() {
 
   // Modals
   const [showExitModal, setShowExitModal] = useState(false)
+  const [showAddProduct, setShowAddProduct] = useState(false)
 
   // Active orders sidebar
   const [selectedOrder, setSelectedOrder] = useState(null)
@@ -501,6 +504,59 @@ export default function NewOrderPage() {
     setSelectedDeal(deal)
     setDealProducts(products)
     setCurrentView('deal')
+  }
+
+  // Toggle a product/deal favorite from the POS. Persists to the shared
+  // products/deals rows (so it also reflects in bizpos-admin) and updates the
+  // in-memory cache. `entityType` is 'product' or 'deal'.
+  const handleToggleFavorite = async (item, entityType) => {
+    const next = !item.is_favorite
+
+    // Optimistic local update (new object refs so React re-renders).
+    if (entityType === 'deal') {
+      setDeals(prev => prev.map(d => (d.id === item.id ? { ...d, is_favorite: next } : d)))
+    } else {
+      setAllProducts(prev => prev.map(p => (p.id === item.id ? { ...p, is_favorite: next } : p)))
+    }
+
+    try {
+      await cacheManager.toggleFavorite(entityType, item.id, next)
+      toast.success(next ? 'Added to favorites' : 'Removed from favorites', { duration: 1000 })
+    } catch (e) {
+      // Revert optimistic change on failure.
+      if (entityType === 'deal') {
+        setDeals(prev => prev.map(d => (d.id === item.id ? { ...d, is_favorite: item.is_favorite } : d)))
+      } else {
+        setAllProducts(prev => prev.map(p => (p.id === item.id ? { ...p, is_favorite: item.is_favorite } : p)))
+      }
+      toast.error('Could not update favorite')
+    }
+  }
+
+  // Persist a drag-to-reorder from the POS ProductGrid: reindex sort_order for
+  // the moved category and write it to the shared products rows (also reflects
+  // in admin). Optimistic; reverts from the cache if the DB write fails.
+  const handleReorderProducts = async (categoryId, orderedIds) => {
+    const orderIndex = new Map(orderedIds.map((id, i) => [id, i]))
+    setAllProducts(prev =>
+      prev.map(p => (orderIndex.has(p.id) ? { ...p, sort_order: orderIndex.get(p.id) } : p))
+    )
+    try {
+      await cacheManager.reorderProducts(categoryId, orderedIds)
+    } catch {
+      setAllProducts([...cacheManager.getProducts()])
+      toast.error('Could not save the new order')
+    }
+  }
+
+  // Called after AddProductModal creates a product (and maybe a category).
+  // Push both into the cache so they persist + other views see them, then
+  // refresh local state so the grid shows the new product immediately.
+  const handleProductAdded = (product, category, variants) => {
+    if (category) cacheManager.addCategoryToCache(category)
+    cacheManager.addProductToCache(product, variants || null)
+    setCategories([...cacheManager.getCategories()])
+    setAllProducts([...cacheManager.getProducts()])
   }
 
   const handleAddToCart = (cartItem) => {
@@ -1098,39 +1154,10 @@ export default function NewOrderPage() {
         }
       }
 
-      const productCategoryMap = {}
-      cacheManager.cache?.products?.forEach(p => { productCategoryMap[p.id] = p.category_id })
+      const mappedItems = mapKitchenItems(orderItems, buildProductCategoryMap())
+      const orderData = buildKitchenTokenPayload(order, mappedItems)
 
-      const mappedItems = orderItems.map(item => item.is_deal
-        ? { isDeal: true, name: item.product_name, quantity: item.quantity, dealProducts: (() => { try { return typeof item.deal_products === 'string' ? JSON.parse(item.deal_products) : (item.deal_products || []) } catch(e) { return [] } })(), instructions: item.item_instructions || '', category_id: null, deal_id: item.deal_id || null }
-        : { isDeal: false, name: item.product_name, size: item.variant_name, quantity: item.quantity, instructions: item.item_instructions || '', category_id: item.category_id || productCategoryMap[item.product_id] || null, deal_id: null }
-      )
-
-      const orderData = {
-        orderNumber: order.order_number,
-        dailySerial: order.daily_serial || null,
-        orderType: order.order_type || 'walkin',
-        tableName: resolveTableName(order),
-        customerName: order.customers?.full_name || '',
-        customerPhone: order.customers?.phone || '',
-        specialNotes: order.order_instructions || '',
-        deliveryAddress: order.delivery_address || order.customers?.addressline || order.customers?.address || '',
-        items: mappedItems,
-        order_taker_name: order.order_takers?.name ||
-          (order.order_taker_id
-            ? (cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null)
-            : null)
-      }
-
-      const userProfileRaw = JSON.parse(localStorage.getItem('user_profile') || localStorage.getItem('user') || '{}')
-      const cashierName = order.cashier_id ? (order.cashiers?.name || 'Cashier') : (order.users?.customer_name || 'Admin')
-      const userProfile = {
-        store_name: userProfileRaw?.store_name || 'KITCHEN',
-        cashier_name: order.cashier_id ? cashierName : null,
-        customer_name: !order.cashier_id ? cashierName : null,
-      }
-
-      const results = await printerManager.printKitchenTokens(orderData, userProfile, printer)
+      const results = await printerManager.printKitchenTokens(orderData, buildKitchenUserProfile(order), printer)
       const allOk = results.every(r => r?.success)
       const anyOk = results.some(r => r?.success)
       if (allOk) {
@@ -1753,6 +1780,7 @@ export default function NewOrderPage() {
           deals={deals}
           onCategoryClick={(id) => productGridRef.current?.scrollToCategory(id)}
           onDealsClick={() => productGridRef.current?.scrollToDeals()}
+          onFavoritesClick={() => productGridRef.current?.scrollToFavorites()}
           onTypeTabChange={handleTabSwitch}
           onQuickComplete={handleQuickCompleteOrder}
         />
@@ -1766,6 +1794,9 @@ export default function NewOrderPage() {
           allProducts={allProducts}
           onProductClick={handleProductClick}
           onDealClick={handleDealClick}
+          onToggleFavorite={handleToggleFavorite}
+          onAddProduct={() => setShowAddProduct(true)}
+          onReorderProducts={handleReorderProducts}
           classes={classes}
           isDark={isDark}
           networkStatus={networkStatus}
@@ -1996,6 +2027,16 @@ export default function NewOrderPage() {
           </div>
         </div>
       </Modal>
+
+      {/* Add Product (basic info only) */}
+      <AddProductModal
+        isOpen={showAddProduct}
+        onClose={() => setShowAddProduct(false)}
+        categories={categories}
+        menus={menus}
+        isDark={isDark}
+        onSuccess={handleProductAdded}
+      />
     </div>
   )
 }

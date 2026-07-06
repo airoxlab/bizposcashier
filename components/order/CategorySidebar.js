@@ -153,7 +153,7 @@ export default function CategorySidebar({
                 whileHover={{ scale: 1.08 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={onOrdersClick}
-                className={`px-2.5 py-2 rounded-lg transition-all relative flex items-center gap-1.5 border ${
+                className={`px-2.5 py-2 rounded-lg transition-all relative flex flex-col items-center gap-0.5 border ${
                   showOrdersView
                     ? (isDark ? 'bg-blue-600/30 border-blue-500' : 'bg-blue-100 border-blue-400')
                     : (isDark ? 'bg-blue-900/20 border-blue-800/40 hover:bg-blue-900/40' : 'bg-blue-50 border-blue-200 hover:bg-blue-100')
@@ -172,7 +172,7 @@ export default function CategorySidebar({
                 whileHover={{ scale: 1.08 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={onTableClick}
-                className={`px-2.5 py-2 rounded-lg transition-all relative flex items-center gap-1.5 border ${
+                className={`px-2.5 py-2 rounded-lg transition-all relative flex flex-col items-center gap-0.5 border ${
                   selectedTable
                     ? (isDark ? 'bg-green-600/30 border-green-500' : 'bg-green-100 border-green-400')
                     : (isDark ? 'bg-green-900/20 border-green-800/40 hover:bg-green-900/40' : 'bg-green-50 border-green-200 hover:bg-green-100')

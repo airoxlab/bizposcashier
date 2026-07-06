@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   ArrowLeft, Settings, User, Users, Palette, Download,
   Smartphone, Monitor, HardDrive, MessageSquare, CreditCard,
-  Zap, Wifi, WifiOff, FlaskConical, Fingerprint, BarChart2, Receipt,
+  Zap, Wifi, WifiOff, Fingerprint, BarChart2, Receipt,
   SlidersHorizontal,
 } from 'lucide-react'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -60,6 +60,7 @@ const PANEL_TITLES = {
   'customer-account': { title: 'Customer Account',   sub: 'Account payment alerts, receipt images & WhatsApp notifications' },
   'pra-receipt':      { title: 'PRA Receipt Settings', sub: 'Choose what prints on Proforma & PRA fiscal invoices' },
   mobile:           { title: 'Mobile App',            sub: 'Mobile app integration coming soon' },
+  fingerprint:      { title: 'Fingerprint Attendance', sub: 'Attendance kiosk — enrollment, check-in/out & kiosk settings' },
   updates:          { title: 'App Updates',           sub: 'Check and install the latest app updates' },
   backup:           { title: 'Backup & Recovery',     sub: 'Backup offline data and recover lost orders' },
   plan:             { title: 'Plan & Billing',        sub: 'Your subscription details and available plans' },
@@ -181,7 +182,7 @@ function SettingsContent() {
 
           {/* Offline Test Toggle */}
           <div className={`p-2.5 ${classes.border} border-t`}>
-            <h3 className={`text-[10px] font-semibold ${classes.textSecondary} uppercase tracking-wider mb-2`}>Developer</h3>
+            <h3 className={`text-[10px] font-semibold ${classes.textSecondary} uppercase tracking-wider mb-2`}>Connection</h3>
             <motion.button
               whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}
               onClick={handleForceOfflineToggle}
@@ -197,15 +198,15 @@ function SettingsContent() {
                 }`}>
                   {forceOffline
                     ? <WifiOff className="w-4 h-4 text-red-500" />
-                    : <FlaskConical className={`w-4 h-4 ${isDark ? 'text-gray-400' : 'text-gray-500'}`} />
+                    : <WifiOff className={`w-4 h-4 ${isDark ? 'text-gray-400' : 'text-gray-500'}`} />
                   }
                 </div>
                 <div className="flex-1 min-w-0 text-left">
                   <div className={`font-semibold text-xs ${forceOffline ? 'text-red-500' : classes.textPrimary}`}>
-                    {forceOffline ? 'Offline Mode ON' : 'Simulate Offline'}
+                    {forceOffline ? 'Offline Mode On' : 'Run in Offline Mode'}
                   </div>
                   <div className={`text-[10px] ${forceOffline ? 'text-red-400' : classes.textSecondary}`}>
-                    {forceOffline ? 'Tap to restore connection' : 'Test offline features'}
+                    {forceOffline ? 'Tap to go back online' : 'Use the app without an internet connection'}
                   </div>
                 </div>
                 <div className={`w-8 h-4 rounded-full transition-all duration-300 flex items-center ${
@@ -220,10 +221,14 @@ function SettingsContent() {
 
         {/* Main Content */}
         <div className={`flex-1 flex flex-col ${isDark ? 'bg-gray-900' : 'bg-gray-50'}`}>
-          {/* Content Header */}
+          {/* Content Header — inner constrained to the same width as the panels
+              below (max-w-5xl) so the title sits directly above the content
+              instead of floating to the far left on wide screens. */}
           <div className={`${classes.card} ${classes.shadow} shadow-sm ${classes.border} border-b p-3`}>
-            <h1 className={`text-xl font-bold ${classes.textPrimary}`}>{title}</h1>
-            <p className={`${classes.textSecondary} text-xs`}>{sub}</p>
+            <div className="max-w-5xl mx-auto">
+              <h1 className={`text-xl font-bold ${classes.textPrimary}`}>{title}</h1>
+              <p className={`${classes.textSecondary} text-xs`}>{sub}</p>
+            </div>
           </div>
 
           {/* Panel Content */}
@@ -243,7 +248,7 @@ function SettingsContent() {
                   </div>
                   <h3 className={`text-lg font-semibold mb-2 ${classes.textPrimary}`}>This section requires internet</h3>
                   <p className={`text-sm ${classes.textSecondary}`}>
-                    {title} loads and saves data from the server. {forceOffline ? 'Turn off Simulate Offline' : 'Reconnect to the internet'} to use it.
+                    {title} loads and saves data from the server. {forceOffline ? 'Turn off Offline Mode' : 'Reconnect to the internet'} to use it.
                   </p>
                 </motion.div>
               ) : (

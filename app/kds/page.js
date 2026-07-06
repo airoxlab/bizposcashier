@@ -48,6 +48,7 @@ import { printerManager } from '../../lib/printerManager'
 import dailySerialManager from '../../lib/utils/dailySerialManager'
 import { getTodaysBusinessDate, filterOrdersByBusinessDate, getBusinessDayRange } from '../../lib/utils/businessDayUtils'
 import { getOrderChanges, getOrderItemsWithChanges, getCurrentUpdateVersion } from '../../lib/utils/orderChangesTracker'
+import { mapKitchenItems, buildKitchenTokenPayload, buildKitchenUserProfile, buildProductCategoryMap } from '../../lib/utils/printPayload'
 import { fetchOpenAmendments, updateAmendmentStatus } from '../../lib/utils/kdsAmendments'
 import { triggerWhatsAppAutoSend } from '../../lib/whatsappAutoSend'
 import NotificationSystem, { notify } from '../../components/ui/NotificationSystem'
@@ -1170,42 +1171,9 @@ export default function KDSPage() {
       // Get order items
       let orderItems = order.order_items || []
 
-      // Prepare order data for kitchen token - must match expected format
-      const productCategoryMap = {}
-      cacheManager.cache?.products?.forEach(p => { productCategoryMap[p.id] = p.category_id })
-
-      let mappedItems = orderItems.map((item) => {
-        if (item.is_deal) {
-          let dealProducts = []
-          try {
-            if (item.deal_products) {
-              dealProducts = typeof item.deal_products === 'string'
-                ? JSON.parse(item.deal_products)
-                : item.deal_products
-            }
-          } catch (e) {
-            console.error('Failed to parse deal_products:', e)
-          }
-          return {
-            isDeal: true,
-            name: item.product_name || item.deal_name,
-            quantity: item.quantity,
-            dealProducts: dealProducts,
-            instructions: item.item_instructions || item.instructions || '',
-            category_id: null,
-            deal_id: item.deal_id || null,
-          }
-        }
-        return {
-          isDeal: false,
-          name: item.product_name || item.deal_name,
-          size: item.variant_name || '',
-          quantity: item.quantity,
-          instructions: item.item_instructions || item.instructions || '',
-          category_id: item.category_id || productCategoryMap[item.product_id] || null,
-          deal_id: null,
-        }
-      })
+      // Prepare order data for kitchen token — shared mapper handles the
+      // item_instructions → instructions rename and category routing lookup.
+      let mappedItems = mapKitchenItems(orderItems, buildProductCategoryMap())
 
       // For update prints: apply change markers so printer shows only what changed.
       // For normal full prints: skip so kitchen gets the clean current order.
@@ -1213,50 +1181,15 @@ export default function KDSPage() {
         mappedItems = await getOrderItemsWithChanges(order.id, mappedItems)
       }
 
-      const orderData = {
-        orderNumber: order.order_number,
-        dailySerial: order.daily_serial || null,
+      const orderData = buildKitchenTokenPayload(order, mappedItems, {
         updateVersion: updateVersion || null,
-        orderType: order.order_type || 'walkin',
-        customerName: order.customers?.full_name || '',
-        customerPhone: order.customers?.phone || '',
-        totalAmount: order.total_amount || 0,
-        subtotal: order.subtotal || order.total_amount || 0,
-        deliveryCharges: order.delivery_charges || 0,
-        discountAmount: order.discount_amount || 0,
-        specialNotes: order.order_instructions || '',
-        tableName: order.tables?.table_name || (order.tables?.table_number ? `Table ${order.tables.table_number}` : null) || null,
-        deliveryAddress: order.delivery_address || order.customers?.addressline || order.customers?.address || '',
-        items: mappedItems,
-        order_taker_name: order.order_takers?.name ||
-          (order.order_taker_id
-            ? (cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null)
-            : null)
-      }
-
-      // Get user profile
-      const userProfileRaw = JSON.parse(
-        localStorage.getItem('user_profile') ||
-        localStorage.getItem('user') ||
-        '{}'
-      )
-
-      // Get cashier/admin name from order
-      const cashierName = order.cashier_id
-        ? (order.cashiers?.name || 'Cashier')
-        : (order.users?.customer_name || 'Admin')
-
-      const userProfile = {
-        store_name: userProfileRaw?.store_name || 'KITCHEN',
-        // Add cashier/admin name for kitchen token printing
-        cashier_name: order.cashier_id ? cashierName : null,
-        customer_name: !order.cashier_id ? cashierName : null,
-      }
+        changesOnly,
+      })
 
       console.log('🖨️ Printing docket for order:', orderData.orderNumber)
       console.log('🖨️ Final printer config:', JSON.stringify(printerConfig, null, 2))
 
-      const results = await printerManager.printKitchenTokens(orderData, userProfile, printerConfig)
+      const results = await printerManager.printKitchenTokens(orderData, buildKitchenUserProfile(order), printerConfig)
       const allOk = results.every(r => r?.success)
       const anyOk = results.some(r => r?.success)
       if (allOk) {

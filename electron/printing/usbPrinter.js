@@ -766,6 +766,10 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
   // printer re-centers them and they shift relative to the rows above.
   const printItem = (item, prefix) => {
     const maxNameLength = PAPER_WIDTH - 6;
+    // Per-item note — payloads reach here with several historical key names
+    // (instructions, notes, itemInstructions, item_instructions). Accept all
+    // of them so a caller variation can never silently drop a kitchen note.
+    const itemNote = item.instructions || item.notes || item.itemInstructions || item.item_instructions;
     // Trim — DB-stored names sometimes carry leading/trailing whitespace, which
     // would shift the printed name right relative to the "Item Name" header.
     if (item.isDeal) {
@@ -783,16 +787,16 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
         if (variantName) productLine += ` - ${String(variantName).trim()}`;
         commands.push(padToWidth(productLine));
       }
-      if (item.instructions) {
-        commands.push(padToWidth(`  * ${String(item.instructions).trim()}`));
+      if (itemNote) {
+        commands.push(padToWidth(`  * ${String(itemNote).trim()}`));
       }
     } else {
       let itemName = (item.name || '').trim();
       if (item.size) itemName = `${itemName} (${String(item.size).trim()})`;
       if (itemName.length > maxNameLength) itemName = itemName.substring(0, maxNameLength);
       commands.push(leftRight(`${prefix}${itemName}`, String(item.quantity)));
-      if (item.instructions) {
-        commands.push(padToWidth(`  * ${String(item.instructions).trim()}`));
+      if (itemNote) {
+        commands.push(padToWidth(`  * ${String(itemNote).trim()}`));
       }
     }
   };
@@ -885,11 +889,15 @@ async function generateKitchenTokenESCPOS(orderData, userProfile) {
   // ========================================
   // SPECIAL NOTES
   // ========================================
-  if (orderData.specialNotes || orderData.notes) {
+  // Order-level note — accept every historical key name so a payload variation
+  // can never silently drop the cart note from the kitchen token.
+  const orderNote = orderData.specialNotes || orderData.notes ||
+    orderData.orderInstructions || orderData.order_instructions;
+  if (orderNote) {
     commands.push(CMD.BOLD_ON);
     commands.push(leftText('SPECIAL NOTES:'));
     commands.push(CMD.BOLD_OFF);
-    commands.push(wrapText(orderData.specialNotes || orderData.notes, 0));
+    commands.push(wrapText(String(orderNote), 0));
     commands.push(drawLine('-'));
   }
 

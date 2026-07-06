@@ -13,6 +13,7 @@ import loyaltyManager from '../../lib/loyaltyManager'
 import { webOrderNotificationManager } from '../../lib/webOrderNotification'
 import { notify } from '../../components/ui/NotificationSystem'
 import { getOrderItemsWithChanges, saveChangesOffline, applyChangesToItems } from '../../lib/utils/orderChangesTracker'
+import { mapKitchenItems, buildKitchenTokenPayload, buildKitchenUserProfile, buildProductCategoryMap } from '../../lib/utils/printPayload'
 import Modal from '../../components/ui/Modal'
 import WalkInCustomerForm from '../../components/pos/WalkInCustomerForm'
 import CategorySidebar from '../../components/order/CategorySidebar'
@@ -22,6 +23,7 @@ import DealFlavorSelectionScreen from '../../components/order/DealFlavorSelectio
 import CartSidebar from '../../components/order/CartSidebar'
 import TableSelectionPanel from '../../components/order/TableSelectionPanel'
 import WalkinOrdersSidebar from '../../components/order/WalkinOrdersSidebar'
+import AddProductModal from '../../components/order/AddProductModal'
 import WalkinOrderDetails from '../../components/order/WalkinOrderDetails'
 import SplitPaymentModal from '../../components/pos/SplitPaymentModal'
 import { FileText, Check, Eye, Printer, X } from 'lucide-react'
@@ -409,6 +411,54 @@ export default function WalkInPage() {
       console.warn('   1. Deals exist in the database')
       console.warn('   2. Deals have is_active = true')
       console.warn('   3. Deals belong to the current user')
+    }
+  }
+
+  // Toggle a product/deal favorite from the POS. Persists to the shared
+  // products/deals rows (so it also reflects in bizpos-admin) and updates the
+  // in-memory cache. `entityType` is 'product' or 'deal'.
+  const handleToggleFavorite = async (item, entityType) => {
+    const next = !item.is_favorite
+    if (entityType === 'deal') {
+      setDeals(prev => prev.map(d => (d.id === item.id ? { ...d, is_favorite: next } : d)))
+    } else {
+      setAllProducts(prev => prev.map(p => (p.id === item.id ? { ...p, is_favorite: next } : p)))
+    }
+    try {
+      await cacheManager.toggleFavorite(entityType, item.id, next)
+      toast.success(next ? 'Added to favorites' : 'Removed from favorites', { duration: 1000 })
+    } catch (e) {
+      if (entityType === 'deal') {
+        setDeals(prev => prev.map(d => (d.id === item.id ? { ...d, is_favorite: item.is_favorite } : d)))
+      } else {
+        setAllProducts(prev => prev.map(p => (p.id === item.id ? { ...p, is_favorite: item.is_favorite } : p)))
+      }
+      toast.error('Could not update favorite')
+    }
+  }
+
+  // Persist a drag-to-reorder from the POS ProductGrid: reindex sort_order for
+  // the moved category and write it to the shared products rows (also reflects
+  // in admin). Optimistic; reverts from the cache if the DB write fails.
+  const [showAddProduct, setShowAddProduct] = useState(false)
+
+  const handleProductAdded = (product, category, variants) => {
+    if (category) cacheManager.addCategoryToCache(category)
+    cacheManager.addProductToCache(product, variants || null)
+    setCategories([...cacheManager.getCategories()])
+    setAllProducts([...cacheManager.getProducts()])
+  }
+
+  const handleReorderProducts = async (categoryId, orderedIds) => {
+    const orderIndex = new Map(orderedIds.map((id, i) => [id, i]))
+    setAllProducts(prev =>
+      prev.map(p => (orderIndex.has(p.id) ? { ...p, sort_order: orderIndex.get(p.id) } : p))
+    )
+    try {
+      await cacheManager.reorderProducts(categoryId, orderedIds)
+    } catch {
+      setAllProducts([...cacheManager.getProducts()])
+      toast.error('Could not save the new order')
     }
   }
 
@@ -2519,51 +2569,9 @@ export default function WalkInPage() {
         orderItems = order.order_items || order.items || []
       }
 
-      // Prepare order data for kitchen token
-      // Build product→category lookup for routing
-      const productCategoryMap = {}
-      cacheManager.cache?.products?.forEach(p => { productCategoryMap[p.id] = p.category_id })
-
-      let mappedItems = orderItems.map((item) => {
-        if (item.is_deal) {
-          let dealProducts = []
-          try {
-            if (item.deal_products) {
-              dealProducts = typeof item.deal_products === 'string'
-                ? JSON.parse(item.deal_products)
-                : item.deal_products
-            }
-          } catch (e) {
-            console.error('Failed to parse deal_products:', e)
-          }
-          return {
-            isDeal: true,
-            name: item.product_name,
-            quantity: item.quantity,
-            dealProducts: dealProducts,
-            productId: item.product_id,
-            variantId: item.variant_id,
-            productName: item.product_name,
-            variantName: item.variant_name,
-            instructions: item.item_instructions || '',
-            category_id: null,
-            deal_id: item.deal_id || null
-          }
-        }
-        return {
-          isDeal: false,
-          name: item.product_name,
-          size: item.variant_name,
-          quantity: item.quantity,
-          productId: item.product_id,
-          variantId: item.variant_id,
-          productName: item.product_name,
-          variantName: item.variant_name,
-          instructions: item.item_instructions || '',
-          category_id: item.category_id || productCategoryMap[item.product_id] || null,
-          deal_id: null
-        }
-      })
+      // Prepare order data for kitchen token — shared mapper handles the
+      // item_instructions → instructions rename and category routing lookup.
+      let mappedItems = mapKitchenItems(orderItems, buildProductCategoryMap())
 
       // Pre-payment print for a reopened order: compute the diff locally and apply
       // it directly WITHOUT hitting the DB. If we let getOrderItemsWithChanges go to
@@ -2627,41 +2635,9 @@ export default function WalkInPage() {
         mappedItems = await getOrderItemsWithChanges(order.id, mappedItems)
       }
 
-      const orderData = {
-        orderNumber: order.order_number,
-        dailySerial: order.daily_serial || null,
-        orderType: order.order_type || 'walkin',
-        customerName: order.customers?.full_name || '',
-        customerPhone: order.customers?.phone || '',
-        specialNotes: order.order_instructions || '',
-        tableName: resolveTableName(order),
-        items: mappedItems,
-        order_taker_name: order.order_takers?.name ||
-          (order.order_taker_id
-            ? (cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null)
-            : null)
-      }
+      const orderData = buildKitchenTokenPayload(order, mappedItems)
 
-      // Get user profile
-      const userProfileRaw = JSON.parse(
-        localStorage.getItem('user_profile') ||
-        localStorage.getItem('user') ||
-        '{}'
-      )
-
-      // Get cashier/admin name from order
-      const cashierName = order.cashier_id
-        ? (order.cashiers?.name || 'Cashier')
-        : (order.users?.customer_name || 'Admin')
-
-      const userProfile = {
-        store_name: userProfileRaw?.store_name || 'KITCHEN',
-        // Add cashier/admin name for kitchen token printing
-        cashier_name: order.cashier_id ? cashierName : null,
-        customer_name: !order.cashier_id ? cashierName : null,
-      }
-
-      const results = await printerManager.printKitchenTokens(orderData, userProfile, printer)
+      const results = await printerManager.printKitchenTokens(orderData, buildKitchenUserProfile(order), printer)
 
       const allOk = results.every(r => r?.success)
       const anyOk = results.some(r => r?.success)
@@ -2974,6 +2950,9 @@ export default function WalkInPage() {
           allProducts={allProducts}
           onProductClick={handleProductClick}
           onDealClick={handleDealClick}
+          onToggleFavorite={handleToggleFavorite}
+          onReorderProducts={handleReorderProducts}
+          onAddProduct={() => setShowAddProduct(true)}
           classes={classes}
           isDark={isDark}
           networkStatus={networkStatus}
@@ -3270,6 +3249,14 @@ export default function WalkInPage() {
         />
       )}
 
+      <AddProductModal
+        isOpen={showAddProduct}
+        onClose={() => setShowAddProduct(false)}
+        categories={categories}
+        menus={menus}
+        isDark={isDark}
+        onSuccess={handleProductAdded}
+      />
       </div>
     </ProtectedPage>
   )

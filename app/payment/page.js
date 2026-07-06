@@ -45,6 +45,7 @@ import { notify } from '../../components/ui/NotificationSystem'
 import { supabase } from '../../lib/supabase'
 import { permissionManager } from '../../lib/permissionManager'
 import { getOrderItemsWithChanges, getCurrentUpdateVersion } from '../../lib/utils/orderChangesTracker'
+import { mapKitchenItems, buildProductCategoryMap } from '../../lib/utils/printPayload'
 import LoyaltyRedemption from '../../components/pos/LoyaltyRedemption'
 import SplitPaymentModal from '../../components/pos/SplitPaymentModal'
 import paymentTransactionManager from '../../lib/paymentTransactionManager'
@@ -1856,22 +1857,9 @@ const handlePrintKitchenToken = async () => {
     const finalOrderDataStr = localStorage.getItem('final_order_data')
     const finalOrderData = finalOrderDataStr ? JSON.parse(finalOrderDataStr) : null
 
-    // Build a product lookup for category_id fallback (cart items may not carry it)
-    const productCategoryMap = {}
-    cacheManager.cache?.products?.forEach(p => { productCategoryMap[p.id] = p.category_id })
-
-    // Map cart items
-    let mappedItems = orderData.cart?.map(item => ({
-      name: item.isDeal ? item.dealName : (item.productName || item.name),
-      size: item.isDeal ? '' : (item.variantName || item.size || ''),
-      quantity: item.quantity,
-      notes: item.notes || '',
-      isDeal: item.isDeal || false,
-      dealProducts: item.isDeal ? item.dealProducts : null,
-      instructions: item.itemInstructions || '',
-      category_id: item.isDeal ? null : (item.category_id || productCategoryMap[item.productId] || null),
-      deal_id: item.isDeal ? (item.dealId || item.deal_id || null) : null
-    })) || []
+    // Map cart items — shared mapper handles camelCase cart fields
+    // (itemInstructions → instructions) and the category routing lookup.
+    let mappedItems = mapKitchenItems(orderData.cart, buildProductCategoryMap())
 
     // 🆕 Check for order changes
     if (orderData.isModifying && orderData.detailedChanges) {

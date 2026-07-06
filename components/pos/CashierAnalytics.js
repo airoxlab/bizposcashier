@@ -413,9 +413,32 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
 
   // ── Cash-up: gather this cashier's shift figures and open the panel ──
   const openCashReport = useCallback(async () => {
-    const cashier = authManager.getCashier()
-    const user    = authManager.getCurrentUser()
-    if (!cashier?.id || !user?.id) { notify.error('Cash report is only for cashier logins'); return }
+    const user         = authManager.getCurrentUser()
+    const loginCashier = authManager.getCashier()   // null for an admin/owner login
+    if (!user?.id) { notify.error('Please log in first'); return }
+
+    // Resolve WHO the report is for ("the subject").
+    //  • Cashier login   → always themselves; the shift snapshot is saved so the
+    //    admin can reconcile it later (save block gated on the LOGIN cashier).
+    //  • Admin/owner login → follow the analytics view filter, so "what you see is
+    //    what you print":
+    //      – a specific cashier selected → that cashier's shift
+    //      – 'All' / 'My Orders'         → the whole business day (owner's drawer)
+    //    Admin prints for their records but never overwrites a cashier's own saved
+    //    declaration, and skips the owner-fingerprint gate (they ARE the owner).
+    let subjectCashierId = null   // null ⇒ whole business (no per-cashier filter)
+    let subjectName
+    if (loginCashier?.id) {
+      subjectCashierId = loginCashier.id
+      subjectName      = loginCashier.name || 'Cashier'
+    } else if (viewFilter && viewFilter !== 'all' && viewFilter !== 'me') {
+      subjectCashierId = viewFilter
+      subjectName      = cashierList.find(c => c.id === viewFilter)?.name || 'Cashier'
+    } else {
+      subjectCashierId = null
+      subjectName      = authManager.getDisplayName() || 'Owner'
+    }
+    const canSave = !!loginCashier?.id   // only a cashier's own count is persisted
 
     setCashupLoading(true)
     setCashupOpen(true)
@@ -451,12 +474,12 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
 
       // Reference the active session id (only for the saved snapshot), if any.
       let sessionId = null
-      if (online) {
+      if (online && subjectCashierId) {
         try {
           const { data: sess } = await supabase
             .from('cashier_sessions')
             .select('id')
-            .eq('cashier_id', cashier.id)
+            .eq('cashier_id', subjectCashierId)
             .eq('is_active', true)
             .order('login_time', { ascending: false })
             .limit(1)
@@ -469,8 +492,10 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
       //     can be printed (payroll settings in bizpos-admin). The gate is
       //     enforced only where it can physically work — the unlock component
       //     reports 'unsupported' (browser) / 'not_enrolled' and we fail open.
+      //     Skipped entirely for an admin/owner login — they are the owner, so
+      //     there is no one else to authorize the shift close.
       let requireFp = false
-      if (online) {
+      if (online && canSave) {
         try {
           const { data: ps } = await supabase
             .from('payroll_settings')
@@ -481,25 +506,32 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
         } catch {}
       }
 
-      // 2) This cashier's orders inside the shift window.
-      //    Attribution is EXCLUSIVE so the same order can never appear in two
-      //    cashiers' drawers: it belongs to the cashier who cashiered it
-      //    (cashier_id); order_taker_id only counts when no cashier is set.
+      // 2) Orders inside the shift window.
+      //    Per-cashier subject: attribution is EXCLUSIVE so the same order can
+      //    never appear in two cashiers' drawers — it belongs to the cashier who
+      //    cashiered it (cashier_id); order_taker_id only counts when no cashier
+      //    is set. Whole-business subject (admin, no cashier): every order for the
+      //    day, matching what the analytics panel shows.
       let orders = []
       if (online) {
-        const { data } = await supabase
+        let q = supabase
           .from('orders')
           .select('id,cashier_id,order_taker_id,order_status,payment_method,total_amount,created_at')
           .eq('user_id', user.id)
           .gte('created_at', shiftStart)
           .lt('created_at', shiftEnd)
-          .or(`cashier_id.eq.${cashier.id},and(cashier_id.is.null,order_taker_id.eq.${cashier.id})`)
+        if (subjectCashierId) {
+          q = q.or(`cashier_id.eq.${subjectCashierId},and(cashier_id.is.null,order_taker_id.eq.${subjectCashierId})`)
+        }
+        const { data } = await q
         orders = data || []
       } else {
         const s = new Date(shiftStart), e = new Date(shiftEnd)
         orders = (cacheManager.cache?.orders || []).filter(o => {
-          const mine = o.cashier_id === cashier.id || (!o.cashier_id && o.order_taker_id === cashier.id)
-          if (!mine) return false
+          if (subjectCashierId) {
+            const mine = o.cashier_id === subjectCashierId || (!o.cashier_id && o.order_taker_id === subjectCashierId)
+            if (!mine) return false
+          }
           const ts = new Date(o.created_at)
           return ts >= s && ts < e
         })
@@ -526,13 +558,14 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
       const payoutsByMethod = {}
       if (online) {
         try {
-          const { data: exps } = await supabase
+          let eq = supabase
             .from('expenses')
             .select('amount,total_amount,payment_method,created_at,cashier_id')
             .eq('user_id', user.id)
-            .eq('cashier_id', cashier.id)
             .gte('created_at', shiftStart)
             .lt('created_at', shiftEnd)
+          if (subjectCashierId) eq = eq.eq('cashier_id', subjectCashierId)
+          const { data: exps } = await eq
           ;(exps || []).forEach(ex => {
             const k = (ex.payment_method || '').toLowerCase().trim()
             if (!k) return
@@ -557,13 +590,18 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
             .eq('user_id', user.id)
             .gte('created_at', shiftStart)
             .lt('created_at', shiftEnd)
-          const myNames = [cashier.name, authManager.getDisplayName()]
-            .filter(Boolean).map(n => n.toLowerCase().trim())
+          // Per-cashier subject: only payments this cashier collected. Whole
+          // business (admin): every collector counts, so myNames is null.
+          const myNames = subjectCashierId
+            ? [subjectName].filter(Boolean).map(n => n.toLowerCase().trim())
+            : null
           ;(pays || []).forEach(p => {
-            const who  = (p.collected_by_name || '').toLowerCase().trim()
-            const role = (p.collected_by_role || '').toLowerCase()
-            if (!who || !myNames.includes(who)) return
-            if (role && role !== 'cashier') return
+            if (myNames) {
+              const who  = (p.collected_by_name || '').toLowerCase().trim()
+              const role = (p.collected_by_role || '').toLowerCase()
+              if (!who || !myNames.includes(who)) return
+              if (role && role !== 'cashier') return
+            }
             const k = (p.payment_method || '').toLowerCase().trim()
             if (!k) return
             payInByMethod[k] = (payInByMethod[k] || 0) + (parseFloat(p.amount_received) || 0)
@@ -576,12 +614,12 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
       //    cash-ups from earlier the SAME day — reusing today's counted cash as the
       //    float would double-count today's cash sales.
       let openingFloat = 0
-      if (online) {
+      if (online && subjectCashierId) {
         try {
           const { data: last } = await supabase
             .from('cashier_cashups')
             .select('total_counted_cash, created_at')
-            .eq('cashier_id', cashier.id)
+            .eq('cashier_id', subjectCashierId)
             .lt('created_at', shiftStart)
             .order('created_at', { ascending: false })
             .limit(1)
@@ -665,7 +703,8 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
 
       setCashup({
         shiftStart, shiftEnd, sessionId,
-        cashierName: cashier.name || 'Cashier',
+        cashierName: subjectName,
+        canSave,
         storeName: profile.store_name || profile.customer_name || '',
         orderCount: nonCancelled.length,
         openingFloat: String(Math.round(openingFloat)),
@@ -681,7 +720,7 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
     } finally {
       setCashupLoading(false)
     }
-  }, [accounts, loadAccounts])
+  }, [accounts, loadAccounts, viewFilter, cashierList])
 
   const setCounted = (id, val) => {
     setCashup(c => c ? { ...c, lines: c.lines.map(l => l.id === id ? { ...l, counted: val } : l) } : c)
@@ -836,7 +875,10 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
   const textSec = isDark ? 'text-gray-400' : 'text-gray-500'
   const cardBg  = isDark ? 'bg-gray-800/60' : 'bg-gray-50'
 
-  const isCashier = !!authManager.getCashier()?.id
+  // Cash Report is available to any logged-in user. A cashier reports on their
+  // own shift (and saves the snapshot); an admin/owner prints for the currently
+  // selected view (a chosen cashier, or the whole business day).
+  const canShowCashReport = !!authManager.getCurrentUser()?.id
 
   // Format business window label
   let bizLabel = 'Today\'s business day'
@@ -875,7 +917,7 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {isCashier && (
+            {canShowCashReport && (
               <button
                 onClick={openCashReport}
                 className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium transition-colors bg-emerald-500 hover:bg-emerald-600 text-white"
@@ -1322,7 +1364,9 @@ function CashUpPanel({ isDark, loading, saving, cashup, calc, fmtTime, fpGate, o
             ? 'Count the drawer and enter the counted cash to enable Print & Save.'
             : fpGate?.active
               ? 'Owner fingerprint required — place the owner’s finger on the reader to unlock printing.'
-              : 'Prints on the thermal printer and saves a snapshot your admin can reconcile. It does not log you out or move money.'}
+              : cashup?.canSave === false
+                ? 'Prints on the thermal printer for your records. It does not save a cashier snapshot, log you out, or move money.'
+                : 'Prints on the thermal printer and saves a snapshot your admin can reconcile. It does not log you out or move money.'}
         </p>
         <button
           onClick={onPrint}

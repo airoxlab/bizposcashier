@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+/* Drive Tailwind's `dark:` variant from the `.dark` class that themeManager
+   toggles on <html>, NOT the OS `prefers-color-scheme`. Without this, Tailwind
+   v4 defaults `dark:` to a media query, so `dark:` styling followed the user's
+   Windows theme instead of the in-app Light/Dark toggle (e.g. dark cards on a
+   Light POS). The old `darkMode: 'class'` in tailwind.config.js is a v3 setting
+   that v4 ignores; this directive is the v4 equivalent. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* Clean CSS Variables for Theme Manager */
 :root {
   --theme-bg: #ffffff;

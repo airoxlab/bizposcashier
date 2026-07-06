@@ -39,6 +39,7 @@ import AssignRiderButton from '../delivery/AssignRiderButton'
 import { cacheManager } from '../../lib/cacheManager'
 import { useRouter } from 'next/navigation'
 import { getOrderChanges, getOrderItemsWithChanges, getCurrentUpdateVersion, clearOrderChangeTracking } from '../../lib/utils/orderChangesTracker'
+import { mapKitchenItems, buildKitchenTokenPayload, buildKitchenUserProfile, buildProductCategoryMap } from '../../lib/utils/printPayload'
 import SendBillButton from '../pos/SendBillButton'
 import { getBusinessDate } from '../../lib/utils/businessDayUtils'
 
@@ -190,16 +191,7 @@ export default function WalkinOrderDetails({
       }
       if (!items.length) items = order.order_items || order.items || []
 
-      const productCategoryMap = {}
-      try {
-        const { cacheManager } = await import('@/lib/cacheManager')
-        cacheManager.cache?.products?.forEach(p => { productCategoryMap[p.id] = p.category_id })
-      } catch (e) {}
-
-      let mappedItems = items.map(item => item.is_deal
-        ? { isDeal: true, name: item.product_name, quantity: item.quantity, deal_id: item.deal_id || null, category_id: null, dealProducts: (() => { try { return typeof item.deal_products === 'string' ? JSON.parse(item.deal_products) : (item.deal_products || []) } catch(e) { return [] } })(), instructions: item.item_instructions || '' }
-        : { isDeal: false, name: item.product_name, size: item.variant_name, quantity: item.quantity, category_id: item.category_id || productCategoryMap[item.product_id] || null, deal_id: null, instructions: item.item_instructions || '' }
-      )
+      let mappedItems = mapKitchenItems(items, buildProductCategoryMap())
 
       // Enrich items with change markers only when explicitly printing an update
       if (isUpdated && order.id) {
@@ -209,31 +201,14 @@ export default function WalkinOrderDetails({
       const dailySerial = order.daily_serial || dailySerialManager.getOrCreateSerial(order.order_number) || null
       const updateVersion = isUpdated ? getCurrentUpdateVersion(order.id) : null
 
-      const orderData = {
-        orderNumber: order.order_number,
+      const orderData = buildKitchenTokenPayload(order, mappedItems, {
+        defaultOrderType: orderType,
         dailySerial,
-        orderType: order.order_type || orderType,
-        customerName: order.customers?.full_name || '',
-        customerPhone: order.customers?.phone || '',
-        specialNotes: order.order_instructions || '',
-        deliveryAddress: order.delivery_address || order.customers?.addressline || order.customers?.address || '',
-        tableName: order.tables?.table_name || (order.tables?.table_number ? `Table ${order.tables.table_number}` : null) || order.table_name || null,
-        order_taker_name: order.order_takers?.name ||
-          (order.order_taker_id ? (cacheManager.getOrderTakers().find(t => t.id === order.order_taker_id)?.name || null) : null),
-        items: mappedItems,
         updateVersion,
         changesOnly: isUpdated,
-      }
+      })
 
-      const userProfileRaw = JSON.parse(localStorage.getItem('user_profile') || localStorage.getItem('user') || '{}')
-      const cashierName = order.cashier_id ? (order.cashiers?.name || 'Cashier') : (order.users?.customer_name || 'Admin')
-      const userProfile = {
-        store_name: userProfileRaw?.store_name || 'KITCHEN',
-        cashier_name: order.cashier_id ? cashierName : null,
-        customer_name: !order.cashier_id ? cashierName : null,
-      }
-
-      const results = await printerManager.printKitchenTokens(orderData, userProfile, printer)
+      const results = await printerManager.printKitchenTokens(orderData, buildKitchenUserProfile(order), printer)
       const allOk = results.every(r => r?.success)
       const anyOk = results.some(r => r?.success)
       if (!anyOk) throw new Error(results[0]?.error || 'Print failed')

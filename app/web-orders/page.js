@@ -32,6 +32,7 @@ import { printerManager } from "../../lib/printerManager";
 import { cacheManager } from "../../lib/cacheManager";
 import { usePermissions } from "../../lib/permissionManager";
 import { webOrderNotificationManager } from "../../lib/webOrderNotification";
+import { mapKitchenItems, mapReceiptItems, buildKitchenTokenPayload, buildKitchenUserProfile, buildProductCategoryMap } from "../../lib/utils/printPayload";
 import Modal from "../../components/ui/Modal";
 import ProtectedPage from "../../components/ProtectedPage";
 import PlanGate from "../../components/ui/PlanGate";
@@ -807,7 +808,7 @@ function WebOrdersPage({ embedded = false, onBack, onOrdersChanged } = {}) {
 
       // Apply status filter
       if (statusFilter === "Pending") {
-        query = query.eq("is_approved", false);
+        query = query.eq("is_approved", false).neq("order_status", "Cancelled");
       } else if (statusFilter === "Approved") {
         query = query.eq("is_approved", true).neq("order_status", "Cancelled");
       } else if (statusFilter === "Rejected") {
@@ -937,20 +938,7 @@ function WebOrdersPage({ embedded = false, onBack, onOrdersChanged } = {}) {
       console.log("🖨️ [Web Orders] Items count:", items?.length || 0);
 
       // Transform database items to printer format (cart format for receipt printer)
-      const transformedCart = (items || []).map(item => ({
-        id: item.id,
-        productId: item.product_id,
-        productName: item.product_name,
-        variantId: item.variant_id,
-        variantName: item.variant_name,
-        quantity: item.quantity,
-        finalPrice: item.final_price,
-        totalPrice: item.total_price,
-        isDeal: item.is_deal || false,
-        dealId: item.deal_id || null,
-        dealProducts: item.deal_products || null,
-        notes: item.notes || null,
-      }));
+      const transformedCart = mapReceiptItems(items);
 
       console.log("🖨️ [Web Orders] Transformed cart:", transformedCart);
 
@@ -1051,27 +1039,14 @@ function WebOrdersPage({ embedded = false, onBack, onOrdersChanged } = {}) {
 
       if (itemsError) throw itemsError;
 
-      // Transform database items to printer format (kitchen token uses 'items')
-      const productCategoryMap = {}
-      cacheManager.cache?.products?.forEach(p => { productCategoryMap[p.id] = p.category_id })
-
-      const transformedItems = (items || []).map(item => ({
-        name: item.product_name,
-        size: item.variant_name || null,
-        quantity: item.quantity,
-        price: item.final_price,
-        total: item.total_price,
-        notes: item.notes || null,
-        isDeal: item.is_deal || false,
-        category_id: item.is_deal ? null : (item.category_id || productCategoryMap[item.product_id] || null),
-        deal_id: item.is_deal ? (item.deal_id || null) : null,
-      }));
+      // Transform database items to printer format (kitchen token uses 'items').
+      // mapKitchenItems maps item_instructions → instructions (the key the
+      // token generator prints) — the old inline mapping read item.notes and
+      // kitchen notes were silently dropped.
+      const transformedItems = mapKitchenItems(items, buildProductCategoryMap());
 
       // Get user profile
-      const userProfileRaw = authManager.getCurrentUser();
-      const userProfile = {
-        store_name: userProfileRaw?.store_name || "KITCHEN",
-      };
+      const userProfile = buildKitchenUserProfile(orderData);
 
       // Get printer config
       const printer = await printerManager.getPrinterForPrinting();
@@ -1080,20 +1055,11 @@ function WebOrdersPage({ embedded = false, onBack, onOrdersChanged } = {}) {
         return;
       }
 
-      // Resolve order taker name from cache
-      const tokenOrderTakerName = orderData.order_taker_id
-        ? (cacheManager.getOrderTakers().find(t => t.id === orderData.order_taker_id)?.name || null)
-        : null
-
-      // Build complete order data for printing (kitchen token uses 'items')
-      const completeOrderData = {
-        ...orderData,
-        orderNumber: orderData.order_number,
-        items: transformedItems,
-        customer: orderData.customers,
-        orderType: orderData.order_type || 'delivery',
-        order_taker_name: tokenOrderTakerName
-      };
+      // Build complete order data for printing (kitchen token uses 'items') —
+      // includes specialNotes (order_instructions), dailySerial and order taker.
+      const completeOrderData = buildKitchenTokenPayload(orderData, transformedItems, {
+        defaultOrderType: 'delivery',
+      });
 
       console.log("🖨️ [Web Orders] Printing token to:", printer.name);
       const results = await printerManager.printKitchenTokens(
@@ -1341,7 +1307,7 @@ function WebOrdersPage({ embedded = false, onBack, onOrdersChanged } = {}) {
             <div>
               <div className={`mb-4 flex items-center justify-between`}>
                 <p className={`text-sm ${themeClasses.textSecondary}`}>
-                  {filteredOrders.length} pending order{filteredOrders.length !== 1 ? "s" : ""}
+                  {filteredOrders.length} {statusFilter === "All" ? "" : `${statusFilter.toLowerCase()} `}order{filteredOrders.length !== 1 ? "s" : ""}
                 </p>
               </div>
 

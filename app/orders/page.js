@@ -65,6 +65,7 @@ import ConvertToTakeawayModal from "../../components/delivery/ConvertToTakeawayM
 import AssignRiderButton from "../../components/delivery/AssignRiderButton";
 import NotificationSystem, { notify } from "../../components/ui/NotificationSystem";
 import { getOrderItemsWithChanges, getOrderChanges, getCurrentUpdateVersion, clearOrderChangeTracking } from '../../lib/utils/orderChangesTracker';
+import { mapKitchenItems, buildKitchenTokenPayload, buildKitchenUserProfile, buildProductCategoryMap } from '../../lib/utils/printPayload';
 import SendBillButton from '../../components/pos/SendBillButton';
 
 const OrderSkeleton = ({ isDark }) => {
@@ -2409,66 +2410,9 @@ export default function OrdersPage() {
         return;
       }
 
-      // Prepare order data for kitchen token
-      const productCategoryMap = {}
-      cacheManager.cache?.products?.forEach(p => { productCategoryMap[p.id] = p.category_id })
-
-      let mappedItems = printItems.map((item) => {
-        // DEBUG: Log ALL items to see what we're getting from database
-        console.log('🍳 Kitchen - Raw item from DB:', JSON.stringify(item, null, 2));
-        console.log('🍳 Kitchen - item.is_deal:', item.is_deal);
-
-        // Handle deal items
-        if (item.is_deal) {
-          console.log('🍳 Kitchen - Processing deal item:', item);
-          console.log('🍳 Kitchen - deal_products field:', item.deal_products);
-          console.log('🍳 Kitchen - deal_products type:', typeof item.deal_products);
-
-          let dealProducts = [];
-          try {
-            if (item.deal_products) {
-              // Try to parse if it's a string, otherwise use as-is
-              dealProducts = typeof item.deal_products === 'string'
-                ? JSON.parse(item.deal_products)
-                : item.deal_products;
-            }
-          } catch (e) {
-            console.error('❌ Failed to parse deal_products:', e);
-          }
-
-          console.log('🍳 Kitchen - Parsed dealProducts:', dealProducts);
-
-          return {
-            name: item.product_name,
-            quantity: item.quantity,
-            notes: item.notes || "",
-            isDeal: true,
-            dealProducts: dealProducts,
-            productId: item.product_id,
-            variantId: item.variant_id,
-            productName: item.product_name,
-            variantName: item.variant_name,
-            instructions: item.item_instructions || '',
-            category_id: null,
-            deal_id: item.deal_id || null,
-          };
-        }
-        // Handle regular items
-        return {
-          name: item.product_name,
-          size: item.variant_name,
-          quantity: item.quantity,
-          notes: item.notes || "",
-          isDeal: false,
-          productId: item.product_id,
-          variantId: item.variant_id,
-          productName: item.product_name,
-          variantName: item.variant_name,
-          instructions: item.item_instructions || '',
-          category_id: item.category_id || productCategoryMap[item.product_id] || null,
-          deal_id: null,
-        };
-      })
+      // Prepare order data for kitchen token — shared mapper handles the
+      // item_instructions → instructions rename and category routing lookup.
+      let mappedItems = mapKitchenItems(printItems, buildProductCategoryMap())
 
       // For update prints: apply change markers so the printer shows what changed.
       // For normal full-order prints: skip change detection so items print clean.
@@ -2476,50 +2420,15 @@ export default function OrdersPage() {
         mappedItems = await getOrderItemsWithChanges(printOrder.id, mappedItems)
       }
 
-      const orderData = {
-        orderNumber: printOrder.order_number,
-        dailySerial: printOrder.daily_serial || null,
+      const orderData = buildKitchenTokenPayload(printOrder, mappedItems, {
         updateVersion: updateVersion || null,
-        orderType: printOrder.order_type,
-        customerName: printOrder.customers?.full_name || "",
-        customerPhone: printOrder.customers?.phone || "",
-        totalAmount: printOrder.total_amount,
-        subtotal: printOrder.subtotal,
-        deliveryCharges: printOrder.delivery_charges || 0,
-        discountAmount: printOrder.discount_amount || 0,
-        specialNotes: printOrder.order_instructions || "",
-        deliveryAddress: printOrder.delivery_address || printOrder.customers?.addressline || printOrder.customers?.address || "",
-        tableName: printOrder.tables?.table_name || (printOrder.tables?.table_number ? `Table ${printOrder.tables.table_number}` : '') || '',
-        items: mappedItems,
-        order_taker_name: printOrder.order_takers?.name ||
-          (printOrder.order_taker_id
-            ? (cacheManager.getOrderTakers().find(t => t.id === printOrder.order_taker_id)?.name || null)
-            : null)
-      };
-
-      // Get user profile
-      const userProfileRaw = JSON.parse(
-        localStorage.getItem("user_profile") ||
-          localStorage.getItem("user") ||
-          "{}"
-      );
-      const userRaw = JSON.parse(localStorage.getItem("user") || "{}");
-
-      const userProfile = {
-        store_name: userProfileRaw?.store_name || userRaw?.store_name || "",
-        store_address:
-          userProfileRaw?.store_address || userRaw?.store_address || "",
-        phone: userProfileRaw?.phone || userRaw?.phone || "",
-        store_logo: userProfileRaw?.store_logo || userRaw?.store_logo || null,
-        // Add cashier/admin name for kitchen token printing
-        cashier_name: printOrder.cashier_id ? printOrder.cashiers?.name : null,
-        customer_name: !printOrder.cashier_id ? printOrder.users?.customer_name : null,
-      };
+        changesOnly,
+      });
 
       // Use printerManager to print kitchen token (routes to USB or IP automatically)
       const results = await printerManager.printKitchenTokens(
         orderData,
-        userProfile,
+        buildKitchenUserProfile(printOrder),
         printer
       );
       const allOk = results.every(r => r?.success)

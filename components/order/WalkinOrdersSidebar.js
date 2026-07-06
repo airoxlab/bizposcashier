@@ -3,12 +3,13 @@
 import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
-import { Coffee, RefreshCw, ArrowLeft, Table2, ClipboardList, X, Truck, AlertCircle, User, ShoppingBag, Layers, LayoutList, ChevronDown, ChevronRight, MapPin, CheckCircle, DollarSign, CreditCard, Wallet, Smartphone, Building2, Clock, Gift, Printer, UtensilsCrossed } from 'lucide-react'
+import { Coffee, RefreshCw, ArrowLeft, Table2, ClipboardList, X, Truck, AlertCircle, User, ShoppingBag, Layers, LayoutList, ChevronDown, ChevronRight, MapPin, CheckCircle, DollarSign, CreditCard, Wallet, Smartphone, Building2, Clock, Gift, Printer, UtensilsCrossed, Star } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { authManager } from '../../lib/authManager'
 import { cacheManager } from '../../lib/cacheManager'
 import { printerManager } from '../../lib/printerManager'
 import { getOrderChanges, getOrderItemsWithChanges, getCurrentUpdateVersion } from '../../lib/utils/orderChangesTracker'
+import { mapKitchenItems, mapReceiptItems, buildKitchenTokenPayload, buildKitchenUserProfile, buildReceiptUserProfile, buildProductCategoryMap, resolveOrderTableName } from '../../lib/utils/printPayload'
 import dailySerialManager from '../../lib/utils/dailySerialManager'
 import { getBusinessDate } from '../../lib/utils/businessDayUtils'
 import AssignRiderButton from '../delivery/AssignRiderButton'
@@ -264,6 +265,7 @@ export default function WalkinOrdersSidebar({
   deals = [],
   onCategoryClick,
   onDealsClick,
+  onFavoritesClick, // optional: scrolls the grid to the ⭐ Favorites section
   onOrdersLoaded, // optional: called with fresh orders after each fetch
   onTypeTabChange, // optional: called when sidebar type tab changes (for syncing with parent)
   onQuickComplete, // optional: (order, paymentMethod) → called for quick-complete without opening order
@@ -280,19 +282,13 @@ export default function WalkinOrdersSidebar({
   const [printingOrderId, setPrintingOrderId] = useState(null)
   const [openDropdown, setOpenDropdown] = useState(null) // `${orderId}-receipt` | `${orderId}-token`
 
-  const _buildOrderItems = (order) =>
-    (order.order_items || []).map(item => ({
-      name: item.product_name || item.deal_name || '',
-      size: item.variant_name || '',
-      quantity: item.quantity,
-      price: parseFloat(item.final_price ?? item.variant_price ?? item.base_price ?? 0),
-      total: parseFloat(item.total_price ?? 0),
-      isDeal: item.is_deal || false,
-      dealProducts: item.deal_products || null,
-      notes: item.item_instructions || '',
-      category_id: item.category_id || null,
-      deal_id: item.deal_id || null,
-    }))
+  // Resolve the default printer, registering the current user with the
+  // printerManager first (the sidebar can be mounted before any page did it).
+  const _getSidebarPrinter = async () => {
+    const user = authManager.getCurrentUser()
+    if (user?.id) printerManager.setUserId(user.id)
+    return await printerManager.getPrinterForPrinting()
+  }
 
   const handleSidebarPrintReceipt = async (order, e, isUpdated = false) => {
     e.stopPropagation()
@@ -300,17 +296,22 @@ export default function WalkinOrdersSidebar({
     if (printingOrderId === order.id) return
     setPrintingOrderId(order.id)
     try {
-      const userProfile = authManager.getCurrentUser() || {}
-      const items = _buildOrderItems(order)
-      const subtotal = parseFloat(order.subtotal) || items.reduce((s, i) => s + i.total, 0)
+      const printer = await _getSidebarPrinter()
+      if (!printer) {
+        console.error('Sidebar receipt print failed: no printer configured')
+        return
+      }
+      const cart = mapReceiptItems(order.order_items)
+      const subtotal = parseFloat(order.subtotal) || cart.reduce((s, i) => s + i.totalPrice, 0)
       const updateVersion = isUpdated ? getCurrentUpdateVersion(order.id) : null
       await printerManager.printReceipt({
         orderNumber: order.order_number,
         dailySerial: order.daily_serial,
         orderType: order.order_type,
-        tableName: order.tables?.table_name || order.tables?.table_number || null,
+        tableName: resolveOrderTableName(order),
         customer: order.customers || null,
-        items,
+        cart,
+        items: cart,
         subtotal,
         serviceCharge: parseFloat(order.service_charge) || 0,
         serviceChargeAmount: parseFloat(order.service_charge_amount) || 0,
@@ -320,9 +321,9 @@ export default function WalkinOrdersSidebar({
         discountAmount: parseFloat(order.discount_amount) || 0,
         totalAmount: parseFloat(order.total_amount) || 0,
         paymentMethod: order.payment_method || 'Cash',
+        orderInstructions: order.order_instructions || '',
         updateVersion,
-        userProfile,
-      })
+      }, buildReceiptUserProfile(order), printer)
     } catch (err) {
       console.error('Sidebar receipt print failed:', err)
     } finally {
@@ -336,25 +337,23 @@ export default function WalkinOrdersSidebar({
     if (printingOrderId === order.id) return
     setPrintingOrderId(order.id)
     try {
-      const items = _buildOrderItems(order)
+      const printer = await _getSidebarPrinter()
+      if (!printer) {
+        console.error('Sidebar token print failed: no printer configured')
+        return
+      }
+      let mappedItems = mapKitchenItems(order.order_items, buildProductCategoryMap())
       let updateVersion = null
-      let mappedItems = items
       if (isUpdated) {
         updateVersion = getCurrentUpdateVersion(order.id)
         const { hasChanges } = await getOrderChanges(order.id)
-        if (hasChanges) mappedItems = await getOrderItemsWithChanges(order.id, items)
+        if (hasChanges) mappedItems = await getOrderItemsWithChanges(order.id, mappedItems)
       }
-      await printerManager.printKitchenTokens({
-        orderId: order.id,
-        orderNumber: order.order_number,
-        dailySerial: order.daily_serial,
-        orderType: order.order_type,
-        tableName: order.tables?.table_name || order.tables?.table_number || null,
-        customer: order.customers || null,
-        items: mappedItems,
+      const orderData = buildKitchenTokenPayload(order, mappedItems, {
         updateVersion,
         changesOnly: isUpdated,
       })
+      await printerManager.printKitchenTokens(orderData, buildKitchenUserProfile(order), printer)
     } catch (err) {
       console.error('Sidebar token print failed:', err)
     } finally {
@@ -632,11 +631,17 @@ export default function WalkinOrdersSidebar({
         const fetchedOrderNumbers = new Set(ordersWithSerials.map(o => o.order_number))
 
         // Smart cache update strategy:
-        // 1. Keep truly offline orders (not synced yet) - these are new orders created offline
+        // 1. Keep truly offline orders (not synced yet) - these are new orders created offline.
+        //    BUT drop any whose order_number is already in the fresh server fetch — that's a
+        //    stale local copy of an order that DID reach the DB (e.g. createOrder's 10s sync
+        //    timeout queued a copy while the slow insert still landed). Keeping both made the
+        //    same order show twice the moment the terminal went offline.
         // 2. Remove any previously cached orders that match this order type but aren't in the fetch
         //    (they've likely been completed/cancelled and filtered out by the query)
         // 3. Add/update with freshly fetched orders
-        const offlineOrders = existingCachedOrders.filter(o => !o._isSynced)
+        const offlineOrders = existingCachedOrders.filter(o =>
+          !o._isSynced && !fetchedOrderNumbers.has(o.order_number)
+        )
         const otherTypeOrders = existingCachedOrders.filter(o =>
           o._isSynced && o.order_type !== effectiveOrderType
         )
@@ -843,7 +848,9 @@ export default function WalkinOrdersSidebar({
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Orders Icon - toggles orders panel on new-order page */}
+            {/* Orders — toggles the orders panel. Blue + text label, stacked
+                (icon over text) to match the CategorySidebar on the other order
+                pages for a consistent look. */}
             <motion.button
               whileHover={{ scale: 1.08 }}
               whileTap={{ scale: 0.95 }}
@@ -857,36 +864,34 @@ export default function WalkinOrdersSidebar({
                   onClose()
                 }
               }}
-              className={`p-2.5 rounded-lg transition-all relative ${
-                showTypeTabs
-                  ? showOrders
-                    ? (isDark ? 'bg-blue-600/30 border border-blue-500' : 'bg-blue-100 border border-blue-400')
-                    : (isDark ? 'bg-gray-700 border border-gray-600 hover:bg-gray-600' : 'bg-gray-100 border border-gray-200 hover:bg-gray-200')
-                  : (isDark ? 'bg-blue-600/30 border border-blue-500' : 'bg-blue-100 border border-blue-400')
+              className={`px-3 py-1.5 rounded-lg transition-all relative flex flex-col items-center gap-0.5 border ${
+                (showTypeTabs && showOrders) || !showTypeTabs
+                  ? (isDark ? 'bg-blue-600/30 border-blue-500' : 'bg-blue-100 border-blue-400')
+                  : (isDark ? 'bg-blue-900/20 border-blue-800/40 hover:bg-blue-900/40' : 'bg-blue-50 border-blue-200 hover:bg-blue-100')
               }`}
               title="View pending orders"
             >
-              <ClipboardList className={`w-5 h-5 ${
-                showOrders || !showTypeTabs
-                  ? (isDark ? 'text-blue-400' : 'text-blue-600')
-                  : (isDark ? 'text-gray-400' : 'text-gray-500')
-              }`} />
+              <ClipboardList className={`w-5 h-5 ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
+              <span className={`text-[11px] font-semibold ${isDark ? 'text-blue-300' : 'text-blue-700'}`}>Orders</span>
             </motion.button>
 
-            {/* Table Selection Icon - Only for walkin */}
+            {/* Table — only for walkin. Green + text label, stacked. */}
             {orderType === 'walkin' && onTableClick && (
               <motion.button
                 whileHover={{ scale: 1.08 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={onTableClick}
-                className={`p-2.5 rounded-lg transition-all relative ${
+                className={`px-3 py-1.5 rounded-lg transition-all relative flex flex-col items-center gap-0.5 border ${
                   selectedTable
-                    ? (isDark ? 'bg-green-600/30 border border-green-500' : 'bg-green-100 border border-green-400')
-                    : (isDark ? 'bg-gray-700 hover:bg-gray-600' : 'bg-gray-100 hover:bg-gray-200')
+                    ? (isDark ? 'bg-green-600/30 border-green-500' : 'bg-green-100 border-green-400')
+                    : (isDark ? 'bg-green-900/20 border-green-800/40 hover:bg-green-900/40' : 'bg-green-50 border-green-200 hover:bg-green-100')
                 }`}
                 title={selectedTable ? `Table: ${selectedTable.table_name || selectedTable.table_number}` : 'Select Table'}
               >
-                <Table2 className={`w-5 h-5 ${selectedTable ? (isDark ? 'text-green-400' : 'text-green-600') : (isDark ? 'text-gray-300' : 'text-gray-600')}`} />
+                <Table2 className={`w-5 h-5 ${isDark ? 'text-green-400' : 'text-green-600'}`} />
+                <span className={`text-[11px] font-semibold max-w-[80px] truncate ${isDark ? 'text-green-300' : 'text-green-700'}`}>
+                  {selectedTable ? (selectedTable.table_name || `Table ${selectedTable.table_number}`) : 'Table'}
+                </span>
                 {selectedTable && (
                   <div className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-green-500 rounded-full border-2 border-white dark:border-gray-800 shadow-sm"></div>
                 )}
@@ -1212,6 +1217,32 @@ export default function WalkinOrdersSidebar({
               </motion.button>
             )}
           </div>
+
+          {/* ⭐ Favorites — pinned first, scrolls the grid to the Favorites section */}
+          {(() => {
+            const favCount =
+              allProducts.filter(p => p.is_favorite).length +
+              (deals?.filter(d => d.is_favorite).length || 0)
+            if (favCount === 0) return null
+            return (
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.97 }}
+                onClick={() => onFavoritesClick?.()}
+                className={`w-full flex items-center gap-3 p-3 rounded-xl text-left transition-all duration-150 mb-2 ${
+                  isDark ? 'bg-amber-900/30 hover:bg-amber-900/50' : 'bg-amber-50 hover:bg-amber-100'
+                }`}
+              >
+                <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center flex-shrink-0">
+                  <Star className="w-6 h-6 text-white fill-white" />
+                </div>
+                <div className="min-w-0">
+                  <div className={`font-semibold text-sm ${isDark ? 'text-amber-300' : 'text-amber-700'}`}>Favorites</div>
+                  <div className={`text-xs ${classes.textSecondary}`}>{favCount} item{favCount !== 1 ? 's' : ''}</div>
+                </div>
+              </motion.button>
+            )
+          })()}
 
           {(() => {
             const renderCatBtn = (cat) => {

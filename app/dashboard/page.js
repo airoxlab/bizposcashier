@@ -672,7 +672,7 @@ export default function Dashboard() {
         className={`relative w-full ${themeClasses.header} backdrop-blur-lg
                ${themeClasses.border} border-b shadow-lg`}
       >
-        <div className="max-w-7xl mx-auto px-6 py-4">
+        <div className="w-full px-4 py-4">
           <div className="grid grid-cols-3 items-center">
             {/* Left: User Info with Role Badge */}
             <div className="flex items-center space-x-4">
@@ -817,7 +817,7 @@ export default function Dashboard() {
             </div>
 
             {/* Right: Controls */}
-            <div className="flex items-center justify-end space-x-2 pr-4">
+            <div className="flex items-center justify-end space-x-2">
               {/* Network Status */}
               <div className="flex items-center space-x-2">
                 <Tooltip label={cacheStatus.networkStatus.isOnline ? 'Online' : 'Offline'}>
@@ -977,9 +977,9 @@ export default function Dashboard() {
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
-              className={`${themeClasses.border} border-t px-6 py-3`}
+              className={`${themeClasses.border} border-t px-4 py-3`}
             >
-              <div className="max-w-7xl mx-auto flex items-center justify-between">
+              <div className="w-full flex items-center justify-between">
                 <div className="flex items-center space-x-3">
                   {cacheStatus.isLoading ? (
                     <>
