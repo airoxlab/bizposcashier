@@ -5,10 +5,11 @@ import { authManager } from '../../../lib/authManager'
 import {
   Fingerprint, Loader2, Save, Volume2,
   CheckCircle, User, ShieldCheck, RotateCcw, Trash2,
-  SlidersHorizontal, Clock, RefreshCw, Users, LogOut,
+  SlidersHorizontal, Clock, RefreshCw, Users, LogOut, ScrollText,
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import ConfirmModal from '../../../components/ui/ConfirmModal'
+import RulesPanel from './RulesPanel'
 import { getTodaysBusinessDate } from '../../../lib/utils/businessDayUtils'
 
 // ─── Shared helpers ─────────────────────────────────────────────────────────
@@ -724,12 +725,13 @@ function SettingsTab({ userId }) {
     fingerprint_checkout_min_gap_minutes: 30,
     fingerprint_popup_seconds:            3,
     fingerprint_sound_enabled:            true,
+    fingerprint_restrict_to_business_hours: false,
   })
 
   useEffect(() => {
     if (!userId) { setLoading(false); return }
     supabase.from('users')
-      .select('fingerprint_attendance_enabled, fingerprint_enable_checkout, fingerprint_checkout_min_gap_minutes, fingerprint_popup_seconds, fingerprint_sound_enabled')
+      .select('fingerprint_attendance_enabled, fingerprint_enable_checkout, fingerprint_checkout_min_gap_minutes, fingerprint_popup_seconds, fingerprint_sound_enabled, fingerprint_restrict_to_business_hours')
       .eq('id', userId).single()
       .then(({ data }) => {
         if (data) setCfg({
@@ -738,6 +740,7 @@ function SettingsTab({ userId }) {
           fingerprint_checkout_min_gap_minutes: data.fingerprint_checkout_min_gap_minutes ?? 30,
           fingerprint_popup_seconds:            data.fingerprint_popup_seconds ?? 3,
           fingerprint_sound_enabled:            data.fingerprint_sound_enabled ?? true,
+          fingerprint_restrict_to_business_hours: !!data.fingerprint_restrict_to_business_hours,
         })
         setLoading(false)
       }, () => setLoading(false))
@@ -753,6 +756,7 @@ function SettingsTab({ userId }) {
         fingerprint_checkout_min_gap_minutes: Math.max(0, parseInt(cfg.fingerprint_checkout_min_gap_minutes) || 0),
         fingerprint_popup_seconds:            Math.min(15, Math.max(1, parseInt(cfg.fingerprint_popup_seconds) || 3)),
         fingerprint_sound_enabled:            cfg.fingerprint_sound_enabled,
+        fingerprint_restrict_to_business_hours: cfg.fingerprint_restrict_to_business_hours,
       }).eq('id', userId)
       if (error) throw error
       // Tell the app-wide kiosk listener to re-read settings NOW — otherwise
@@ -841,6 +845,19 @@ function SettingsTab({ userId }) {
             </div>
             <Toggle checked={cfg.fingerprint_sound_enabled} onChange={v => setCfg(c => ({ ...c, fingerprint_sound_enabled: v }))} />
           </div>
+
+          <div className="bg-white dark:bg-slate-800 rounded-xl border border-gray-100 dark:border-slate-700/50 shadow-sm p-4 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-gray-100 dark:bg-slate-700 flex items-center justify-center flex-shrink-0">
+                <Clock className="w-4 h-4 text-gray-500 dark:text-slate-400" />
+              </div>
+              <div>
+                <p className="font-medium text-gray-900 dark:text-white text-sm">Only during business hours</p>
+                <p className="text-xs text-gray-500 dark:text-slate-400">Ignore scans outside your open hours (shows "Business Closed").</p>
+              </div>
+            </div>
+            <Toggle checked={cfg.fingerprint_restrict_to_business_hours} onChange={v => setCfg(c => ({ ...c, fingerprint_restrict_to_business_hours: v }))} />
+          </div>
         </div>
       </div>
 
@@ -858,6 +875,7 @@ function SettingsTab({ userId }) {
 // ─── Sidebar nav definition ──────────────────────────────────────────────────
 const NAV = [
   { key: 'settings', label: 'Settings',  desc: 'Kiosk configuration',  icon: SlidersHorizontal },
+  { key: 'rules',    label: 'Rules',     desc: 'Late / half-day rules', icon: ScrollText },
   { key: 'enroll',   label: 'Enroll',    desc: 'Manage fingerprints',   icon: Fingerprint },
   { key: 'status',   label: 'Status',    desc: "Today's check-in/out",  icon: Clock },
 ]
@@ -950,6 +968,7 @@ export function FingerprintPanel() {
       {/* ── Content area ── */}
       <div className="flex-1 min-w-0 overflow-y-auto p-6">
         {activeSection === 'settings' && <SettingsTab userId={userId} />}
+        {activeSection === 'rules'    && <RulesPanel  userId={userId} />}
         {activeSection === 'enroll'   && <EnrollTab   userId={userId} onEnrolledChange={setEnrolledCount} />}
         {activeSection === 'status'   && <StatusTab   userId={userId} />}
       </div>

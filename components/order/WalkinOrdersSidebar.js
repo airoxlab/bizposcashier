@@ -14,6 +14,26 @@ import dailySerialManager from '../../lib/utils/dailySerialManager'
 import { getBusinessDate } from '../../lib/utils/businessDayUtils'
 import AssignRiderButton from '../delivery/AssignRiderButton'
 
+// Collapse orders that share an order_number into a single entry, preferring the
+// synced (DB) copy over a not-yet-synced offline copy. This stops a temp-id offline
+// order and its real-UUID server row from BOTH rendering during the sync window —
+// the "it made another one for the same number" symptom under flaky connectivity.
+function dedupeByOrderNumber(orders) {
+  if (!Array.isArray(orders)) return []
+  const byNum = new Map()
+  const noKey = []
+  for (const o of orders) {
+    if (!o) continue
+    if (!o.order_number) { noKey.push(o); continue }
+    const existing = byNum.get(o.order_number)
+    // Keep the first seen, but let a synced copy win over an unsynced one.
+    if (!existing || (!existing._isSynced && o._isSynced)) {
+      byNum.set(o.order_number, o)
+    }
+  }
+  return [...byNum.values(), ...noKey]
+}
+
 // ── Static constants (outside component so they are never re-created) ──────────
 // Special methods that always appear regardless of payment_accounts setup
 const SPECIAL_METHODS = [
@@ -629,6 +649,7 @@ export default function WalkinOrdersSidebar({
         // Only update orders that match our filter criteria (Pending/Preparing/Ready)
         const existingCachedOrders = cacheManager.getAllOrders()
         const fetchedOrderNumbers = new Set(ordersWithSerials.map(o => o.order_number))
+        const PENDING_STATUSES = ['Pending', 'Preparing', 'Ready', 'Dispatched']
 
         // Smart cache update strategy:
         // 1. Keep truly offline orders (not synced yet) - these are new orders created offline.
@@ -639,21 +660,31 @@ export default function WalkinOrdersSidebar({
         // 2. Remove any previously cached orders that match this order type but aren't in the fetch
         //    (they've likely been completed/cancelled and filtered out by the query)
         // 3. Add/update with freshly fetched orders
-        const offlineOrders = existingCachedOrders.filter(o =>
-          !o._isSynced && !fetchedOrderNumbers.has(o.order_number)
+        // Split the kept offline orders by type: same-type ones must stay VISIBLE (see below).
+        const offlineSameType = existingCachedOrders.filter(o =>
+          !o._isSynced &&
+          !fetchedOrderNumbers.has(o.order_number) &&
+          o.order_type === effectiveOrderType &&
+          PENDING_STATUSES.includes(o.order_status)
+        )
+        const offlineOtherType = existingCachedOrders.filter(o =>
+          !o._isSynced &&
+          !fetchedOrderNumbers.has(o.order_number) &&
+          o.order_type !== effectiveOrderType
         )
         const otherTypeOrders = existingCachedOrders.filter(o =>
           o._isSynced && o.order_type !== effectiveOrderType
         )
 
         const updatedCache = [
-          ...offlineOrders,
+          ...offlineSameType,
+          ...offlineOtherType,
           ...otherTypeOrders,
           ...ordersWithSerials.map(o => ({ ...o, _isSynced: true, _isOffline: false }))
         ]
 
         console.log(`🧹 [WalkinOrdersSidebar] Cache cleanup:`)
-        console.log(`  - Kept ${offlineOrders.length} offline orders`)
+        console.log(`  - Kept ${offlineSameType.length + offlineOtherType.length} offline orders (${offlineSameType.length} this type, still visible)`)
         console.log(`  - Kept ${otherTypeOrders.length} orders of other types`)
         console.log(`  - Added ${ordersWithSerials.length} fresh ${orderType} orders`)
         console.log(`  - Total: ${existingCachedOrders.length} → ${updatedCache.length} orders`)
@@ -666,9 +697,21 @@ export default function WalkinOrdersSidebar({
         console.log(`💾 [WalkinOrdersSidebar] Saved ${ordersWithSerials.length} orders + ${cacheManager.cache.paymentTransactions.size} payment transaction entries to cache`)
         console.log(`📊 [WalkinOrdersSidebar] Cache now has ${cacheManager.cache.paymentTransactions.size} orders with payment transactions`)
 
-        setOrders(ordersWithSerials)
-        onOrdersLoaded?.(ordersWithSerials)
-        console.log(`📦 [Orders] Loaded ${data?.length || 0} ${orderType} orders from Supabase`)
+        // DISPLAY = server rows + still-pending offline orders of this type, enriched and
+        // de-duplicated by order_number (synced copy wins). Without the offline copies here,
+        // an order punched during a network blip would VANISH the instant the device reports
+        // online — then reappear (with a fresh DB serial) once it syncs, which users read as
+        // "it deleted my order and made a new one." dedupe stops the two copies overlapping.
+        const displayList = dedupeByOrderNumber(
+          cacheManager.enrichOrdersWithSerials([
+            ...ordersWithSerials.map(o => ({ ...o, _isSynced: true, _isOffline: false })),
+            ...offlineSameType
+          ])
+        )
+
+        setOrders(displayList)
+        onOrdersLoaded?.(displayList)
+        console.log(`📦 [Orders] Loaded ${data?.length || 0} ${orderType} orders from Supabase (+${offlineSameType.length} pending-sync)`)
       } else {
         // Use cached orders when offline
         console.log(`📴 [WalkinOrdersSidebar] OFFLINE MODE - Loading from cache`)
@@ -728,7 +771,7 @@ export default function WalkinOrdersSidebar({
         })
 
         // Enrich with daily serial numbers (cached orders already have daily_serial if created today)
-        const ordersWithSerials = cacheManager.enrichOrdersWithSerials(filteredOrders)
+        const ordersWithSerials = dedupeByOrderNumber(cacheManager.enrichOrdersWithSerials(filteredOrders))
         setOrders(ordersWithSerials)
         onOrdersLoaded?.(ordersWithSerials)
         console.log(`📦 [Orders] Loaded ${filteredOrders.length} ${orderType} orders from cache (offline)`)
@@ -753,7 +796,7 @@ export default function WalkinOrdersSidebar({
         }
       })
 
-      const ordersWithSerials = cacheManager.enrichOrdersWithSerials(filteredOrders)
+      const ordersWithSerials = dedupeByOrderNumber(cacheManager.enrichOrdersWithSerials(filteredOrders))
       setOrders(ordersWithSerials)
       console.log(`📦 [Orders] Fallback to ${filteredOrders.length} cached orders due to error`)
     } finally {
@@ -1019,7 +1062,11 @@ export default function WalkinOrdersSidebar({
           <div className="space-y-2">
             {orders.map((order) => (
               <motion.div
-                key={order.id}
+                // Key by order_number, which is STABLE across the offline→synced
+                // transition. Keying by order.id caused a full remount when the id
+                // flipped from a temp id (order_…) to the real DB UUID on sync —
+                // the card visibly "disappeared and a new one appeared".
+                key={order.order_number || order.id}
                 whileHover={{ scale: 1.01 }}
                 className={`w-full rounded-lg transition-all duration-200 overflow-hidden ${
                   selectedOrderId === order.id

@@ -6,7 +6,7 @@ import {
   X, BarChart2, TrendingUp, ShoppingBag,
   Banknote, Smartphone, CreditCard, Building2, Building, DollarSign,
   Clock, AlertCircle, RefreshCw, Delete,
-  Wallet, Layers, Gift, Printer, Receipt, User, ArrowLeft, ShieldCheck
+  Wallet, Layers, Gift, Printer, Receipt, User, ArrowLeft
 } from 'lucide-react'
 import { cacheManager } from '../../lib/cacheManager'
 import { authManager } from '../../lib/authManager'
@@ -14,7 +14,6 @@ import { supabase } from '../../lib/supabase'
 import { printerManager } from '../../lib/printerManager'
 import { notify } from '../ui/NotificationSystem'
 import { getTodaysBusinessDate, getBusinessDayRange } from '../../lib/utils/businessDayUtils'
-import OwnerFingerprintUnlock from '../ui/OwnerFingerprintUnlock'
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -70,6 +69,62 @@ function splitLegsForAccount(splitByMethod, acc) {
   return total
 }
 
+// Overall shift figures derived from ORDERS alone (no per-account split).
+// "Credit" = money NOT collected this shift: customer-account (khata) sales +
+// unpaid tabs. Complimentary orders are free, so they are excluded from both
+// total sales and credit. total_amount is already net of discounts, so the
+// discount total is informational and does not feed cash-in-hand.
+function orderSummary(orders) {
+  const nonCancelled = orders.filter(o => !['Cancelled', 'cancelled'].includes(o.order_status))
+  const isCredit = (m) => { const x = (m || '').toLowerCase(); return x === 'account' || x === 'unpaid' }
+  const isComp   = (m) => (m || '').toLowerCase() === 'complimentary'
+  const amt      = (o) => parseFloat(o.total_amount || 0)
+  const creditRows = nonCancelled.filter(o => isCredit(o.payment_method))
+  return {
+    totalOrders:    nonCancelled.length,
+    creditOrders:   creditRows.length,
+    totalSales:     nonCancelled.filter(o => !isComp(o.payment_method)).reduce((s, o) => s + amt(o), 0),
+    creditSales:    creditRows.reduce((s, o) => s + amt(o), 0),
+    totalDiscounts: nonCancelled.reduce((s, o) => s + (parseFloat(o.discount_amount || 0) + parseFloat(o.loyalty_discount_amount || 0)), 0),
+  }
+}
+
+// Cash paid OUT this shift (overall): business expenses + supplier/PO payments
+// ("payorders"). The Expenses-page "pay supplier" flow writes BOTH a
+// supplier_payments row AND an expenses breadcrumb tagged source_type
+// 'supplier_payment'; we count that cash once by EXCLUDING the breadcrumb from
+// expenses (it is already captured under payorders). Attribution mirrors the
+// orders scope so the on-screen figures and the printed report always agree.
+async function fetchMoneyOut({ userId, subjectCashierId, ownerMode, startISO, endISO }) {
+  let totalExpense = 0, payorders = 0
+  try {
+    let q = supabase.from('expenses')
+      .select('amount,total_amount,source_type,cashier_id,created_at')
+      .eq('user_id', userId)
+      .gte('created_at', startISO)
+      .lt('created_at', endISO)
+    if (subjectCashierId) q = q.eq('cashier_id', subjectCashierId)
+    else if (ownerMode)   q = q.is('cashier_id', null)
+    const { data } = await q
+    ;(data || []).forEach(ex => {
+      if ((ex.source_type || '') === 'supplier_payment') return
+      totalExpense += parseFloat(ex.total_amount ?? ex.amount ?? 0) || 0
+    })
+  } catch {}
+  try {
+    let q = supabase.from('supplier_payments')
+      .select('amount_paid,paid_by_cashier_id,created_at')
+      .eq('user_id', userId)
+      .gte('created_at', startISO)
+      .lt('created_at', endISO)
+    if (subjectCashierId) q = q.eq('paid_by_cashier_id', subjectCashierId)
+    else if (ownerMode)   q = q.is('paid_by_cashier_id', null)
+    const { data } = await q
+    ;(data || []).forEach(p => { payorders += parseFloat(p.amount_paid || 0) || 0 })
+  } catch {}
+  return { totalExpense, payorders }
+}
+
 function computeStats(orders, splitByMethod, accounts) {
   const nonCancelled = orders.filter(o => !['Cancelled', 'cancelled'].includes(o.order_status))
   const cancelled    = orders.filter(o =>  ['Cancelled', 'cancelled'].includes(o.order_status))
@@ -117,8 +172,8 @@ function computeStats(orders, splitByMethod, accounts) {
   const splitUnallocated = Math.max(0, special.Split - allocatedLegs)
 
   return {
+    ...orderSummary(orders),   // totalOrders, creditOrders, totalSales, creditSales, totalDiscounts
     totalRevenue,
-    totalOrders:     nonCancelled.length,
     cancelledOrders: cancelled.length,
     pendingOrders:   pending.length,
     accountTotals,
@@ -257,18 +312,23 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
   const [raw, setRaw]         = useState(null)   // { orders, splitByMethod }
   const [loading, setLoading] = useState(false)
   const [bizRange, setBizRange] = useState(null)
-  const [viewFilter, setViewFilter] = useState('me') // 'all' | 'me' | cashier UUID
+  // Default view: an admin opens on the whole business ('All'); a cashier is
+  // locked to their own ('me'). Admin can still switch to 'My Orders' (their own
+  // unattributed punches) or a specific cashier.
+  const [viewFilter, setViewFilter] = useState(() => authManager.isAdmin() ? 'all' : 'me') // 'all' | 'me' | cashier UUID
   const [cashierList, setCashierList] = useState([])
   const [accounts, setAccounts] = useState([])       // company tender accounts (dynamic)
 
-  // Cash-up / Z-report state
-  const [cashupOpen, setCashupOpen] = useState(false)
-  const [cashupLoading, setCashupLoading] = useState(false)
-  const [cashup, setCashup] = useState(null)
+  // Simple Cash Report state — an OVERALL shift summary (no per-account drawer
+  // setup, no counted-cash reconciliation). Works whether cashier-drawer mode
+  // is on or off because it is derived purely from orders/expenses/payorders.
+  const [reportOpen, setReportOpen] = useState(false)
+  const [reportLoading, setReportLoading] = useState(false)
+  const [report, setReport] = useState(null)
   const [saving, setSaving] = useState(false)
-  // Owner-fingerprint gate (payroll_settings.require_fingerprint_shift_close)
-  const [fpStatus, setFpStatus] = useState(null)      // OwnerFingerprintUnlock status
-  const [fpVerified, setFpVerified] = useState(false)
+  // Money paid out (expenses + payorders), scoped to the current view — feeds
+  // the on-screen Shift Summary's Total Expense / Payorders / Cash in Hand.
+  const [moneyOut, setMoneyOut] = useState({ totalExpense: 0, payorders: 0 })
 
   const stats = useMemo(
     () => (raw ? computeStats(raw.orders, raw.splitByMethod, accounts) : null),
@@ -327,7 +387,9 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
       } catch {}
     }
 
-    fetchCashiers()
+    // Only admins can switch views, so only they need the cashier list. A
+    // cashier never pulls the roster — it isn't shown to them anyway.
+    if (authManager.isAdmin()) fetchCashiers()
     loadAccounts()
   }, [isOpen, loadAccounts])
 
@@ -351,14 +413,28 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
       const startTs = new Date(startDateTime)
       const endTs   = new Date(endDateTime)
 
-      // Determine which cashier to filter by
+      // Determine the scope.
+      //  • 'all'             → whole business (no filter).
+      //  • 'me' as a cashier → that cashier's own orders (cashier_id / order_taker_id).
+      //  • 'me' as an admin  → the owner's OWN punches only. An admin isn't a
+      //    cashier, so their orders carry NO cashier_id and NO order_taker_id —
+      //    filter to that unattributed bucket, NOT everything. (The bug was that
+      //    admin "My Orders" fell through to no-filter and showed every cashier's
+      //    orders too.)
+      //  • specific UUID     → that cashier.
+      const isAdmin = authManager.isAdmin()
+      const ownerMode = isAdmin && activeFilter === 'me'
       const filterCashierId = activeFilter === 'all' ? null
-        : activeFilter === 'me' ? myCashierId
+        : activeFilter === 'me' ? (isAdmin ? null : myCashierId)
         : activeFilter // specific cashier UUID
 
       // Start from cache
       let orders = (cacheManager.cache?.orders || []).filter(o => {
-        if (filterCashierId && o.cashier_id !== filterCashierId && o.order_taker_id !== filterCashierId) return false
+        if (ownerMode) {
+          if (o.cashier_id || o.order_taker_id) return false
+        } else if (filterCashierId && o.cashier_id !== filterCashierId && o.order_taker_id !== filterCashierId) {
+          return false
+        }
         const ts = new Date(o.created_at)
         return ts >= startTs && ts < endTs
       })
@@ -370,12 +446,14 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
         try {
           let query = supabase
             .from('orders')
-            .select('id,cashier_id,order_taker_id,order_status,payment_method,payment_status,total_amount,created_at')
+            .select('id,cashier_id,order_taker_id,order_status,payment_method,payment_status,total_amount,discount_amount,loyalty_discount_amount,created_at')
             .eq('user_id', userId)
             .gte('created_at', startDateTime)
             .lt('created_at', endDateTime)
 
-          if (filterCashierId) {
+          if (ownerMode) {
+            query = query.is('cashier_id', null).is('order_taker_id', null)
+          } else if (filterCashierId) {
             query = query.or(`cashier_id.eq.${filterCashierId},order_taker_id.eq.${filterCashierId}`)
           }
 
@@ -400,6 +478,22 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
       }
 
       setRaw({ orders, splitByMethod })
+
+      // Money paid out this view (expenses + payorders) for the Shift Summary.
+      // Online-only, same source/scope as the printed Cash Report so the two
+      // never disagree. Offline shows Rs 0 (these tables aren't cached).
+      if (typeof navigator !== 'undefined' && navigator.onLine && userId) {
+        const mo = await fetchMoneyOut({
+          userId,
+          subjectCashierId: filterCashierId,
+          ownerMode,
+          startISO: startDateTime,
+          endISO: endDateTime,
+        })
+        setMoneyOut(mo)
+      } else {
+        setMoneyOut({ totalExpense: 0, payorders: 0 })
+      }
     } catch (err) {
       console.error('[CashierAnalytics] error:', err)
     } finally {
@@ -411,22 +505,24 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
     if (isOpen) fetchStats()
   }, [isOpen, fetchStats])
 
-  // ── Cash-up: gather this cashier's shift figures and open the panel ──
+  // ── Cash Report: gather the subject's overall shift figures + open panel ──
   const openCashReport = useCallback(async () => {
     const user         = authManager.getCurrentUser()
     const loginCashier = authManager.getCashier()   // null for an admin/owner login
     if (!user?.id) { notify.error('Please log in first'); return }
 
-    // Resolve WHO the report is for ("the subject").
-    //  • Cashier login   → always themselves; the shift snapshot is saved so the
+    // Resolve WHO the report is for ("the subject"), matching the analytics view
+    // so "what you see is what you print":
+    //  • Cashier login          → always themselves; the snapshot is saved so the
     //    admin can reconcile it later (save block gated on the LOGIN cashier).
-    //  • Admin/owner login → follow the analytics view filter, so "what you see is
-    //    what you print":
-    //      – a specific cashier selected → that cashier's shift
-    //      – 'All' / 'My Orders'         → the whole business day (owner's drawer)
-    //    Admin prints for their records but never overwrites a cashier's own saved
-    //    declaration, and skips the owner-fingerprint gate (they ARE the owner).
-    let subjectCashierId = null   // null ⇒ whole business (no per-cashier filter)
+    //  • Admin, a cashier chosen → that cashier's shift.
+    //  • Admin, 'My Orders'      → the owner's OWN punches only (unattributed:
+    //    no cashier_id, no order_taker_id) — NOT the whole business.
+    //  • Admin, 'All'            → the whole business day.
+    //  Admin prints for their records but never persists a cashier snapshot
+    //  (only a cashier login saves its own row).
+    let subjectCashierId = null   // set ⇒ scope to exactly one cashier
+    let ownerMode = false         // admin 'My Orders' ⇒ owner's unattributed orders
     let subjectName
     if (loginCashier?.id) {
       subjectCashierId = loginCashier.id
@@ -434,36 +530,23 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
     } else if (viewFilter && viewFilter !== 'all' && viewFilter !== 'me') {
       subjectCashierId = viewFilter
       subjectName      = cashierList.find(c => c.id === viewFilter)?.name || 'Cashier'
+    } else if (viewFilter === 'me') {
+      ownerMode   = true
+      subjectName = authManager.getDisplayName() || 'Owner'
     } else {
-      subjectCashierId = null
-      subjectName      = authManager.getDisplayName() || 'Owner'
+      subjectName = authManager.getDisplayName() || 'Owner'   // 'All' ⇒ whole business
     }
     const canSave = !!loginCashier?.id   // only a cashier's own count is persisted
 
-    setCashupLoading(true)
-    setCashupOpen(true)
-    setFpVerified(false)
-    setFpStatus(null)
+    setReportLoading(true)
+    setReportOpen(true)
     try {
       const online = typeof navigator !== 'undefined' && navigator.onLine
 
-      // Accounts may still be in flight right after the modal opened — fetch
-      // inline rather than failing with a bogus "not configured" error.
-      let accts = accounts
-      if (!accts.length) accts = await loadAccounts()
-      if (!accts.length) {
-        notify.error('No payment accounts configured yet')
-        setCashupOpen(false)
-        return
-      }
-
-      // 1) Shift window = this cashier's current BUSINESS DAY (start → now).
-      //    We scope to the same business-day window the analytics already shows —
-      //    NOT the raw login session — because re-logins spawn fresh sessions and
-      //    any order punched before the latest login would otherwise be dropped
-      //    (that mismatch is why the report could read 0 while analytics showed 1).
-      //    It stays a per-cashier figure because the orders query filters to this
-      //    cashier below.
+      // Shift window = the subject's current BUSINESS DAY (start → now) — the
+      // same window the analytics panel shows, so "what you see is what you
+      // print". Independent of cashier-drawer mode: it's derived purely from
+      // orders + expenses + payorders, so it works with the drawer on or off.
       const profile   = getProfile()
       const startTime = profile.business_start_time || '10:00'
       const endTime   = profile.business_end_time   || '03:00'
@@ -472,7 +555,7 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
       const shiftStart = startDateTime
       const shiftEnd   = new Date().toISOString()
 
-      // Reference the active session id (only for the saved snapshot), if any.
+      // Reference the active session id (for the saved snapshot only), if any.
       let sessionId = null
       if (online && subjectCashierId) {
         try {
@@ -488,40 +571,22 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
         } catch {}
       }
 
-      // 1b) Admin policy: require the OWNER's fingerprint before this report
-      //     can be printed (payroll settings in bizpos-admin). The gate is
-      //     enforced only where it can physically work — the unlock component
-      //     reports 'unsupported' (browser) / 'not_enrolled' and we fail open.
-      //     Skipped entirely for an admin/owner login — they are the owner, so
-      //     there is no one else to authorize the shift close.
-      let requireFp = false
-      if (online && canSave) {
-        try {
-          const { data: ps } = await supabase
-            .from('payroll_settings')
-            .select('require_fingerprint_shift_close')
-            .eq('user_id', user.id)
-            .maybeSingle()
-          requireFp = !!ps?.require_fingerprint_shift_close
-        } catch {}
-      }
-
-      // 2) Orders inside the shift window.
-      //    Per-cashier subject: attribution is EXCLUSIVE so the same order can
-      //    never appear in two cashiers' drawers — it belongs to the cashier who
-      //    cashiered it (cashier_id); order_taker_id only counts when no cashier
-      //    is set. Whole-business subject (admin, no cashier): every order for the
-      //    day, matching what the analytics panel shows.
+      // Orders inside the shift window. Per-cashier attribution is EXCLUSIVE so
+      // the same order can never land in two cashiers' reports — it belongs to
+      // the cashier who cashiered it; order_taker_id only counts when none is
+      // set. Whole-business subject (admin 'All'): every order for the day.
       let orders = []
       if (online) {
         let q = supabase
           .from('orders')
-          .select('id,cashier_id,order_taker_id,order_status,payment_method,total_amount,created_at')
+          .select('id,cashier_id,order_taker_id,order_status,payment_method,total_amount,discount_amount,loyalty_discount_amount,created_at')
           .eq('user_id', user.id)
           .gte('created_at', shiftStart)
           .lt('created_at', shiftEnd)
         if (subjectCashierId) {
           q = q.or(`cashier_id.eq.${subjectCashierId},and(cashier_id.is.null,order_taker_id.eq.${subjectCashierId})`)
+        } else if (ownerMode) {
+          q = q.is('cashier_id', null).is('order_taker_id', null)
         }
         const { data } = await q
         orders = data || []
@@ -531,271 +596,69 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
           if (subjectCashierId) {
             const mine = o.cashier_id === subjectCashierId || (!o.cashier_id && o.order_taker_id === subjectCashierId)
             if (!mine) return false
+          } else if (ownerMode) {
+            if (o.cashier_id || o.order_taker_id) return false
           }
           const ts = new Date(o.created_at)
           return ts >= s && ts < e
         })
       }
-      const nonCancelled = orders.filter(o => !['Cancelled', 'cancelled'].includes(o.order_status))
 
-      // 3) Split legs for split orders (keyed lowercased)
-      let splitByMethod = {}
-      const splitIds = nonCancelled.filter(o => o.payment_method === 'Split').map(o => o.id)
-      if (online && splitIds.length) {
-        const { data: txs } = await supabase
-          .from('order_payment_transactions')
-          .select('payment_method,amount')
-          .in('order_id', splitIds)
-        ;(txs || []).forEach(tx => {
-          const k = (tx.payment_method || '').toLowerCase()
-          splitByMethod[k] = (splitByMethod[k] || 0) + (parseFloat(tx.amount) || 0)
-        })
-      }
+      // Overall figures — no per-account split, no drawer count. Simple.
+      const summ = orderSummary(orders)
+      const mo   = online
+        ? await fetchMoneyOut({ userId: user.id, subjectCashierId, ownerMode, startISO: shiftStart, endISO: shiftEnd })
+        : { totalExpense: 0, payorders: 0 }
+      // Collective / cash in hand = collected sales (Total − Credit) less the
+      // cash paid out (expenses + supplier/PO payments). Discounts are already
+      // netted into total_amount, so they don't subtract here.
+      const cashInHand = summ.totalSales - summ.creditSales - mo.totalExpense - mo.payorders
 
-      // 4) Money OUT this shift — expenses paid by this cashier, keyed by the
-      //    account they were paid from (expenses.payment_method = account name).
-      //    Every account gets its own OUT figure, not just the cash drawer.
-      const payoutsByMethod = {}
-      if (online) {
-        try {
-          let eq = supabase
-            .from('expenses')
-            .select('amount,total_amount,payment_method,created_at,cashier_id')
-            .eq('user_id', user.id)
-            .gte('created_at', shiftStart)
-            .lt('created_at', shiftEnd)
-          if (subjectCashierId) eq = eq.eq('cashier_id', subjectCashierId)
-          const { data: exps } = await eq
-          ;(exps || []).forEach(ex => {
-            const k = (ex.payment_method || '').toLowerCase().trim()
-            if (!k) return
-            payoutsByMethod[k] = (payoutsByMethod[k] || 0) + (parseFloat(ex.total_amount ?? ex.amount ?? 0) || 0)
-          })
-        } catch {}
-      }
-
-      // 4b) Money IN outside orders — customer-account (ledger) payments this
-      //     cashier collected, keyed by the account they were received into
-      //     (customer_payments.payment_method = account name). Not order sales,
-      //     but real money entering each account this shift.
-      //     customer_payments has no cashier FK — attribution is by the
-      //     collected_by_name/role stamped at record time (RecordPaymentModal
-      //     writes authManager.getDisplayName()/getRole()).
-      const payInByMethod = {}
-      if (online) {
-        try {
-          const { data: pays } = await supabase
-            .from('customer_payments')
-            .select('amount_received,payment_method,collected_by_name,collected_by_role')
-            .eq('user_id', user.id)
-            .gte('created_at', shiftStart)
-            .lt('created_at', shiftEnd)
-          // Per-cashier subject: only payments this cashier collected. Whole
-          // business (admin): every collector counts, so myNames is null.
-          const myNames = subjectCashierId
-            ? [subjectName].filter(Boolean).map(n => n.toLowerCase().trim())
-            : null
-          ;(pays || []).forEach(p => {
-            if (myNames) {
-              const who  = (p.collected_by_name || '').toLowerCase().trim()
-              const role = (p.collected_by_role || '').toLowerCase()
-              if (!who || !myNames.includes(who)) return
-              if (role && role !== 'cashier') return
-            }
-            const k = (p.payment_method || '').toLowerCase().trim()
-            if (!k) return
-            payInByMethod[k] = (payInByMethod[k] || 0) + (parseFloat(p.amount_received) || 0)
-          })
-        } catch {}
-      }
-
-      // 5) Opening float default = counted cash from a PRIOR business day's cash-up
-      //    (yesterday's closing float carries into today). We deliberately skip
-      //    cash-ups from earlier the SAME day — reusing today's counted cash as the
-      //    float would double-count today's cash sales.
-      let openingFloat = 0
-      if (online && subjectCashierId) {
-        try {
-          const { data: last } = await supabase
-            .from('cashier_cashups')
-            .select('total_counted_cash, created_at')
-            .eq('cashier_id', subjectCashierId)
-            .lt('created_at', shiftStart)
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle()
-          if (last?.total_counted_cash != null) openingFloat = parseFloat(last.total_counted_cash) || 0
-        } catch {}
-      }
-
-      // 6) Per-account sales this shift (direct + split legs).
-      //    Only the FIRST cash-like account (by sort_order) is the physical
-      //    drawer — it alone gets the float/payout math. Any other cash-like
-      //    account ("Petty Cash", a second till…) is itemized as a normal
-      //    tender; treating them all as drawers would double-count the float
-      //    and hide every line after the first from the report.
-      let drawerTaken = false
-      let allocatedLegs = 0
-      const lines = accts.map(acc => {
-        const isCash = isCashAccount(acc) && !drawerTaken
-        if (isCash) drawerTaken = true
-        const direct = nonCancelled
-          .filter(o => o.payment_method !== 'Split' && methodMatchesAccount(o.payment_method, acc))
-          .reduce((s, o) => s + parseFloat(o.total_amount || 0), 0)
-        const legs = splitLegsForAccount(splitByMethod, acc)
-        allocatedLegs += legs
-        const sales  = direct + legs
-        // Per-account movement: ledger payments received INTO this account and
-        // expenses paid FROM it (splitLegsForAccount is a generic
-        // method-map→account matcher, reused for both).
-        const payIn  = splitLegsForAccount(payInByMethod, acc)
-        const payOut = splitLegsForAccount(payoutsByMethod, acc)
-        // Non-cash tenders default counted = expected; cash starts blank —
-        // cashupCalc keeps it null (blocks Print & Save) until really counted.
-        return {
-          id: acc.id, name: acc.name, key: acc.payment_method_key,
-          icon: acc.icon, color: acc.color || '#6366f1', isCash,
-          sales, payIn, payOut,
-          counted: isCash ? '' : String(Math.round(sales + payIn - payOut)),
-        }
-      })
-
-      // 7) Split remainder: split-order money not itemized above — legs that
-      //    were never recorded (all of them when offline) plus legs whose
-      //    method matches no configured account. Shown as its own line so the
-      //    tender sum still ties to what was actually rung up instead of
-      //    silently dropping the difference.
-      const splitTotal = nonCancelled
-        .filter(o => o.payment_method === 'Split')
-        .reduce((s, o) => s + parseFloat(o.total_amount || 0), 0)
-      const splitGap = splitTotal - allocatedLegs
-      if (splitGap > 0.5) {
-        lines.push({
-          id: 'split-unallocated', name: 'Split (unallocated)', key: null,
-          icon: 'Layers', color: '#6366f1', isCash: false,
-          sales: splitGap, payIn: 0, payOut: 0, counted: String(Math.round(splitGap)),
-        })
-      }
-
-      // 7b) Movements whose method matches NO configured account: cash-like
-      //     ones belong to the drawer; the rest get their own line so the
-      //     in/out totals still tie to what actually happened.
-      const matchedAnywhere = (k) => accts.some(a => methodMatchesAccount(k, a))
-      const cashLike = (k) => k === 'cash' || /(^|\s)cash(\s|$)/.test(k)
-      let leftIn = { cash: 0, other: 0 }, leftOut = { cash: 0, other: 0 }
-      Object.entries(payInByMethod).forEach(([k, v]) => {
-        if (!matchedAnywhere(k)) leftIn[cashLike(k) ? 'cash' : 'other'] += v
-      })
-      Object.entries(payoutsByMethod).forEach(([k, v]) => {
-        if (!matchedAnywhere(k)) leftOut[cashLike(k) ? 'cash' : 'other'] += v
-      })
-      const drawer = lines.find(l => l.isCash)
-      if (drawer) { drawer.payIn += leftIn.cash; drawer.payOut += leftOut.cash }
-      else { leftIn.other += leftIn.cash; leftOut.other += leftOut.cash }
-      if (leftIn.other > 0.5 || leftOut.other > 0.5) {
-        lines.push({
-          id: 'movement-unmatched', name: 'Other methods', key: null,
-          icon: 'Wallet', color: '#64748b', isCash: false,
-          sales: 0, payIn: leftIn.other, payOut: leftOut.other,
-          counted: String(Math.round(leftIn.other - leftOut.other)),
-        })
-      }
-
-      setCashup({
+      setReport({
         shiftStart, shiftEnd, sessionId,
         cashierName: subjectName,
         canSave,
         storeName: profile.store_name || profile.customer_name || '',
-        orderCount: nonCancelled.length,
-        openingFloat: String(Math.round(openingFloat)),
         offline: !online,
-        requireFp,
-        ownerUserId: user.id,
-        lines,
+        ...summ,
+        totalExpense: mo.totalExpense,
+        payorders:    mo.payorders,
+        cashInHand,
       })
     } catch (err) {
-      console.error('[CashierAnalytics] cash-up error:', err)
+      console.error('[CashierAnalytics] cash report error:', err)
       notify.error('Failed to build cash report')
-      setCashupOpen(false)
+      setReportOpen(false)
     } finally {
-      setCashupLoading(false)
+      setReportLoading(false)
     }
-  }, [accounts, loadAccounts, viewFilter, cashierList])
-
-  const setCounted = (id, val) => {
-    setCashup(c => c ? { ...c, lines: c.lines.map(l => l.id === id ? { ...l, counted: val } : l) } : c)
-  }
-  const setOpeningFloat = (val) => setCashup(c => c ? { ...c, openingFloat: val } : c)
-
-  // Derived cash-up numbers for render + save. Every account line is a
-  // movement statement: sales IN + ledger payments IN − expense payouts OUT
-  // (the drawer additionally starts from the opening float).
-  const cashupCalc = useMemo(() => {
-    if (!cashup) return null
-    const of = parseFloat(cashup.openingFloat) || 0
-    const lines = cashup.lines.map(l => {
-      const expected = (l.isCash ? of : 0) + l.sales + (l.payIn || 0) - (l.payOut || 0)
-      const blank = l.counted === '' || l.counted == null
-      // The drawer must be PHYSICALLY counted: blank stays null (and blocks
-      // Print & Save) instead of silently assuming expected, which printed a
-      // fake "BALANCED" report. Non-cash tenders keep the expected default.
-      const counted = blank ? (l.isCash ? null : expected) : (parseFloat(l.counted) || 0)
-      return { ...l, expected, counted, overShort: counted == null ? null : counted - expected }
-    })
-    const cashLine = lines.find(l => l.isCash) || null
-    const totalCollected = lines.reduce((s, l) => s + l.sales, 0)
-    const totalPayIn     = lines.reduce((s, l) => s + (l.payIn  || 0), 0)
-    const totalPayOut    = lines.reduce((s, l) => s + (l.payOut || 0), 0)
-    const canPrint = !cashLine || cashLine.counted != null
-    return { of, lines, cashLine, totalCollected, totalPayIn, totalPayOut, canPrint }
-  }, [cashup])
-
-  // The owner-fingerprint gate blocks printing only where it can work:
-  // 'unsupported' (browser, no native dpfj) and 'not_enrolled' fail OPEN so a
-  // shift can always be closed; a missing/denied reader keeps the gate shut.
-  const fpGateActive = !!cashup?.requireFp && !fpVerified &&
-    !['unsupported', 'not_enrolled'].includes(fpStatus)
+  }, [viewFilter, cashierList])
 
   const doPrintAndSave = useCallback(async () => {
-    if (!cashup || !cashupCalc) return
-    if (!cashupCalc.canPrint) {
-      notify.warning('Count the drawer first — enter the counted cash to print')
-      return
-    }
-    if (fpGateActive) {
-      notify.warning('Owner fingerprint required — place the owner’s finger on the reader')
-      return
-    }
+    if (!report) return
     setSaving(true)
     try {
       const user    = authManager.getCurrentUser()
       const cashier = authManager.getCashier()
-      const { of, lines, cashLine, totalCollected, totalPayIn, totalPayOut } = cashupCalc
 
       const reportData = {
         title: 'CASH REPORT',
-        subtitle: 'SHIFT CLOSE',
-        storeName: cashup.storeName,
-        cashierName: cashup.cashierName,
-        shiftStart: cashup.shiftStart,
-        shiftEnd: cashup.shiftEnd,
-        orderCount: cashup.orderCount,
-        openingFloat: of,
-        // Drawer-scoped movement (for the CASH (DRAWER) section)
-        cashPayouts: cashLine ? (cashLine.payOut || 0) : 0,
-        accountCashPayments: cashLine ? (cashLine.payIn || 0) : 0,
-        // Across ALL accounts (for the totals section)
-        totalPayIn, totalPayOut,
-        offline: !!cashup.offline,
-        cashSales: cashLine ? cashLine.sales : 0,
-        totalCollected,
-        currency: 'Rs',
-        lines: lines.map(l => ({
-          name: l.name, isCash: l.isCash,
-          sales: l.sales, payIn: l.payIn || 0, payOut: l.payOut || 0,
-          expected: l.expected, counted: l.counted, overShort: l.overShort,
-        })),
+        subtitle: 'SHIFT SUMMARY',
+        storeName: report.storeName,
+        cashierName: report.cashierName,
+        shiftStart: report.shiftStart,
+        shiftEnd: report.shiftEnd,
         printedAt: new Date().toISOString(),
+        offline: !!report.offline,
+        currency: 'Rs',
+        totalOrders:    report.totalOrders,
+        creditOrders:   report.creditOrders,
+        totalSales:     report.totalSales,
+        creditSales:    report.creditSales,
+        totalDiscounts: report.totalDiscounts,
+        totalExpense:   report.totalExpense,
+        payorders:      report.payorders,
+        cashInHand:     report.cashInHand,
       }
 
       // ── Print ──
@@ -815,35 +678,41 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
         notify.error('Print error: ' + (e?.message || e))
       }
 
-      // ── Save snapshot (online only). One row per cashier per shift: an
-      //    existing row for this shift_start is UPDATED, so a failed print
-      //    retried (or a mid-shift re-count) can't pile up duplicates that
-      //    pollute the admin settlement view. ──
-      if (typeof navigator !== 'undefined' && navigator.onLine && user?.id && cashier?.id) {
+      // ── Save a simple snapshot (cashier login, online only). One row per
+      //    cashier per shift (upsert on shift_start) so a reprint updates the
+      //    row instead of duplicating. There's no counted-cash reconciliation
+      //    here, so the counted/over-short columns stay null — the summary lives
+      //    in `breakdown`. Admin/owner prints don't persist a cashier row. ──
+      if (report.canSave && typeof navigator !== 'undefined' && navigator.onLine && user?.id && cashier?.id) {
         try {
           const payload = {
             user_id: user.id,
             cashier_id: cashier.id,
-            session_id: cashup.sessionId || null,
-            shift_start: cashup.shiftStart,
-            shift_end: cashup.shiftEnd,
-            opening_float: of,
-            breakdown: lines.map(l => ({
-              account: l.name, key: l.key, is_cash: l.isCash,
-              sales: l.sales, payments_in: l.payIn || 0, payouts: l.payOut || 0,
-              expected: l.expected, counted: l.counted, over_short: l.overShort,
-            })),
-            total_collected: totalCollected,
-            total_expected_cash: cashLine ? cashLine.expected : 0,
-            total_counted_cash: cashLine ? cashLine.counted : 0,
-            cash_over_short: cashLine ? cashLine.overShort : 0,
-            order_count: cashup.orderCount,
+            session_id: report.sessionId || null,
+            shift_start: report.shiftStart,
+            shift_end: report.shiftEnd,
+            opening_float: 0,
+            breakdown: {
+              total_orders:    report.totalOrders,
+              credit_orders:   report.creditOrders,
+              total_sales:     report.totalSales,
+              credit_sales:    report.creditSales,
+              total_discounts: report.totalDiscounts,
+              total_expense:   report.totalExpense,
+              payorders:       report.payorders,
+              cash_in_hand:    report.cashInHand,
+            },
+            total_collected: report.totalSales - report.creditSales,
+            total_expected_cash: report.cashInHand,
+            total_counted_cash: null,
+            cash_over_short: null,
+            order_count: report.totalOrders,
           }
           const { data: existing } = await supabase
             .from('cashier_cashups')
             .select('id')
             .eq('cashier_id', cashier.id)
-            .eq('shift_start', cashup.shiftStart)
+            .eq('shift_start', report.shiftStart)
             .order('created_at', { ascending: false })
             .limit(1)
             .maybeSingle()
@@ -852,19 +721,18 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
             : await supabase.from('cashier_cashups').insert(payload)
           if (saveErr) throw saveErr
         } catch (e) {
-          console.warn('[CashierAnalytics] cash-up save failed (non-blocking):', e?.message)
-          // The paper printed but the admin will never see this count — say so.
-          notify.error('Cash-up snapshot NOT saved — tell your admin (report still printed)')
+          console.warn('[CashierAnalytics] cash report save failed (non-blocking):', e?.message)
+          notify.error('Snapshot NOT saved — tell your admin (report still printed)')
         }
-      } else if (cashup.offline) {
+      } else if (report.offline) {
         notify.warning('Offline — report printed but the snapshot was not saved')
       }
 
-      if (printed) setCashupOpen(false)
+      if (printed) setReportOpen(false)
     } finally {
       setSaving(false)
     }
-  }, [cashup, cashupCalc, fpGateActive])
+  }, [report])
 
   if (!isOpen) return null
 
@@ -879,6 +747,11 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
   // own shift (and saves the snapshot); an admin/owner prints for the currently
   // selected view (a chosen cashier, or the whole business day).
   const canShowCashReport = !!authManager.getCurrentUser()?.id
+
+  // Only an admin/owner may switch the view (whole business or another cashier).
+  // A cashier is locked to their own sales — they must never see the overall
+  // figures or a colleague's numbers, even with VIEW_SALES_ANALYTICS granted.
+  const isAdminUser = authManager.isAdmin()
 
   // Format business window label
   let bizLabel = 'Today\'s business day'
@@ -927,21 +800,23 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
                 Cash Report
               </button>
             )}
-            <select
-              value={viewFilter}
-              onChange={(e) => {
-                const val = e.target.value
-                setViewFilter(val)
-                fetchStats(val)
-              }}
-              className={`text-xs px-2 py-1.5 rounded-lg border transition-colors ${isDark ? 'bg-gray-800 border-gray-600 text-gray-200' : 'bg-white border-gray-300 text-gray-700'}`}
-            >
-              <option value="all">All (Overall)</option>
-              <option value="me">My Orders</option>
-              {cashierList.map(c => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
+            {isAdminUser && (
+              <select
+                value={viewFilter}
+                onChange={(e) => {
+                  const val = e.target.value
+                  setViewFilter(val)
+                  fetchStats(val)
+                }}
+                className={`text-xs px-2 py-1.5 rounded-lg border transition-colors ${isDark ? 'bg-gray-800 border-gray-600 text-gray-200' : 'bg-white border-gray-300 text-gray-700'}`}
+              >
+                <option value="all">All (Overall)</option>
+                <option value="me">My Orders</option>
+                {cashierList.map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            )}
             <button
               onClick={() => fetchStats()}
               disabled={loading}
@@ -1003,6 +878,26 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
                     valueColor="text-red-500"
                     bg={cardBg} border={border} text={text} textSec={textSec}
                   />
+                </div>
+
+                {/* Shift Summary — the exact figures printed on the Cash Report */}
+                <div className={`${cardBg} rounded-xl p-3 border ${border}`}>
+                  <p className={`text-[10px] uppercase tracking-wide font-semibold ${textSec} mb-2.5`}>Shift Summary</p>
+                  <div className="space-y-1.5">
+                    <SumRow label="Total Orders"     value={stats.totalOrders}                        text={text} textSec={textSec} />
+                    <SumRow label="Credit Orders"    value={stats.creditOrders}                       text={text} textSec={textSec} />
+                    <SumRow label="Total Sales"      value={`Rs ${fmt(stats.totalSales)}`}            text={text} textSec={textSec} />
+                    <SumRow label="Credit Sales"     value={`Rs ${fmt(stats.creditSales)}`}           text={text} textSec={textSec} />
+                    <SumRow label="Total Discounts"  value={`Rs ${fmt(stats.totalDiscounts)}`}        text={text} textSec={textSec} />
+                    <SumRow label="Total Expense"    value={`Rs ${fmt(moneyOut.totalExpense)}`}       text={text} textSec={textSec} />
+                    <SumRow label="Payorders Amount" value={`Rs ${fmt(moneyOut.payorders)}`}          text={text} textSec={textSec} />
+                    <div className={`flex items-center justify-between pt-2 mt-1 border-t ${border}`}>
+                      <span className={`text-sm font-bold ${text}`}>Cash in Hand</span>
+                      <span className="text-sm font-bold text-emerald-500 tabular-nums">
+                        Rs {fmt(stats.totalSales - stats.creditSales - moneyOut.totalExpense - moneyOut.payorders)}
+                      </span>
+                    </div>
+                  </div>
                 </div>
 
                 {/* Payment breakdown — dynamic accounts */}
@@ -1081,40 +976,24 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
 
           {/* ── Right: Calculator 40% ── */}
           <div className="p-4 flex flex-col" style={{ width: '40%' }}>
-            <Calculator isDark={isDark} active={!cashupOpen} />
+            <Calculator isDark={isDark} active={!reportOpen} />
           </div>
         </div>
 
-        {/* ── Cash-up / Z-report overlay ── */}
+        {/* ── Simple Cash Report overlay (overall summary — no drawer setup) ── */}
         <AnimatePresence>
-          {cashupOpen && (
-            <CashUpPanel
+          {reportOpen && (
+            <CashReportPanel
               isDark={isDark}
-              loading={cashupLoading}
+              loading={reportLoading}
               saving={saving}
-              cashup={cashup}
-              calc={cashupCalc}
+              report={report}
               fmtTime={fmtTime}
-              fpGate={cashup?.requireFp ? { active: fpGateActive, status: fpStatus, verified: fpVerified } : null}
-              onCounted={setCounted}
-              onOpeningFloat={setOpeningFloat}
-              onClose={() => setCashupOpen(false)}
+              onClose={() => setReportOpen(false)}
               onPrint={doPrintAndSave}
             />
           )}
         </AnimatePresence>
-
-        {/* Owner-fingerprint verification engine for the shift-close gate.
-            Compact = no UI of its own; unmounts once verified (or panel closed)
-            so the attendance kiosk gets the reader back. */}
-        {cashupOpen && cashup?.requireFp && !fpVerified && (
-          <OwnerFingerprintUnlock
-            compact
-            userId={cashup.ownerUserId}
-            onUnlock={() => setFpVerified(true)}
-            onStatusChange={setFpStatus}
-          />
-        )}
       </motion.div>
     </div>
   )
@@ -1132,32 +1011,35 @@ function StatCard({ icon, label, value, valueColor, bg, border, text, textSec })
   )
 }
 
-// ─── Cash-Up panel (shift close / Z-report) ──────────────────────────────────
+// One label/value line of the on-screen Shift Summary card.
+function SumRow({ label, value, text, textSec }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className={`text-xs ${textSec}`}>{label}</span>
+      <span className={`text-xs font-semibold tabular-nums ${text}`}>{value}</span>
+    </div>
+  )
+}
 
-function CashUpPanel({ isDark, loading, saving, cashup, calc, fmtTime, fpGate, onCounted, onOpeningFloat, onClose, onPrint }) {
+// ─── Cash Report panel (simple overall shift summary) ────────────────────────
+// A read-only summary — NO drawer setup, NO counted-cash reconciliation. Shows
+// exactly what prints, and prints whether cashier-drawer mode is on or off.
+
+function CashReportPanel({ isDark, loading, saving, report, fmtTime, onClose, onPrint }) {
   const bg      = isDark ? 'bg-gray-900' : 'bg-white'
   const border  = isDark ? 'border-gray-700' : 'border-gray-200'
   const text    = isDark ? 'text-gray-100' : 'text-gray-900'
   const textSec = isDark ? 'text-gray-400' : 'text-gray-500'
   const cardBg  = isDark ? 'bg-gray-800/60' : 'bg-gray-50'
-  const inputCls = `w-28 text-right text-xs px-2 py-1 rounded-lg border tabular-nums ${isDark ? 'bg-gray-800 border-gray-600 text-gray-100' : 'bg-white border-gray-300 text-gray-900'} focus:outline-none focus:border-indigo-500`
+  const money   = (n) => `Rs ${fmt(n)}`
 
-  const money = (n) => `Rs ${fmt(n)}`
-  // null = not counted yet (drawer only) — neutral, never "Balanced"
-  const overShortColor = (v) => (v == null || v === 0) ? textSec : v > 0 ? 'text-blue-500' : 'text-red-500'
-  const overShortLabel = (v) => v == null ? 'Enter counted cash' : v === 0 ? 'Balanced' : v > 0 ? `Over ${money(v)}` : `Short ${money(Math.abs(v))}`
-  // Chip + input tones: amber = not counted, green = balanced, blue = over, red = short
-  const overShortChip = (v) =>
-    v == null ? 'bg-amber-500/15 text-amber-500' :
-    v === 0   ? 'bg-emerald-500/15 text-emerald-500' :
-    v > 0     ? 'bg-blue-500/15 text-blue-500' :
-                'bg-red-500/15 text-red-500'
-  const inputToned = (v) => `w-28 text-right text-xs px-2 py-1 rounded-lg border-2 tabular-nums focus:outline-none ${isDark ? 'bg-gray-800 text-gray-100' : 'bg-white text-gray-900'} ${
-    v == null ? 'border-amber-400/70 focus:border-amber-500' :
-    v === 0   ? 'border-emerald-500/70 focus:border-emerald-500' :
-    v > 0     ? 'border-blue-500/70 focus:border-blue-500' :
-                'border-red-500/70 focus:border-red-500'
-  }`
+  // One label/value row of the summary. Strong = the emphasised final line.
+  const Line = ({ label, value, strong }) => (
+    <div className={`flex items-center justify-between ${strong ? 'pt-2 mt-1 border-t ' + border : ''}`}>
+      <span className={`${strong ? 'text-sm font-bold ' + text : 'text-xs ' + textSec}`}>{label}</span>
+      <span className={`${strong ? 'text-sm font-bold' : 'text-xs font-semibold'} tabular-nums ${strong ? 'text-emerald-500' : text}`}>{value}</span>
+    </div>
+  )
 
   return (
     <motion.div
@@ -1176,13 +1058,13 @@ function CashUpPanel({ isDark, loading, saving, cashup, calc, fmtTime, fpGate, o
             <Receipt className="w-4.5 h-4.5 text-emerald-500" style={{ width: 18, height: 18 }} />
           </div>
           <div>
-            <h2 className={`text-sm font-bold ${text}`}>Cash Report — Shift Close</h2>
+            <h2 className={`text-sm font-bold ${text}`}>Cash Report</h2>
             <p className={`text-[11px] ${textSec} flex items-center gap-1.5`}>
-              {cashup && (
+              {report && (
                 <>
-                  <User className="w-3 h-3" />{cashup.cashierName}
+                  <User className="w-3 h-3" />{report.cashierName}
                   <span className="opacity-40">·</span>
-                  {fmtTime(cashup.shiftStart)} → {fmtTime(cashup.shiftEnd)}
+                  {fmtTime(report.shiftStart)} → {fmtTime(report.shiftEnd)}
                 </>
               )}
             </p>
@@ -1195,163 +1077,40 @@ function CashUpPanel({ isDark, loading, saving, cashup, calc, fmtTime, fpGate, o
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3" style={{ maxHeight: 470 }}>
-        {loading || !calc ? (
+        {loading || !report ? (
           <div className="flex items-center justify-center h-full">
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-emerald-400 border-t-transparent" />
           </div>
         ) : (
           <>
-            {/* Offline = partial data — say it, don't print a normal-looking report */}
-            {cashup.offline && (
+            {/* Offline = expenses & payorders unavailable → cash-in-hand is partial */}
+            {report.offline && (
               <div className={`flex items-center gap-2 rounded-xl px-3 py-2 border text-xs font-medium bg-amber-500/15 border-amber-500/40 ${isDark ? 'text-amber-400' : 'text-amber-600'}`}>
                 <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                Offline — split-payment detail, cash payouts, account collections and opening float are unavailable. This report is partial and will not be saved.
+                Offline — expenses and payorders are unavailable, so Cash in Hand is partial. This report will not be saved.
               </div>
             )}
 
-            {/* Owner-fingerprint shift-close gate (admin payroll setting) */}
-            {fpGate && (
-              <div className={`flex items-center gap-2 rounded-xl px-3 py-2 border text-xs font-medium ${
-                fpGate.verified
-                  ? 'bg-emerald-500/15 border-emerald-500/40 ' + (isDark ? 'text-emerald-400' : 'text-emerald-600')
-                  : fpGate.active
-                    ? 'bg-violet-500/15 border-violet-500/40 ' + (isDark ? 'text-violet-300' : 'text-violet-700')
-                    : 'bg-gray-500/10 border-gray-400/30 ' + (isDark ? 'text-gray-400' : 'text-gray-500')
-              }`}>
-                <ShieldCheck className="w-4 h-4 flex-shrink-0" />
-                {fpGate.verified
-                  ? 'Owner verified — printing unlocked.'
-                  : fpGate.active
-                    ? (fpGate.status === 'denied'
-                        ? 'Not the owner — only the owner’s fingerprint can authorize shift close.'
-                        : fpGate.status === 'no_reader'
-                          ? 'Owner fingerprint required, but no reader detected — plug in the reader to continue.'
-                          : 'Owner fingerprint required to close the shift — place the owner’s finger on the reader.')
-                    : 'Owner fingerprint requirement skipped (not available on this terminal).'}
+            {/* Counts */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className={`${cardBg} rounded-xl p-3 border ${border}`}>
+                <p className={`text-[10px] uppercase tracking-wide font-semibold ${textSec}`}>Total Orders</p>
+                <p className={`text-xl font-bold ${text}`}>{report.totalOrders}</p>
               </div>
-            )}
-
-            {/* Meta strip — shift movement across ALL accounts, not just cash */}
-            <div className="grid grid-cols-4 gap-2">
-              <div className={`${cardBg} rounded-xl p-2.5 border ${border}`}>
-                <p className={`text-[10px] uppercase ${textSec}`}>Orders</p>
-                <p className={`text-sm font-bold ${text}`}>{cashup.orderCount}</p>
-              </div>
-              <div className={`${cardBg} rounded-xl p-2.5 border ${border}`}>
-                <p className={`text-[10px] uppercase ${textSec}`}>Total In</p>
-                <p className={`text-sm font-bold text-emerald-500`}>{money(calc.totalCollected + calc.totalPayIn)}</p>
-                <p className={`text-[9px] ${textSec}`}>sales {fmt(calc.totalCollected)} · pay {fmt(calc.totalPayIn)}</p>
-              </div>
-              <div className={`${cardBg} rounded-xl p-2.5 border ${border}`}>
-                <p className={`text-[10px] uppercase ${textSec}`}>Total Out</p>
-                <p className={`text-sm font-bold text-red-500`}>{money(calc.totalPayOut)}</p>
-                <p className={`text-[9px] ${textSec}`}>expenses paid</p>
-              </div>
-              <div className={`${cardBg} rounded-xl p-2.5 border ${border}`}>
-                <p className={`text-[10px] uppercase ${textSec}`}>Net</p>
-                <p className={`text-sm font-bold ${text}`}>{money(calc.totalCollected + calc.totalPayIn - calc.totalPayOut)}</p>
-                <p className={`text-[9px] ${textSec}`}>in − out, all accounts</p>
+              <div className={`${cardBg} rounded-xl p-3 border ${border}`}>
+                <p className={`text-[10px] uppercase tracking-wide font-semibold ${textSec}`}>Credit Orders</p>
+                <p className={`text-xl font-bold text-purple-500`}>{report.creditOrders}</p>
               </div>
             </div>
 
-            {/* Cash drawer block */}
-            {calc.cashLine && (
-              <div className={`${cardBg} rounded-xl p-3 border ${border}`}>
-                <div className="flex items-center gap-2 mb-2">
-                  <Banknote className="w-4 h-4 text-green-500" />
-                  <span className={`text-xs font-bold ${text}`}>{calc.cashLine.name} (Drawer)</span>
-                </div>
-                <div className="space-y-1.5 text-xs">
-                  <Row label="Opening float" textSec={textSec}>
-                    <input
-                      type="number" inputMode="decimal" min="0" value={cashup.openingFloat}
-                      onChange={(e) => onOpeningFloat(e.target.value)}
-                      className={inputCls}
-                    />
-                  </Row>
-                  <Row label="+ Cash sales" textSec={textSec}><span className={calc.cashLine.sales > 0 ? text : textSec}>{money(calc.cashLine.sales)}</span></Row>
-                  {/* Always visible so a zero is a visible fact, not a hidden one:
-                      cash collected on customer accounts and cash paid out on
-                      expenses both move the physical drawer. */}
-                  <Row label="+ Account payments (cash)" textSec={textSec}>
-                    <span className={(calc.cashLine.payIn || 0) > 0 ? 'text-emerald-500 font-semibold' : textSec}>{money(calc.cashLine.payIn || 0)}</span>
-                  </Row>
-                  <Row label="− Cash payouts (expenses)" textSec={textSec}>
-                    <span className={(calc.cashLine.payOut || 0) > 0 ? 'text-red-500 font-semibold' : textSec}>{money(calc.cashLine.payOut || 0)}</span>
-                  </Row>
-                  <div className={`flex items-center justify-between pt-1.5 border-t ${border}`}>
-                    <span className={`font-semibold ${text}`}>= Expected in drawer</span>
-                    <span className={`font-bold ${text}`}>{money(calc.cashLine.expected)}</span>
-                  </div>
-                  <Row label="Counted cash" textSec={textSec}>
-                    <div className="flex items-center gap-1.5">
-                      {/* One-tap fill: an explicit confirmation that the drawer
-                          held exactly the expected amount (unlike the old silent
-                          blank-means-balanced behavior). */}
-                      <button
-                        type="button"
-                        onClick={() => onCounted(calc.cashLine.id, String(Math.round(calc.cashLine.expected)))}
-                        title="Fill with the expected amount"
-                        className={`text-[10px] px-2 py-1 rounded-lg font-semibold transition-colors ${isDark ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30' : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100 border border-emerald-200'}`}
-                      >
-                        = {fmt(calc.cashLine.expected)}
-                      </button>
-                      <input
-                        type="number" inputMode="decimal" min="0" value={cashup.lines.find(l => l.id === calc.cashLine.id)?.counted ?? ''}
-                        placeholder="count drawer" onChange={(e) => onCounted(calc.cashLine.id, e.target.value)}
-                        className={inputToned(calc.cashLine.overShort)}
-                      />
-                    </div>
-                  </Row>
-                  <div className={`flex items-center justify-between pt-1.5 border-t ${border}`}>
-                    <span className={`font-semibold ${text}`}>Over / (Short)</span>
-                    <span className={`px-2.5 py-1 rounded-full text-[11px] font-bold ${overShortChip(calc.cashLine.overShort)}`}>{overShortLabel(calc.cashLine.overShort)}</span>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Non-cash tenders */}
-            <div className={`${cardBg} rounded-xl p-3 border ${border}`}>
-              <p className={`text-[10px] uppercase tracking-wide font-semibold ${textSec} mb-2`}>Other Accounts (sales + in − out)</p>
-              <div className="space-y-2">
-                {calc.lines.filter(l => !l.isCash).length === 0 && (
-                  <p className={`text-xs ${textSec}`}>No non-cash tenders this shift.</p>
-                )}
-                {calc.lines.filter(l => !l.isCash).map((l) => {
-                  const Icon = getAccountIcon(l.icon)
-                  const rawCounted = cashup.lines.find(x => x.id === l.id)?.counted ?? ''
-                  const hasMovement = (l.payIn || 0) > 0 || (l.payOut || 0) > 0
-                  return (
-                    <div key={l.id} className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2 min-w-0" style={{ color: l.color }}>
-                        <Icon className="w-3.5 h-3.5 flex-shrink-0" />
-                        <div className="min-w-0">
-                          <span className={`block text-xs font-medium truncate ${text}`}>{l.name}</span>
-                          {hasMovement && (
-                            <span className={`block text-[10px] truncate ${textSec}`}>
-                              sales {fmt(l.sales)}
-                              {(l.payIn  || 0) > 0 && <> · <span className="text-emerald-500">in {fmt(l.payIn)}</span></>}
-                              {(l.payOut || 0) > 0 && <> · <span className="text-red-500">out {fmt(l.payOut)}</span></>}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        <span className={`text-xs ${textSec}`}>Exp {money(l.expected)}</span>
-                        <input
-                          type="number" inputMode="decimal" min="0" value={rawCounted}
-                          onChange={(e) => onCounted(l.id, e.target.value)}
-                          className={l.overShort === 0 ? inputCls : inputToned(l.overShort)}
-                        />
-                        <span className={`text-[11px] w-20 text-right font-semibold ${overShortColor(l.overShort)}`}>
-                          {l.overShort === 0 ? '✓' : (l.overShort > 0 ? '+' : '') + fmt(l.overShort)}
-                        </span>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
+            {/* Money summary — mirrors the printed template exactly */}
+            <div className={`${cardBg} rounded-xl p-3 border ${border} space-y-1.5`}>
+              <Line label="Total Sales"      value={money(report.totalSales)} />
+              <Line label="Credit Sales"     value={money(report.creditSales)} />
+              <Line label="Total Discounts"  value={money(report.totalDiscounts)} />
+              <Line label="Total Expense"    value={money(report.totalExpense)} />
+              <Line label="Payorders Amount" value={money(report.payorders)} />
+              <Line label="Collective / Cash in Hand" value={money(report.cashInHand)} strong />
             </div>
           </>
         )}
@@ -1359,18 +1118,14 @@ function CashUpPanel({ isDark, loading, saving, cashup, calc, fmtTime, fpGate, o
 
       {/* Footer */}
       <div className={`flex-shrink-0 px-4 py-3 border-t ${border} flex items-center gap-3`}>
-        <p className={`text-[11px] flex-1 ${(calc && !calc.canPrint) || fpGate?.active ? 'text-amber-500 font-medium' : textSec}`}>
-          {calc && !calc.canPrint
-            ? 'Count the drawer and enter the counted cash to enable Print & Save.'
-            : fpGate?.active
-              ? 'Owner fingerprint required — place the owner’s finger on the reader to unlock printing.'
-              : cashup?.canSave === false
-                ? 'Prints on the thermal printer for your records. It does not save a cashier snapshot, log you out, or move money.'
-                : 'Prints on the thermal printer and saves a snapshot your admin can reconcile. It does not log you out or move money.'}
+        <p className={`text-[11px] flex-1 ${textSec}`}>
+          {report?.canSave === false
+            ? 'Prints on the thermal printer for your records. It does not log you out or move money.'
+            : 'Prints on the thermal printer and saves a snapshot your admin can see. It does not log you out or move money.'}
         </p>
         <button
           onClick={onPrint}
-          disabled={saving || loading || !calc || !calc.canPrint || fpGate?.active}
+          disabled={saving || loading || !report}
           className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-emerald-500 hover:bg-emerald-600 disabled:opacity-60 disabled:cursor-not-allowed text-white transition-colors"
         >
           {saving
@@ -1380,14 +1135,5 @@ function CashUpPanel({ isDark, loading, saving, cashup, calc, fmtTime, fpGate, o
         </button>
       </div>
     </motion.div>
-  )
-}
-
-function Row({ label, children, textSec }) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className={textSec}>{label}</span>
-      {children}
-    </div>
   )
 }

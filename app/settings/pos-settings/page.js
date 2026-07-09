@@ -99,6 +99,7 @@ export function PosSettingsPanel() {
   const [requireCustomerTakeaway, setRequireCustomerTakeaway] = useState(false)
   const [requireCustomerDelivery, setRequireCustomerDelivery] = useState(true)
   const [requireOrderTaker, setRequireOrderTaker] = useState(false)
+  const [requireTableWalkin, setRequireTableWalkin] = useState(false)
 
   // Default charges
   const [defaultSCType, setDefaultSCType] = useState('percentage')
@@ -146,6 +147,7 @@ export function PosSettingsPanel() {
     setRequireCustomerTakeaway(!!d.require_customer_takeaway)
     setRequireCustomerDelivery(d.require_customer_delivery !== false)
     setRequireOrderTaker(!!d.require_order_taker)
+    setRequireTableWalkin(!!d.require_table_walkin)
     setDefaultSCType(d.default_service_charge_type || 'percentage')
     setDefaultSCValue(d.default_service_charge_value > 0 ? String(d.default_service_charge_value) : '')
     setDefaultDCType(d.default_delivery_charge_type || 'fixed')
@@ -163,7 +165,7 @@ export function PosSettingsPanel() {
       const [settingsRes, profile] = await Promise.all([
         supabase
           .from('users')
-          .select('show_order_confirmation, auto_print_kitchen_token, auto_print_customer_receipt, auto_print_token_walkin, auto_print_token_takeaway, auto_print_token_delivery, auto_print_receipt_walkin, auto_print_receipt_takeaway, auto_print_receipt_delivery, toast_notifications_enabled, require_customer_walkin, require_customer_takeaway, require_customer_delivery, require_order_taker, default_service_charge_type, default_service_charge_value, default_delivery_charge_type, default_delivery_charge_value, kds_new_order_sound, kds_order_timeout_minutes, kds_timeout_sound_enabled, use_cashier_drawer')
+          .select('show_order_confirmation, auto_print_kitchen_token, auto_print_customer_receipt, auto_print_token_walkin, auto_print_token_takeaway, auto_print_token_delivery, auto_print_receipt_walkin, auto_print_receipt_takeaway, auto_print_receipt_delivery, toast_notifications_enabled, require_customer_walkin, require_customer_takeaway, require_customer_delivery, require_order_taker, require_table_walkin, default_service_charge_type, default_service_charge_value, default_delivery_charge_type, default_delivery_charge_value, kds_new_order_sound, kds_order_timeout_minutes, kds_timeout_sound_enabled, use_cashier_drawer')
           .eq('id', user.id)
           .single(),
         profileManager.fetchProfileFromDatabase().catch(() => profileManager.getLocalProfile()),
@@ -220,6 +222,7 @@ export function PosSettingsPanel() {
         require_customer_takeaway: requireCustomerTakeaway,
         require_customer_delivery: requireCustomerDelivery,
         require_order_taker: requireOrderTaker,
+        require_table_walkin: requireTableWalkin,
         default_service_charge_type: defaultSCType,
         default_service_charge_value: scValue,
         default_delivery_charge_type: defaultDCType,
@@ -478,7 +481,7 @@ export function PosSettingsPanel() {
               {/* ORDER RULES */}
               {activeSub === 'order-rules' && (
                 <div className={card}>
-                  {head(UserCheck, 'Order Rules', 'Require a customer or order taker before placing an order')}
+                  {head(UserCheck, 'Order Rules', 'Require a customer, order taker, or table before placing an order')}
                   <div className="space-y-2.5">
                     <Row checked={requireCustomerWalkin} onChange={() => setRequireCustomerWalkin(v => !v)} color="emerald"
                       label="Require customer — Walk-in"
@@ -492,6 +495,9 @@ export function PosSettingsPanel() {
                     <Row checked={requireOrderTaker} onChange={() => setRequireOrderTaker(v => !v)} color="indigo"
                       label="Require order taker — Walk-in"
                       description={requireOrderTaker ? 'Must select an order taker for walk-in orders' : 'Order taker optional for walk-in orders'} />
+                    <Row checked={requireTableWalkin} onChange={() => setRequireTableWalkin(v => !v)} color="rose"
+                      label="Require table — Walk-in"
+                      description={requireTableWalkin ? 'Must select a table before punching a walk-in order (Walk-in page & New Order → Walk-in tab)' : 'Table selection optional for walk-in orders'} />
                   </div>
                   <div className="mt-4"><OperationalSaveBar /></div>
                 </div>

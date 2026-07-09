@@ -53,6 +53,21 @@ function isElectron() {
   return typeof window !== 'undefined' && !!window.electronAPI?.identifyFingerprint
 }
 
+// True when the local clock is inside the configured business window. Mirrors the
+// overnight logic in businessDayUtils (uses the PC's local/PKT clock). Used only
+// when the owner opts into "restrict scans to business hours".
+function isWithinBusinessHours(start, end) {
+  const [sh, sm] = String(start || '00:00').split(':').map(Number)
+  const [eh, em] = String(end   || '23:59').split(':').map(Number)
+  const s = sh * 60 + sm
+  const e = eh * 60 + em
+  if (s === e) return true                          // 24h business
+  const now = new Date()
+  const cur = now.getHours() * 60 + now.getMinutes()
+  return e > s ? (cur >= s && cur < e)              // same-day hours (e.g. 09:00→21:00)
+               : (cur >= s || cur < e)              // overnight (e.g. 10:00→03:00)
+}
+
 export default function GlobalFingerprintListener() {
   const pathname = usePathname()
   const [popup, setPopup] = useState(null)
@@ -60,7 +75,7 @@ export default function GlobalFingerprintListener() {
   const readerRef    = useRef(null)
   const sdkRef       = useRef(null)
   const userIdRef    = useRef(null)
-  const settingsRef  = useRef({ enabled: false, popupSeconds: 3, sound: true, enableCheckout: true, gapMinutes: 30, start: '10:00', end: '03:00' })
+  const settingsRef  = useRef({ enabled: false, popupSeconds: 3, sound: true, enableCheckout: true, gapMinutes: 30, restrictHours: false, start: '10:00', end: '03:00' })
   const templatesRef = useRef([])          // [{ person_type, person_id, name, subtitle, template }]
   const scanningRef  = useRef(false)
   const busyRef      = useRef(false)
@@ -134,7 +149,7 @@ export default function GlobalFingerprintListener() {
     if (!uid) return
     const { data } = await supabase
       .from('users')
-      .select('business_start_time, business_end_time, fingerprint_attendance_enabled, fingerprint_popup_seconds, fingerprint_sound_enabled, fingerprint_enable_checkout, fingerprint_checkout_min_gap_minutes')
+      .select('business_start_time, business_end_time, fingerprint_attendance_enabled, fingerprint_popup_seconds, fingerprint_sound_enabled, fingerprint_enable_checkout, fingerprint_checkout_min_gap_minutes, fingerprint_restrict_to_business_hours')
       .eq('id', uid).single()
     if (data) {
       settingsRef.current = {
@@ -143,6 +158,7 @@ export default function GlobalFingerprintListener() {
         sound:          data.fingerprint_sound_enabled ?? true,
         enableCheckout: data.fingerprint_enable_checkout ?? true,
         gapMinutes:     data.fingerprint_checkout_min_gap_minutes ?? 30,
+        restrictHours:  !!data.fingerprint_restrict_to_business_hours,
         start:          data.business_start_time || '10:00',
         end:            data.business_end_time || '03:00',
       }
@@ -275,6 +291,12 @@ export default function GlobalFingerprintListener() {
       if (!r?.matched) { showResult({ noMatch: true }); return }
       const person = templates.find(t => `${t.person_type}:${t.person_id}` === r.id)
       if (!person) { showResult({ noMatch: true }); return }
+      // Optional guard: ignore scans outside business hours (opt-in setting).
+      const s = settingsRef.current
+      if (s.restrictHours && !isWithinBusinessHours(s.start, s.end)) {
+        showResult({ person, action: 'closed' })
+        return
+      }
       // Per-person cooldown to avoid hammering the RPC on a held finger.
       const now = Date.now()
       const last = cooldownRef.current[r.id]
@@ -307,7 +329,13 @@ export default function GlobalFingerprintListener() {
       p_enable_checkout: s.enableCheckout,
       p_checkout_gap_minutes: s.gapMinutes,
     })
-    if (error) return { action: 'error', error: error.message }
+    if (error) {
+      // Surface the real cause — otherwise the popup just says "Error" with no
+      // hint. Almost always a DB/RPC issue (e.g. migration not applied). The
+      // scan is NOT recorded when this happens.
+      console.error('[FP] record_fingerprint_scan failed:', error.message, error)
+      return { action: 'error', error: error.message }
+    }
     const row = Array.isArray(data) ? data[0] : data
     return {
       action: row?.result_action || 'already',
@@ -346,7 +374,7 @@ export default function GlobalFingerprintListener() {
     noMatch || action === 'error' ? 'red' :
     action === 'check_in' ? 'green' :
     action === 'check_out' ? 'blue' :
-    action === 'completed' ? 'slate' : 'amber'
+    action === 'completed' || action === 'closed' ? 'slate' : 'amber'
   const ring = { green: 'border-green-400', blue: 'border-blue-400', amber: 'border-amber-400', red: 'border-red-400', slate: 'border-slate-400' }[accent]
   const badge = { green: 'bg-green-500', blue: 'bg-blue-500', amber: 'bg-amber-400', red: 'bg-red-500', slate: 'bg-slate-500' }[accent]
 
@@ -368,16 +396,23 @@ export default function GlobalFingerprintListener() {
           <h2 className="text-3xl font-bold text-gray-900 mb-0.5">{popup.person?.name}</h2>
           {popup.person?.subtitle && <p className="text-gray-500 text-sm mb-3">{popup.person.subtitle}</p>}
           <div className={`flex items-center justify-center gap-2 font-bold text-xl mb-3 ${
-            action === 'check_in' ? 'text-green-600' : action === 'check_out' ? 'text-blue-600' : action === 'error' ? 'text-red-600' : action === 'completed' ? 'text-slate-600' : 'text-amber-600'
+            action === 'check_in' ? 'text-green-600' : action === 'check_out' ? 'text-blue-600' : action === 'error' ? 'text-red-600' : (action === 'completed' || action === 'closed') ? 'text-slate-600' : 'text-amber-600'
           }`}>
             {action === 'check_in'  && <><LogIn className="w-6 h-6" /> Checked In</>}
             {action === 'check_out' && <><LogOut className="w-6 h-6" /> Checked Out</>}
             {action === 'already'   && <><CheckCircle className="w-6 h-6" /> Already Marked</>}
             {action === 'completed' && <><CheckCircle className="w-6 h-6" /> Shift Complete</>}
+            {action === 'closed'    && <><AlertCircle className="w-6 h-6" /> Business Closed</>}
             {action === 'error'     && <><AlertCircle className="w-6 h-6" /> Error</>}
           </div>
           {action === 'completed' && (
             <p className="text-xs text-slate-500 -mt-2 mb-3">Already checked out today — see you next shift</p>
+          )}
+          {action === 'closed' && (
+            <p className="text-xs text-slate-500 -mt-2 mb-3">Attendance is only recorded during business hours</p>
+          )}
+          {action === 'error' && popup.error && (
+            <p className="text-xs text-red-500 -mt-2 mb-3 px-2 break-words">{popup.error}</p>
           )}
           {/* Attendance rule result (late / half-day / absent) — only when rules flagged it. */}
           {popup.status && popup.status !== 'present' && action !== 'error' && (

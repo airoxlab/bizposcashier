@@ -3021,14 +3021,16 @@ export default function OrdersPage() {
             ) : (
             <>
             <div className={`p-6 ${themeClasses.border} border-b`}>
-              <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+              {/* Header stacked as two rows: order info on top, all action buttons below */}
+              <div>
+                {/* ROW 1 — order no → date → order type → status */}
                 <div className="flex items-center space-x-4">
                   <div
                     className={`w-12 h-12 rounded-xl ${
                       getStatusConfig(selectedOrder.order_status).bg
                     } ${
                       getStatusConfig(selectedOrder.order_status).border
-                    } border-2 flex items-center justify-center`}
+                    } border-2 flex items-center justify-center flex-shrink-0`}
                   >
                     <FileText
                       className={`w-6 h-6 ${
@@ -3036,42 +3038,132 @@ export default function OrdersPage() {
                       }`}
                     />
                   </div>
-                  <div>
-                    <div className="flex items-center space-x-3 mb-1">
-                      <h2
-                        className={`text-2xl font-bold ${themeClasses.textPrimary}`}
-                      >
-                        {selectedOrder.daily_serial ? `${dailySerialManager.formatSerial(selectedOrder.daily_serial)} - ` : ''}#{selectedOrder.order_number}
-                      </h2>
-                      <span
-                        className={`px-3 py-1 rounded-full text-sm font-semibold ${
-                          getStatusConfig(selectedOrder.order_status).badge
-                        }`}
-                      >
-                        {selectedOrder.order_status}
-                      </span>
-                    </div>
-                    <div className="flex items-center space-x-4 text-sm">
-                      <span
-                        className={`flex items-center ${themeClasses.textSecondary}`}
-                      >
-                        <Calendar className="w-4 h-4 mr-1" />
-                        {new Date(
-                          selectedOrder.order_date
-                        ).toLocaleDateString()}{" "}
-                        at {selectedOrder.order_time}
-                      </span>
-                      <span
-                        className={`flex items-center ${themeClasses.textSecondary} capitalize`}
-                      >
-                        <Package className="w-4 h-4 mr-1" />
-                        {selectedOrder.order_type} Order
-                      </span>
-                    </div>
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                    <h2
+                      className={`text-2xl font-bold ${themeClasses.textPrimary}`}
+                    >
+                      {selectedOrder.daily_serial ? `${dailySerialManager.formatSerial(selectedOrder.daily_serial)} - ` : ''}#{selectedOrder.order_number}
+                    </h2>
+                    <span
+                      className={`flex items-center text-sm ${themeClasses.textSecondary}`}
+                    >
+                      <Calendar className="w-4 h-4 mr-1" />
+                      {new Date(
+                        selectedOrder.order_date
+                      ).toLocaleDateString()}{" "}
+                      at {selectedOrder.order_time}
+                    </span>
+                    <span
+                      className={`flex items-center text-sm ${themeClasses.textSecondary} capitalize`}
+                    >
+                      <Package className="w-4 h-4 mr-1" />
+                      {selectedOrder.order_type} Order
+                    </span>
+                    <span
+                      className={`px-3 py-1 rounded-full text-sm font-semibold ${
+                        getStatusConfig(selectedOrder.order_status).badge
+                      }`}
+                    >
+                      {selectedOrder.order_status}
+                    </span>
                   </div>
                 </div>
 
-                <div className="flex items-center space-x-2">
+                {/* ROW 2 — all action buttons laid out right-to-left; three-dots menu at the far right */}
+                <div className="flex flex-row-reverse flex-wrap items-center gap-2 mt-4">
+                  {/* Actions Menu (three dots) — first DOM child, renders far right under flex-row-reverse */}
+                  <div className="relative">
+                    <motion.button
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() =>
+                        setShowActionMenu(
+                          showActionMenu === selectedOrder.id
+                            ? null
+                            : selectedOrder.id
+                        )
+                      }
+                      className={`p-2 ${themeClasses.button} rounded-lg transition-colors border ${themeClasses.border}`}
+                    >
+                      <MoreVertical className="w-4 h-4" />
+                    </motion.button>
+
+                    <AnimatePresence>
+                      {showActionMenu === selectedOrder.id && (
+                        <motion.div
+                          initial={{ opacity: 0, scale: 0.95, y: -10 }}
+                          animate={{ opacity: 1, scale: 1, y: 0 }}
+                          exit={{ opacity: 0, scale: 0.95, y: -10 }}
+                          className={`absolute right-0 top-full mt-2 w-48 ${themeClasses.card} rounded-xl ${themeClasses.shadow} shadow-xl ${themeClasses.border} border py-2 z-50`}
+                        >
+                          {permissions.hasPermission('REOPEN_ORDER') && (
+                            <button
+                              onClick={() => handleReopenOrder(selectedOrder)}
+                              className={`w-full px-4 py-2 text-left hover:${
+                                isDark ? "bg-gray-700" : "bg-gray-50"
+                              } flex items-center space-x-3 text-sm ${
+                                themeClasses.textPrimary
+                              } transition-colors`}
+                            >
+                              <Edit3 className="w-4 h-4 text-purple-500" />
+                              <span>Re-Open Order</span>
+                            </button>
+                          )}
+                          {/* Proforma Invoice — preview print before pushing to PRA */}
+                          {praSettings?.is_enabled &&
+                            !selectedOrder.pra_invoice_number && (
+                              <button
+                                onClick={() => { setShowProformaModal(true); setProformaPaymentMode(null); setShowActionMenu(null); }}
+                                className={`w-full px-4 py-2 text-left hover:${
+                                  isDark ? "bg-gray-700" : "bg-gray-50"
+                                } flex items-center space-x-3 text-sm text-amber-600 transition-colors`}
+                              >
+                                <FileText className="w-4 h-4" />
+                                <span>Proforma Invoice</span>
+                              </button>
+                            )}
+                          {/* Push to PRA — only when PRA is enabled and order is Completed and not yet filed */}
+                          {praSettings?.is_enabled &&
+                            selectedOrder.order_status === 'Completed' &&
+                            !selectedOrder.pra_invoice_number && (
+                              <button
+                                onClick={() => { setShowPRAModal(true); setShowActionMenu(null); }}
+                                className={`w-full px-4 py-2 text-left hover:${
+                                  isDark ? "bg-gray-700" : "bg-gray-50"
+                                } flex items-center space-x-3 text-sm text-sky-600 transition-colors`}
+                              >
+                                <Send className="w-4 h-4" />
+                                <span>Push to PRA</span>
+                              </button>
+                            )}
+                          {/* Show filed indicator when already pushed */}
+                          {praSettings?.is_enabled &&
+                            selectedOrder.pra_invoice_number && (
+                              <div
+                                className={`w-full px-4 py-2 flex items-center space-x-3 text-sm text-green-600`}
+                              >
+                                <CheckCircle className="w-4 h-4" />
+                                <span>PRA Filed ✓</span>
+                              </div>
+                            )}
+                          {permissions.hasPermission('CANCEL_ORDER') &&
+                            selectedOrder.order_status !== "Cancelled" &&
+                            selectedOrder.order_status !== "Completed" && (
+                              <button
+                                onClick={handleCancelOrder}
+                                className={`w-full px-4 py-2 text-left hover:${
+                                  isDark ? "bg-gray-700" : "bg-gray-50"
+                                } flex items-center space-x-3 text-sm text-red-600 transition-colors`}
+                              >
+                                <XCircle className="w-4 h-4" />
+                                <span>Cancel Order</span>
+                              </button>
+                            )}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+
                   {/* Proforma Invoice Button — preview before pushing to PRA.
                       Shown when PRA is on and the order has not been filed yet. */}
                   {praSettings?.is_enabled && !selectedOrder.pra_invoice_number && (
@@ -3310,99 +3402,6 @@ export default function OrdersPage() {
                       )}
                     </>
                   )}
-
-                  {/* Actions Menu */}
-                  <div className="relative">
-                    <motion.button
-                      whileHover={{ scale: 1.02 }}
-                      whileTap={{ scale: 0.98 }}
-                      onClick={() =>
-                        setShowActionMenu(
-                          showActionMenu === selectedOrder.id
-                            ? null
-                            : selectedOrder.id
-                        )
-                      }
-                      className={`p-2 ${themeClasses.button} rounded-lg transition-colors border ${themeClasses.border}`}
-                    >
-                      <MoreVertical className="w-4 h-4" />
-                    </motion.button>
-
-                    <AnimatePresence>
-                      {showActionMenu === selectedOrder.id && (
-                        <motion.div
-                          initial={{ opacity: 0, scale: 0.95, y: -10 }}
-                          animate={{ opacity: 1, scale: 1, y: 0 }}
-                          exit={{ opacity: 0, scale: 0.95, y: -10 }}
-                          className={`absolute right-0 top-full mt-2 w-48 ${themeClasses.card} rounded-xl ${themeClasses.shadow} shadow-xl ${themeClasses.border} border py-2 z-50`}
-                        >
-                          {permissions.hasPermission('REOPEN_ORDER') && (
-                            <button
-                              onClick={() => handleReopenOrder(selectedOrder)}
-                              className={`w-full px-4 py-2 text-left hover:${
-                                isDark ? "bg-gray-700" : "bg-gray-50"
-                              } flex items-center space-x-3 text-sm ${
-                                themeClasses.textPrimary
-                              } transition-colors`}
-                            >
-                              <Edit3 className="w-4 h-4 text-purple-500" />
-                              <span>Re-Open Order</span>
-                            </button>
-                          )}
-                          {/* Proforma Invoice — preview print before pushing to PRA */}
-                          {praSettings?.is_enabled &&
-                            !selectedOrder.pra_invoice_number && (
-                              <button
-                                onClick={() => { setShowProformaModal(true); setProformaPaymentMode(null); setShowActionMenu(null); }}
-                                className={`w-full px-4 py-2 text-left hover:${
-                                  isDark ? "bg-gray-700" : "bg-gray-50"
-                                } flex items-center space-x-3 text-sm text-amber-600 transition-colors`}
-                              >
-                                <FileText className="w-4 h-4" />
-                                <span>Proforma Invoice</span>
-                              </button>
-                            )}
-                          {/* Push to PRA — only when PRA is enabled and order is Completed and not yet filed */}
-                          {praSettings?.is_enabled &&
-                            selectedOrder.order_status === 'Completed' &&
-                            !selectedOrder.pra_invoice_number && (
-                              <button
-                                onClick={() => { setShowPRAModal(true); setShowActionMenu(null); }}
-                                className={`w-full px-4 py-2 text-left hover:${
-                                  isDark ? "bg-gray-700" : "bg-gray-50"
-                                } flex items-center space-x-3 text-sm text-sky-600 transition-colors`}
-                              >
-                                <Send className="w-4 h-4" />
-                                <span>Push to PRA</span>
-                              </button>
-                            )}
-                          {/* Show filed indicator when already pushed */}
-                          {praSettings?.is_enabled &&
-                            selectedOrder.pra_invoice_number && (
-                              <div
-                                className={`w-full px-4 py-2 flex items-center space-x-3 text-sm text-green-600`}
-                              >
-                                <CheckCircle className="w-4 h-4" />
-                                <span>PRA Filed ✓</span>
-                              </div>
-                            )}
-                          {permissions.hasPermission('CANCEL_ORDER') &&
-                            selectedOrder.order_status !== "Cancelled" &&
-                            selectedOrder.order_status !== "Completed" && (
-                              <button
-                                onClick={handleCancelOrder}
-                                className={`w-full px-4 py-2 text-left hover:${
-                                  isDark ? "bg-gray-700" : "bg-gray-50"
-                                } flex items-center space-x-3 text-sm text-red-600 transition-colors`}
-                              >
-                                <XCircle className="w-4 h-4" />
-                                <span>Cancel Order</span>
-                              </button>
-                            )}
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
                 </div>
               </div>
 

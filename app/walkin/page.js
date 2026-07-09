@@ -74,6 +74,7 @@ export default function WalkInPage() {
   const [selectedOrderTaker, setSelectedOrderTaker] = useState(null)
   const [requireOrderTaker, setRequireOrderTaker] = useState(false)
   const [requireCustomer, setRequireCustomer] = useState(false) // from pos_require_customer.walkin
+  const [requireTable, setRequireTable] = useState(false) // from pos_require_table_walkin
 
   // POS order behavior settings
   const [showOrderConfirmationPopup, setShowOrderConfirmationPopup] = useState(true)
@@ -388,6 +389,8 @@ export default function WalkInPage() {
         const parsed = JSON.parse(reqCust)
         setRequireCustomer(!!parsed?.walkin)
       }
+      const reqTable = localStorage.getItem('pos_require_table_walkin')
+      if (reqTable !== null) setRequireTable(JSON.parse(reqTable))
       const showConf = localStorage.getItem('pos_show_order_confirmation')
       if (showConf !== null) setShowOrderConfirmationPopup(JSON.parse(showConf))
       const autoKitchen = localStorage.getItem('pos_auto_print_kitchen')
@@ -2745,6 +2748,13 @@ export default function WalkInPage() {
     if (requireCustomer && !customer) {
       console.warn('🚫 [Walkin] Blocked: requireCustomer is true but no customer selected. Check admin settings → Customer Requirement → Walk-in')
       notify.warning('Customer is required for walk-in orders — please select a customer')
+      setIsPlacingOrder(false)
+      return
+    }
+
+    if (requireTable && !selectedTable) {
+      console.warn('🚫 [Walkin] Blocked: requireTable is true but no table selected')
+      notify.warning('Please select a table before proceeding')
       setIsPlacingOrder(false)
       return
     }

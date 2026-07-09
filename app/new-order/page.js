@@ -162,6 +162,9 @@ export default function NewOrderPage() {
   // Per-order-type "customer required" flags from admin settings (users.require_customer_*).
   // Cached in localStorage.pos_require_customer by cacheManager.
   const [requireCustomer, setRequireCustomer] = useState({ walkin: false, takeaway: false, delivery: true })
+  // Require a table before punching a walk-in order (users.require_table_walkin).
+  // Cached in localStorage.pos_require_table_walkin by cacheManager.
+  const [requireTable, setRequireTable] = useState(false)
 
   // Web Orders tab: pending count badge shown on the tab without opening it
   const [webOrderCount, setWebOrderCount] = useState(0)
@@ -419,6 +422,8 @@ export default function NewOrderPage() {
           delivery: !!parsed?.delivery,
         })
       }
+      const reqTable = localStorage.getItem('pos_require_table_walkin')
+      if (reqTable !== null) setRequireTable(JSON.parse(reqTable))
     } catch {}
   }
 
@@ -829,6 +834,11 @@ export default function NewOrderPage() {
     }
     if (activeOrderType === 'walkin' && requireOrderTaker && !selectedOrderTaker) {
       notify.warning('Please select an order taker before proceeding')
+      setIsPlacingOrder(false)
+      return
+    }
+    if (activeOrderType === 'walkin' && requireTable && !selectedTable) {
+      notify.warning('Please select a table before proceeding')
       setIsPlacingOrder(false)
       return
     }

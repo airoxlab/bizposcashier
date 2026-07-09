@@ -1281,89 +1281,35 @@ async function generateCashReportESCPOS(reportData, userProfile, assets) {
     commands.push(drawLine('-'));
   }
 
-  // ── META (key/value rows, like the receipt order-details block) ──
-  commands.push(leftRight('Cashier:', String(reportData.cashierName || '')));
-  commands.push(leftRight('Shift start:', fmtDT(reportData.shiftStart)));
-  commands.push(leftRight('Printed:', fmtDT(reportData.printedAt || reportData.shiftEnd)));
-  commands.push(leftRight('Orders:', String(reportData.orderCount ?? 0)));
-
-  const lines = Array.isArray(reportData.lines) ? reportData.lines : [];
-  const cashLine = lines.find(l => l.isCash);
-  const nonCash = lines.filter(l => !l.isCash);
-
-  // Section header styled exactly like the receipt "ITEMS" block:
-  // rule, centered bold title, rule.
-  const sectionHeader = (title) => {
-    commands.push(drawLine('-'));
-    commands.push(CMD.BOLD_ON);
-    commands.push(text(title + '\n'));
-    commands.push(CMD.BOLD_OFF);
-    commands.push(drawLine('-'));
-  };
-
-  // ── CASH DRAWER — the physically counted, reconciled tender ──
-  if (cashLine) {
-    sectionHeader(((cashLine.name || 'CASH') + ' (DRAWER)').toUpperCase());
-    commands.push(leftRight('Opening float', money(reportData.openingFloat)));
-    commands.push(leftRight('+ Cash sales', money(reportData.cashSales ?? cashLine.sales)));
-    // Always printed (even Rs 0) — a zero on paper is auditable, a missing
-    // line is ambiguous. Acct payments = customer credit collected in cash.
-    commands.push(leftRight('+ Acct payments (cash)', money(reportData.accountCashPayments)));
-    commands.push(leftRight('- Cash payouts (exp)', money(reportData.cashPayouts)));
-    commands.push(CMD.BOLD_ON);
-    commands.push(leftRight('= Expected in drawer', money(cashLine.expected)));
-    commands.push(CMD.BOLD_OFF);
-    commands.push(leftRight('Counted', money(cashLine.counted)));
-    const os = Number(cashLine.overShort) || 0;
-    const osLabel = os === 0 ? 'BALANCED' : os > 0 ? 'OVER ' + money(os) : 'SHORT ' + money(Math.abs(os));
-    commands.push(CMD.BOLD_ON);
-    commands.push(leftRight('OVER/(SHORT)', osLabel));
-    commands.push(CMD.BOLD_OFF);
-  }
-
-  // ── OTHER ACCOUNTS — full movement per account: sales + payments in − payouts ──
-  if (nonCash.length) {
-    sectionHeader('OTHER ACCOUNTS');
-    nonCash.forEach(l => {
-      commands.push(leftRight(String(l.name || ''), money(l.expected)));
-      const pin  = Number(l.payIn)  || 0;
-      const pout = Number(l.payOut) || 0;
-      // Show the movement that built the figure when it isn't sales alone.
-      if (pin > 0 || pout > 0) {
-        commands.push(leftRight('  sales', money(l.sales)));
-        if (pin > 0)  commands.push(leftRight('  + payments in', money(pin)));
-        if (pout > 0) commands.push(leftRight('  - payouts', money(pout)));
-      }
-      const os = Number(l.overShort) || 0;
-      if (os !== 0) {
-        const osLabel = os > 0 ? 'over ' + money(os) : 'short ' + money(Math.abs(os));
-        commands.push(leftRight('  counted ' + money(l.counted), osLabel));
-      }
-    });
-  }
-
-  // ── TOTALS — movement across ALL accounts this shift ──
-  const tSales = Number(reportData.totalCollected) || 0;
-  const tIn    = Number(reportData.totalPayIn)  || 0;
-  const tOut   = Number(reportData.totalPayOut) || 0;
-  commands.push(drawLine('='));
-  commands.push(CMD.BOLD_ON);
-  commands.push(leftRight('TOTAL SALES (ORDERS)', money(tSales)));
-  commands.push(CMD.BOLD_OFF);
-  commands.push(leftRight('+ Payments in (all)', money(tIn)));
-  commands.push(leftRight('- Payouts (all)', money(tOut)));
-  commands.push(CMD.BOLD_ON);
-  commands.push(leftRight('= NET (ALL ACCOUNTS)', money(tSales + tIn - tOut)));
-  commands.push(CMD.BOLD_OFF);
-  commands.push(drawLine('='));
-
-  // ── SIGNATURES (left aligned) ──
+  // ── META (Date/Time + who the report is for) ──
   commands.push(CMD.ALIGN_LEFT);
-  commands.push(CMD.FEED);
-  commands.push(leftText('Cashier sign: _____________________'));
-  commands.push(CMD.FEED);
-  commands.push(leftText('Received by:  _____________________'));
-  commands.push(CMD.FEED);
+  commands.push(leftRight('Date/Time:', fmtDT(reportData.printedAt || reportData.shiftEnd)));
+  commands.push(leftRight('Cashier:', String(reportData.cashierName || '')));
+  commands.push(drawLine('-'));
+
+  // ── ORDER COUNTS ──
+  commands.push(leftRight('Total Orders:', String(reportData.totalOrders ?? 0)));
+  commands.push(leftRight('Credit Orders:', String(reportData.creditOrders ?? 0)));
+  commands.push(drawLine('-'));
+
+  // ── MONEY — OVERALL figures (not per-account) ──
+  commands.push(leftRight('Total Sales:', money(reportData.totalSales)));
+  commands.push(leftRight('Credit Sales:', money(reportData.creditSales)));
+  commands.push(leftRight('Total Discounts:', money(reportData.totalDiscounts)));
+  commands.push(leftRight('Total Expense:', money(reportData.totalExpense)));
+  commands.push(leftRight('Payorders Amount:', money(reportData.payorders)));
+
+  // ── COLLECTIVE / CASH IN HAND — the bottom line (Sales - Credit - Expense - Payorders) ──
+  commands.push(drawLine('='));
+  commands.push(CMD.ALIGN_CENTER);
+  commands.push(CMD.BOLD_ON);
+  commands.push(text('COLLECTIVE / CASH IN HAND\n'));
+  commands.push(CMD.DOUBLE_HEIGHT);
+  commands.push(text(money(reportData.cashInHand) + '\n'));
+  commands.push(CMD.NORMAL);
+  commands.push(CMD.BOLD_OFF);
+  commands.push(CMD.ALIGN_LEFT);
+  commands.push(drawLine('='));
 
   // ── FOOTER ──
   commands.push(CMD.ALIGN_CENTER);
