@@ -9,6 +9,8 @@ import { ledgerManager } from '../../lib/ledgerManager';
 import { notify } from '../ui/NotificationSystem';
 import RecordPaymentModal from './RecordPaymentModal';
 import { themeManager } from '../../lib/themeManager';
+import dailySerialManager from '../../lib/utils/dailySerialManager';
+import { getBusinessDateRangeForPreset } from '../../lib/utils/businessDayUtils';
 
 export default function LedgerTab({ userId, startDate, endDate, prefetchedCustomers }) {
   const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -65,10 +67,10 @@ export default function LedgerTab({ userId, startDate, endDate, prefetchedCustom
   const fetchCustomerLedger = async () => {
     setIsLoading(true);
     try {
-      // Get date range based on time period filter
+      // Get date range based on time period filter (already YYYY-MM-DD business dates or null)
       const dateRange = getDateRange();
-      const filterStartDate = dateRange.start ? dateRange.start.toISOString().split('T')[0] : null;
-      const filterEndDate = dateRange.end ? dateRange.end.toISOString().split('T')[0] : null;
+      const filterStartDate = dateRange.start || null;
+      const filterEndDate = dateRange.end || null;
 
       // Fetch ledger summary
       const summaryResult = await ledgerManager.getCustomerLedgerSummary(userId, selectedCustomer.id);
@@ -120,35 +122,19 @@ export default function LedgerTab({ userId, startDate, endDate, prefetchedCustom
     notify.success('Payment recorded successfully');
   };
 
-  // Helper function to get date range based on time period
+  // Date range for the selected period — BUSINESS-HOURS aware (overnight-safe), so
+  // "Today"/"Yesterday"/… anchor to the business day like the rest of the app. Returns
+  // YYYY-MM-DD business-date strings (or null for All Time). "All Time" is kept because
+  // a ledger needs full history, which the shared BusinessDateFilter presets can't express.
   const getDateRange = () => {
-    const today = new Date();
-    const startOfToday = new Date(today.setHours(0, 0, 0, 0));
-    const endOfToday = new Date(today.setHours(23, 59, 59, 999));
-
-    switch (timePeriod) {
-      case 'today':
-        return { start: startOfToday, end: endOfToday };
-      case 'yesterday':
-        const yesterday = new Date(today);
-        yesterday.setDate(yesterday.getDate() - 1);
-        return { start: new Date(yesterday.setHours(0, 0, 0, 0)), end: new Date(yesterday.setHours(23, 59, 59, 999)) };
-      case 'week':
-        const weekStart = new Date(today);
-        weekStart.setDate(weekStart.getDate() - 7);
-        return { start: weekStart, end: endOfToday };
-      case 'month':
-        const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-        return { start: monthStart, end: endOfToday };
-      case 'custom':
-        return {
-          start: customStartDate ? new Date(customStartDate) : null,
-          end: customEndDate ? new Date(customEndDate) : null
-        };
-      case 'lifetime':
-      default:
-        return { start: null, end: null };
+    if (timePeriod === 'lifetime') return { start: null, end: null };
+    if (timePeriod === 'custom') {
+      return { start: customStartDate || null, end: customEndDate || null };
     }
+    const presetMap = { today: 'today', yesterday: 'yesterday', week: 'this_week', month: 'this_month' };
+    const { startTime, endTime } = dailySerialManager.getBusinessHours();
+    const { from, to } = getBusinessDateRangeForPreset(presetMap[timePeriod] || 'today', startTime, endTime);
+    return { start: from, end: to };
   };
 
   // Helper function to get effective balance from ledger (single source of truth)
@@ -264,6 +250,12 @@ export default function LedgerTab({ userId, startDate, endDate, prefetchedCustom
   const classes = themeManager.getClasses();
   const isDark = themeManager.isDark();
 
+  // Compact ledger table cells. The shared cellBody/tableHeader use px-6 +
+  // whitespace-nowrap, which overflows the narrower reports content area (horizontal
+  // scroll). These trim the padding so the table fits without scrolling sideways.
+  const cellHead = `${isDark ? 'bg-gray-700 text-gray-200' : 'bg-gray-50 text-gray-700'} px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wide`;
+  const cellBody = `${isDark ? 'text-gray-300' : 'text-gray-900'} px-3 py-2.5 text-sm`;
+
   return (
     <div className="space-y-8 pb-8">
       {!showLedgerDetails ? (
@@ -350,12 +342,12 @@ export default function LedgerTab({ userId, startDate, endDate, prefetchedCustom
             <table className="w-full">
               <thead className={themeManager.isDark() ? 'bg-gray-700' : 'bg-gray-50'}>
                 <tr>
-                  <th className={styles.tableHeader}>Customer Name</th>
-                  <th className={styles.tableHeader}>Phone</th>
-                  <th className={`${styles.tableHeader} text-right`}>Outstanding</th>
-                  <th className={`${styles.tableHeader} text-center`}>Status</th>
-                  <th className={`${styles.tableHeader} text-right`}>Last Payment</th>
-                  <th className={`${styles.tableHeader} text-center`}>Actions</th>
+                  <th className={cellHead}>Customer Name</th>
+                  <th className={cellHead}>Phone</th>
+                  <th className={`${cellHead} text-right`}>Outstanding</th>
+                  <th className={`${cellHead} text-center`}>Status</th>
+                  <th className={`${cellHead} text-right`}>Last Payment</th>
+                  <th className={`${cellHead} text-center`}>Actions</th>
                 </tr>
               </thead>
               <tbody className={`divide-y ${classes.border}`}>
@@ -382,7 +374,7 @@ export default function LedgerTab({ userId, startDate, endDate, prefetchedCustom
 
                     return (
                       <tr key={customer.customer_id || customer.id} className={`${classes.hover} ${hasHistory ? isDark ? 'bg-purple-900/10' : 'bg-purple-50/30' : ''}`}>
-                        <td className={`${styles.tableCell} font-medium`}>
+                        <td className={`${cellBody} font-medium`}>
                           <div className="flex items-center gap-2">
                             <div className={`w-10 h-10 rounded-full ${hasHistory ? isDark ? 'bg-purple-900/40' : 'bg-purple-100' : isDark ? 'bg-gray-700' : 'bg-gray-100'} flex items-center justify-center`}>
                               <User className={`w-5 h-5 ${hasHistory ? isDark ? 'text-purple-400' : 'text-purple-600' : isDark ? 'text-gray-500' : 'text-gray-400'}`} />
@@ -395,10 +387,10 @@ export default function LedgerTab({ userId, startDate, endDate, prefetchedCustom
                             </div>
                           </div>
                         </td>
-                        <td className={styles.tableCell}>
+                        <td className={cellBody}>
                           {customer.phone || 'N/A'}
                         </td>
-                        <td className={`${styles.tableCell} text-right`}>
+                        <td className={`${cellBody} text-right`}>
                           <div>
                             <p className={`font-bold ${balanceInfo.color}`}>
                               {balanceInfo.amount}
@@ -411,7 +403,7 @@ export default function LedgerTab({ userId, startDate, endDate, prefetchedCustom
                             )}
                           </div>
                         </td>
-                        <td className={`${styles.tableCell} text-center`}>
+                        <td className={`${cellBody} text-center`}>
                           <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
                             balanceInfo.type === 'debit'
                               ? isDark ? 'bg-red-900/30 text-red-400' : 'bg-red-100 text-red-700'
@@ -422,7 +414,7 @@ export default function LedgerTab({ userId, startDate, endDate, prefetchedCustom
                             {balanceInfo.type === 'debit' ? 'Has Due' : balanceInfo.type === 'credit' ? 'Credit' : 'Clear'}
                           </span>
                         </td>
-                        <td className={`${styles.tableCell} text-right`}>
+                        <td className={`${cellBody} text-right`}>
                           <div>
                             <p className={`font-medium ${isDark ? 'text-gray-200' : 'text-gray-900'}`}>{formatCurrency(customer.last_payment_amount || 0)}</p>
                             <p className={`text-xs ${classes.textSecondary}`}>
@@ -430,14 +422,15 @@ export default function LedgerTab({ userId, startDate, endDate, prefetchedCustom
                             </p>
                           </div>
                         </td>
-                        <td className={`${styles.tableCell} text-center`}>
-                          <div className="flex items-center justify-center gap-2">
+                        <td className={`${cellBody} text-center`}>
+                          <div className="flex items-center justify-center">
                             <button
                               onClick={() => handleCustomerSelect(customer)}
-                              className="px-4 py-2 bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white rounded-lg text-sm font-medium transition-all hover:scale-105 shadow-md flex items-center gap-1"
+                              title="View ledger"
+                              className="px-3 py-1.5 bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white rounded-lg text-xs font-medium transition-all hover:scale-105 shadow-md flex items-center gap-1 whitespace-nowrap"
                             >
-                              <FileText className="w-4 h-4" />
-                              View Ledger
+                              <FileText className="w-3.5 h-3.5" />
+                              View
                             </button>
                           </div>
                         </td>
@@ -630,13 +623,13 @@ export default function LedgerTab({ userId, startDate, endDate, prefetchedCustom
             <table className="w-full">
               <thead className={themeManager.isDark() ? 'bg-gray-700' : 'bg-gray-50'}>
                 <tr>
-                  <th className={styles.tableHeader}>Date</th>
-                  <th className={styles.tableHeader}>Description</th>
-                  <th className={styles.tableHeader}>Order #</th>
-                  <th className={styles.tableHeader}>Collected By</th>
-                  <th className={`${styles.tableHeader} text-right`}>Debit (Dr)</th>
-                  <th className={`${styles.tableHeader} text-right`}>Credit (Cr)</th>
-                  <th className={`${styles.tableHeader} text-right`}>Balance</th>
+                  <th className={cellHead}>Date</th>
+                  <th className={cellHead}>Description</th>
+                  <th className={cellHead}>Order #</th>
+                  <th className={cellHead}>Collected By</th>
+                  <th className={`${cellHead} text-right`}>Debit (Dr)</th>
+                  <th className={`${cellHead} text-right`}>Credit (Cr)</th>
+                  <th className={`${cellHead} text-right`}>Balance</th>
                 </tr>
               </thead>
               <tbody className={`divide-y ${classes.border}`}>
@@ -649,19 +642,19 @@ export default function LedgerTab({ userId, startDate, endDate, prefetchedCustom
                 ) : (
                   ledgerData.map((entry) => (
                     <tr key={entry.id} className={classes.hover}>
-                      <td className={`${styles.tableCell}`}>
+                      <td className={`${cellBody}`}>
                         {formatDate(entry.transaction_date)}
                       </td>
-                      <td className={`${styles.tableCell}`}>
+                      <td className={`${cellBody}`}>
                         {entry.description}
                         {entry.notes && (
                           <p className={`text-xs ${classes.textSecondary} mt-1`}>{entry.notes}</p>
                         )}
                       </td>
-                      <td className={`${styles.tableCell}`}>
+                      <td className={`${cellBody}`}>
                         {entry.order?.order_number || '-'}
                       </td>
-                      <td className={`${styles.tableCell}`}>
+                      <td className={`${cellBody}`}>
                         {entry.payment?.collected_by_name ? (
                           <span>
                             {entry.payment.collected_by_name}
@@ -673,13 +666,13 @@ export default function LedgerTab({ userId, startDate, endDate, prefetchedCustom
                           </span>
                         ) : '-'}
                       </td>
-                      <td className={`${styles.tableCell} text-right font-medium text-red-600`}>
+                      <td className={`${cellBody} text-right font-medium text-red-600`}>
                         {entry.transaction_type === 'debit' ? formatCurrency(entry.amount) : '-'}
                       </td>
-                      <td className={`${styles.tableCell} text-right font-medium text-green-600`}>
+                      <td className={`${cellBody} text-right font-medium text-green-600`}>
                         {entry.transaction_type === 'credit' ? formatCurrency(entry.amount) : '-'}
                       </td>
-                      <td className={`${styles.tableCell} text-right font-bold`}>
+                      <td className={`${cellBody} text-right font-bold`}>
                         {(() => {
                           const balance = Number(entry.balance_after || 0);
                           if (balance > 0) {

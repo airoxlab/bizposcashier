@@ -551,31 +551,60 @@ const OrderDetailsModal = ({ isOpen, onClose, order, orderItems, isDark, onAppro
               Order Items
             </h4>
             <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2">
-              {orderItems.map((item, index) => (
-                <div
-                  key={index}
-                  className={`flex justify-between items-start py-2 ${
-                    index !== orderItems.length - 1 ? "border-b border-gray-700" : ""
-                  }`}
-                >
-                  <div className="flex-1">
-                    <p className={`font-medium ${isDark ? "text-white" : "text-gray-900"}`}>
-                      {item.product_name}
-                      {item.variant_name && (
-                        <span className={`text-sm ml-2 ${isDark ? "text-gray-400" : "text-gray-500"}`}>
-                          ({item.variant_name})
-                        </span>
+              {orderItems.map((item, index) => {
+                let dealItems = [];
+                if (item.is_deal && item.deal_products) {
+                  try {
+                    const parsed = typeof item.deal_products === "string"
+                      ? JSON.parse(item.deal_products)
+                      : item.deal_products;
+                    if (Array.isArray(parsed)) dealItems = parsed;
+                  } catch (e) {}
+                }
+
+                return (
+                  <div
+                    key={index}
+                    className={`flex justify-between items-start py-2 ${
+                      index !== orderItems.length - 1 ? "border-b border-gray-700" : ""
+                    }`}
+                  >
+                    <div className="flex-1">
+                      <p className={`font-medium ${isDark ? "text-white" : "text-gray-900"}`}>
+                        {item.product_name}
+                        {item.variant_name && (
+                          <span className={`text-sm ml-2 ${isDark ? "text-gray-400" : "text-gray-500"}`}>
+                            ({item.variant_name})
+                          </span>
+                        )}
+                      </p>
+                      <p className={`text-sm ${isDark ? "text-gray-400" : "text-gray-500"}`}>
+                        Qty: {item.quantity} × Rs {item.final_price}
+                      </p>
+                      {dealItems.length > 0 && (
+                        <div className={`mt-1 pl-2 border-l-2 ${isDark ? "border-purple-700" : "border-purple-300"} space-y-0.5`}>
+                          {dealItems.map((dp, dpIndex) => (
+                            <p key={dpIndex} className={`text-xs ${isDark ? "text-gray-400" : "text-gray-500"}`}>
+                              {dp.quantity}x {dp.name}{dp.variant ? ` — ${dp.variant}` : ""}
+                            </p>
+                          ))}
+                        </div>
                       )}
-                    </p>
-                    <p className={`text-sm ${isDark ? "text-gray-400" : "text-gray-500"}`}>
-                      Qty: {item.quantity} × Rs {item.final_price}
+                      {item.item_instructions && (
+                        <div className={`flex items-start gap-1 mt-1.5 text-xs font-medium px-2 py-1 rounded ${
+                          isDark ? "bg-orange-500/10 text-orange-400" : "bg-orange-50 text-orange-600"
+                        }`}>
+                          <FileText className="w-3 h-3 flex-shrink-0 mt-0.5" />
+                          <span>{item.item_instructions}</span>
+                        </div>
+                      )}
+                    </div>
+                    <p className={`font-semibold ${isDark ? "text-white" : "text-gray-900"}`}>
+                      Rs {item.total_price}
                     </p>
                   </div>
-                  <p className={`font-semibold ${isDark ? "text-white" : "text-gray-900"}`}>
-                    Rs {item.total_price}
-                  </p>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             {/* Price Summary */}

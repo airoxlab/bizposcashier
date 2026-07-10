@@ -55,8 +55,9 @@ import { cacheManager } from "../../lib/cacheManager";
 import { usePermissions } from "../../lib/permissionManager";
 import { webOrderNotificationManager } from "../../lib/webOrderNotification";
 import dailySerialManager from "../../lib/utils/dailySerialManager";
-import { getTodaysBusinessDate, getBusinessDate } from "../../lib/utils/businessDayUtils";
+import { getTodaysBusinessDate, getBusinessDate, getBusinessDateRangeForPreset, formatTime12 } from "../../lib/utils/businessDayUtils";
 import Modal from "../../components/ui/Modal";
+import BusinessDateFilter from "../../components/ui/BusinessDateFilter";
 import ProtectedPage from "../../components/ProtectedPage";
 import InlinePaymentSection from "../../components/pos/InlinePaymentSection";
 import SplitPaymentModal from "../../components/pos/SplitPaymentModal";
@@ -193,6 +194,11 @@ export default function OrdersPage() {
   const [statusFilter, setStatusFilter] = useState("All");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  // Business-day created_at bounds (from BusinessDateFilter) — the actual filter.
+  const [dateStartISO, setDateStartISO] = useState(null);
+  const [dateEndISO, setDateEndISO] = useState(null);
+  const [dateLabel, setDateLabel] = useState("Today");
+  const [periodOrderCount, setPeriodOrderCount] = useState(0); // true total in the range
   const [cashierFilter, setCashierFilter] = useState("All");
   const [deliveryBoyFilter, setDeliveryBoyFilter] = useState("All");
   const [showRiderSummary, setShowRiderSummary] = useState(false);
@@ -295,12 +301,8 @@ export default function OrdersPage() {
     setTheme(themeManager.currentTheme);
     themeManager.applyTheme();
 
-    const today = new Date();
-    const sevenDaysAgo = new Date(today);
-    sevenDaysAgo.setDate(today.getDate() - 7);
-
-    setDateFrom(sevenDaysAgo.toISOString().split("T")[0]);
-    setDateTo(today.toISOString().split("T")[0]);
+    // The default date range (Today, business-day) is applied by <BusinessDateFilter>
+    // through handleDateRange — no manual default is set here.
 
     // Pass userData.id directly to avoid state timing issues
     if (userData?.id) {
@@ -311,7 +313,30 @@ export default function OrdersPage() {
 
   useEffect(() => {
     fetchOrders();
-  }, [activeTab, statusFilter, dateFrom, dateTo, searchTerm, cashierFilter, deliveryBoyFilter, displayLimit]);
+  }, [activeTab, statusFilter, dateStartISO, dateEndISO, searchTerm, cashierFilter, deliveryBoyFilter, displayLimit]);
+
+  // True total order count for the selected date range (independent of the page
+  // display limit) — shown next to the filter so the count is accurate even when
+  // there are more orders than are loaded.
+  useEffect(() => {
+    const uid = user?.id;
+    if (!uid || !dateStartISO || !dateEndISO) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        if (typeof navigator !== "undefined" && !navigator.onLine) return;
+        const { count } = await supabase
+          .from("orders")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", uid)
+          .or("order_source.eq.POS,is_approved.eq.true")
+          .gte("created_at", dateStartISO)
+          .lt("created_at", dateEndISO);
+        if (!cancelled) setPeriodOrderCount(count || 0);
+      } catch { /* ignore — falls back to loaded count */ }
+    })();
+    return () => { cancelled = true; };
+  }, [user?.id, dateStartISO, dateEndISO]);
 
   // Detect whether the selected order has modifications so we can show/hide the Update Token button
   useEffect(() => {
@@ -409,7 +434,7 @@ export default function OrdersPage() {
       supabase.removeChannel(channel);
       supabase.removeChannel(mobileChannel);
     };
-  }, [user?.id, activeTab, statusFilter, dateFrom, dateTo]);
+  }, [user?.id, activeTab, statusFilter, dateStartISO, dateEndISO]);
 
   const toggleTheme = () => {
     const newTheme = theme === "light" ? "dark" : "light";
@@ -546,6 +571,13 @@ export default function OrdersPage() {
         return;
       }
 
+      // Wait until the business-day range is resolved (BusinessDateFilter emits it
+      // on mount) so we never fetch with an undefined window.
+      if (!dateStartISO || !dateEndISO) {
+        setLoading(false);
+        return;
+      }
+
       console.log("🔍 [Orders Page] Fetching orders for user:", user.id);
 
       let rawOrders = [];
@@ -625,8 +657,8 @@ export default function OrdersPage() {
             `)
             .eq("user_id", user.id)
             .or("order_source.eq.POS,is_approved.eq.true")
-            .gte("order_date", dateFrom || new Date().toISOString().split("T")[0])
-            .lte("order_date", dateTo || new Date().toISOString().split("T")[0])
+            .gte("created_at", dateStartISO)
+            .lt("created_at", dateEndISO)
             .order("created_at", { ascending: false })
             .limit(displayLimit);
 
@@ -658,13 +690,12 @@ export default function OrdersPage() {
         return order.order_source === 'POS' || order.is_approved === true;
       });
 
-      // Apply date filter client-side (needed for offline data)
-      const fromDate = dateFrom || new Date().toISOString().split("T")[0];
-      const toDate = dateTo || new Date().toISOString().split("T")[0];
+      // Apply date filter client-side (needed for offline/cached data) using the
+      // same business-day created_at bounds as the server query.
       filteredOrders = filteredOrders.filter((order) => {
-        const orderDate = order.order_date || (order.created_at ? order.created_at.split("T")[0] : null);
-        if (!orderDate) return true;
-        return orderDate >= fromDate && orderDate <= toDate;
+        const ts = order.created_at;
+        if (!ts) return true;
+        return (!dateStartISO || ts >= dateStartISO) && (!dateEndISO || ts < dateEndISO);
       });
 
       // Apply type filter client-side
@@ -790,6 +821,24 @@ export default function OrdersPage() {
     setTimeout(() => {
       fetchOrders();
     }, 100);
+  };
+
+  // Business hours from the cached profile (drives BusinessDateFilter's presets).
+  const bizHours = () => {
+    try {
+      const p = JSON.parse(localStorage.getItem("user_profile") || localStorage.getItem("user") || "{}");
+      return { start: p.business_start_time || "10:00", end: p.business_end_time || "03:00" };
+    } catch { return { start: "10:00", end: "03:00" }; }
+  };
+
+  // Receives the resolved business-day range from BusinessDateFilter and stores
+  // both the display dates and the created_at bounds the fetch actually uses.
+  const handleDateRange = ({ from, to, startISO, endISO, label }) => {
+    setDateFrom(from);
+    setDateTo(to);
+    setDateStartISO(startISO);
+    setDateEndISO(endISO);
+    if (label) setDateLabel(label);
   };
 
   const fetchOrderItems = async (orderId) => {
@@ -2662,7 +2711,7 @@ export default function OrdersPage() {
           </div>
 
           <div className="space-y-1">
-            {/* First row: Status, Date From, Date To */}
+            {/* First row: Status + business-day date range (Today / Yesterday / …) */}
             <div className="grid grid-cols-3 gap-1">
               <select
                 value={statusFilter}
@@ -2676,17 +2725,15 @@ export default function OrdersPage() {
                 ))}
               </select>
 
-              <input
-                type="date"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-                className={`text-xs ${themeClasses.border} border rounded px-1 py-1 ${themeClasses.card} ${themeClasses.textPrimary}`}
-              />
-              <input
-                type="date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-                className={`text-xs ${themeClasses.border} border rounded px-1 py-1 ${themeClasses.card} ${themeClasses.textPrimary}`}
+              <BusinessDateFilter
+                className="col-span-2"
+                startTime={bizHours().start}
+                endTime={bizHours().end}
+                defaultPreset="today"
+                isDark={isDark}
+                onChange={handleDateRange}
+                selectClassName={`w-full appearance-none pl-8 pr-7 py-1 text-xs rounded border cursor-pointer ${themeClasses.border} ${themeClasses.card} ${themeClasses.textPrimary}`}
+                inputClassName={`text-xs ${themeClasses.border} border rounded px-1 py-1 ${themeClasses.card} ${themeClasses.textPrimary}`}
               />
             </div>
 
@@ -2794,8 +2841,11 @@ export default function OrdersPage() {
             themeClasses.border
           } border-b flex items-center justify-between`}
         >
-          <p className={`text-xs font-semibold ${themeClasses.textPrimary}`}>
-            Showing {filteredOrders.length} of {totalAvailable} orders
+          <p className={`text-xs font-semibold ${themeClasses.textPrimary} flex items-center gap-1.5`}>
+            <span className={`px-1.5 py-0.5 rounded ${isDark ? 'bg-purple-900/40 text-purple-300' : 'bg-purple-100 text-purple-700'}`}>
+              {Math.max(periodOrderCount, totalAvailable)} orders
+            </span>
+            <span className={`font-normal ${themeClasses.textSecondary}`}>{dateLabel} · showing {filteredOrders.length}</span>
           </p>
           <select
             value={displayLimit}
@@ -2879,16 +2929,16 @@ export default function OrdersPage() {
                             </p>
                           </div>
                         </div>
-                        <div className="text-right">
+                        <div className="text-right flex-shrink-0 ml-2 whitespace-nowrap">
                           <p
-                            className={`font-bold ${themeClasses.textPrimary} text-sm`}
+                            className={`font-bold ${themeClasses.textPrimary} text-sm whitespace-nowrap`}
                           >
                             Rs {order.total_amount}
                           </p>
                           <p
-                            className={`text-xs ${themeClasses.textSecondary}`}
+                            className={`text-xs ${themeClasses.textSecondary} whitespace-nowrap`}
                           >
-                            {order.order_time}
+                            {formatTime12(order.order_time)}
                           </p>
                         </div>
                       </div>
@@ -3051,7 +3101,7 @@ export default function OrdersPage() {
                       {new Date(
                         selectedOrder.order_date
                       ).toLocaleDateString()}{" "}
-                      at {selectedOrder.order_time}
+                      at {formatTime12(selectedOrder.order_time)}
                     </span>
                     <span
                       className={`flex items-center text-sm ${themeClasses.textSecondary} capitalize`}

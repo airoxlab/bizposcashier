@@ -1,14 +1,13 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   X, BarChart2, TrendingUp, ShoppingBag,
   Banknote, Smartphone, CreditCard, Building2, Building, DollarSign,
-  Clock, AlertCircle, RefreshCw, Delete,
+  Clock, AlertCircle, RefreshCw, Delete, WifiOff,
   Wallet, Layers, Gift, Printer, Receipt, User, ArrowLeft
 } from 'lucide-react'
-import { cacheManager } from '../../lib/cacheManager'
 import { authManager } from '../../lib/authManager'
 import { supabase } from '../../lib/supabase'
 import { printerManager } from '../../lib/printerManager'
@@ -27,160 +26,125 @@ function fmt(n) {
 }
 
 // Icon map keyed by payment_accounts.icon — same set the My Till page uses so
-// the analytics breakdown matches the till visually.
+// the accounts list matches the till visually.
 const ICON_MAP = { Wallet, Banknote, Smartphone, Building, Building2, CreditCard, DollarSign, Layers, Gift, AlertCircle }
 const getAccountIcon = (name) => ICON_MAP[name] || Wallet
 
-// Fallback icons/colors for the order-STATE buckets (not real till accounts).
-const METHOD_META = {
-  Account:       { icon: <CreditCard  className="w-3.5 h-3.5" />, color: 'text-purple-500' },
-  Unpaid:        { icon: <AlertCircle className="w-3.5 h-3.5" />, color: 'text-orange-500' },
-  Split:         { icon: <Layers      className="w-3.5 h-3.5" />, color: 'text-indigo-500' },
-  Complimentary: { icon: <Gift        className="w-3.5 h-3.5" />, color: 'text-pink-500'   },
-}
-
-// Case-insensitive match of an order/leg payment_method to a till account —
-// identical rule to the DB trigger auto_credit_payment_account_from_order_complete
-// (LOWER(payment_method_key) = LOWER(method) OR LOWER(name) = LOWER(method)).
-function methodMatchesAccount(method, acc) {
-  const m = (method || '').toLowerCase().trim()
-  if (!m) return false
-  const key = (acc.payment_method_key || '').toLowerCase().trim()
-  const name = (acc.name || '').toLowerCase().trim()
-  return m === key || m === name
-}
-
-// Physical cash drawer detection. Uses the canonical 'cash' key, or the whole
-// word "cash" in the name (so "Captain Sahb Cash" counts) — but NOT substrings
-// like "JazzCash", which is a mobile wallet, not a cash drawer.
-function isCashAccount(acc) {
-  const key = (acc.payment_method_key || '').toLowerCase().trim()
-  if (key === 'cash') return true
-  const name = (acc.name || '').toLowerCase()
-  return /(^|\s)cash(\s|$)/.test(name)
-}
-
-// Sum split-payment legs (keyed by lowercased method) that map to an account.
-function splitLegsForAccount(splitByMethod, acc) {
-  let total = 0
-  Object.entries(splitByMethod || {}).forEach(([m, amt]) => {
-    if (methodMatchesAccount(m, acc)) total += parseFloat(amt) || 0
-  })
-  return total
-}
-
-// Overall shift figures derived from ORDERS alone (no per-account split).
-// "Credit" = money NOT collected this shift: customer-account (khata) sales +
-// unpaid tabs. Complimentary orders are free, so they are excluded from both
-// total sales and credit. total_amount is already net of discounts, so the
-// discount total is informational and does not feed cash-in-hand.
-function orderSummary(orders) {
-  const nonCancelled = orders.filter(o => !['Cancelled', 'cancelled'].includes(o.order_status))
-  const isCredit = (m) => { const x = (m || '').toLowerCase(); return x === 'account' || x === 'unpaid' }
-  const isComp   = (m) => (m || '').toLowerCase() === 'complimentary'
-  const amt      = (o) => parseFloat(o.total_amount || 0)
-  const creditRows = nonCancelled.filter(o => isCredit(o.payment_method))
+// ── Collective order stats (whole business, informational only) ─────────────
+// Credit  = orders put on the customer's account (khata). They never credit a
+//           finance account, so they are info-only here.
+// Pending = orders not yet completed/paid (active statuses) plus "Unpaid" tabs.
+//           Also info-only — the finance trigger only posts on completion.
+function computeOrderStats(orders) {
+  const lc  = (v) => (v || '').toLowerCase()
+  const amt = (o) => parseFloat(o.total_amount || 0)
+  const nonCancelled = orders.filter(o => lc(o.order_status) !== 'cancelled')
+  const ACTIVE = ['pending', 'preparing', 'ready', 'dispatched']
+  const pendingRows = nonCancelled.filter(o => ACTIVE.includes(lc(o.order_status)) || lc(o.payment_method) === 'unpaid')
+  const creditRows  = nonCancelled.filter(o => lc(o.payment_method) === 'account')
   return {
-    totalOrders:    nonCancelled.length,
-    creditOrders:   creditRows.length,
-    totalSales:     nonCancelled.filter(o => !isComp(o.payment_method)).reduce((s, o) => s + amt(o), 0),
-    creditSales:    creditRows.reduce((s, o) => s + amt(o), 0),
-    totalDiscounts: nonCancelled.reduce((s, o) => s + (parseFloat(o.discount_amount || 0) + parseFloat(o.loyalty_discount_amount || 0)), 0),
+    totalOrders:     nonCancelled.length,
+    cancelledOrders: orders.length - nonCancelled.length,
+    pendingCount:    pendingRows.length,
+    pendingAmount:   pendingRows.reduce((s, o) => s + amt(o), 0),
+    creditCount:     creditRows.length,
+    creditAmount:    creditRows.reduce((s, o) => s + amt(o), 0),
+    totalSales:      nonCancelled.filter(o => lc(o.payment_method) !== 'complimentary').reduce((s, o) => s + amt(o), 0),
+    totalDiscounts:  nonCancelled.reduce((s, o) => s + (parseFloat(o.discount_amount || 0) + parseFloat(o.loyalty_discount_amount || 0)), 0),
   }
 }
 
-// Cash paid OUT this shift (overall): business expenses + supplier/PO payments
-// ("payorders"). The Expenses-page "pay supplier" flow writes BOTH a
-// supplier_payments row AND an expenses breadcrumb tagged source_type
-// 'supplier_payment'; we count that cash once by EXCLUDING the breadcrumb from
-// expenses (it is already captured under payorders). Attribution mirrors the
-// orders scope so the on-screen figures and the printed report always agree.
-async function fetchMoneyOut({ userId, subjectCashierId, ownerMode, startISO, endISO }) {
-  let totalExpense = 0, payorders = 0
-  try {
-    let q = supabase.from('expenses')
-      .select('amount,total_amount,source_type,cashier_id,created_at')
-      .eq('user_id', userId)
-      .gte('created_at', startISO)
-      .lt('created_at', endISO)
-    if (subjectCashierId) q = q.eq('cashier_id', subjectCashierId)
-    else if (ownerMode)   q = q.is('cashier_id', null)
-    const { data } = await q
-    ;(data || []).forEach(ex => {
-      if ((ex.source_type || '') === 'supplier_payment') return
-      totalExpense += parseFloat(ex.total_amount ?? ex.amount ?? 0) || 0
-    })
-  } catch {}
-  try {
-    let q = supabase.from('supplier_payments')
-      .select('amount_paid,paid_by_cashier_id,created_at')
-      .eq('user_id', userId)
-      .gte('created_at', startISO)
-      .lt('created_at', endISO)
-    if (subjectCashierId) q = q.eq('paid_by_cashier_id', subjectCashierId)
-    else if (ownerMode)   q = q.is('paid_by_cashier_id', null)
-    const { data } = await q
-    ;(data || []).forEach(p => { payorders += parseFloat(p.amount_paid || 0) || 0 })
-  } catch {}
-  return { totalExpense, payorders }
-}
+// ── Collective finance figures from the account ledger ──────────────────────
+// The finance accounts are the single source of truth: every rupee in or out
+// today is a payment_account_ledger row. Buckets:
+//   credits → sales (source 'order', net of order_reversal debits),
+//             customer khata payments (manual + "Customer Payment…" description,
+//             the exact description migrations 019/023/024 write), other receipts.
+//   debits  → expenses, payorders (supplier_payment), withdrawals,
+//             customer refunds (manual + "Customer refund…"), other payouts.
+// Internal transfers (transfer_in/transfer_out) move money BETWEEN our own
+// accounts, so they are surfaced separately and excluded from received/paid —
+// but they stay inside totalIn/totalOut so the opening-balance math ties:
+//   Opening = Available Balance − (totalIn − totalOut)   … exact, because
+// current_balance is the running result of this same ledger.
+function computeFinance(accounts, ledger) {
+  const accountsBalance = accounts.reduce((s, a) => s + (parseFloat(a.current_balance) || 0), 0)
+  let salesIn = 0, customerIn = 0, otherIn = 0, transferIn = 0
+  let expensesOut = 0, payordersOut = 0, withdrawalsOut = 0, refundsOut = 0, otherOut = 0, transferOut = 0, orderReversals = 0
+  let totalIn = 0, totalOut = 0
+  const perAccount = {}
 
-function computeStats(orders, splitByMethod, accounts) {
-  const nonCancelled = orders.filter(o => !['Cancelled', 'cancelled'].includes(o.order_status))
-  const cancelled    = orders.filter(o =>  ['Cancelled', 'cancelled'].includes(o.order_status))
-  const pending      = nonCancelled.filter(o => ['Pending','Preparing','Ready','Dispatched'].includes(o.order_status))
-
-  const totalRevenue = nonCancelled
-    .filter(o => (o.payment_method || '').toLowerCase() !== 'complimentary')
-    .reduce((s, o) => s + parseFloat(o.total_amount || 0), 0)
-
-  // Per configured account: direct (non-split) orders + matching split legs = tender total.
-  const accountTotals = (accounts || []).map(acc => {
-    const direct = nonCancelled
-      .filter(o => o.payment_method !== 'Split' && methodMatchesAccount(o.payment_method, acc))
-      .reduce((s, o) => s + parseFloat(o.total_amount || 0), 0)
-    const legs = splitLegsForAccount(splitByMethod, acc)
-    return {
-      id: acc.id,
-      name: acc.name,
-      key: acc.payment_method_key,
-      icon: acc.icon,
-      color: acc.color || '#6366f1',
-      isCash: isCashAccount(acc),
-      direct,
-      legs,
-      tender: direct + legs,
+  ledger.forEach(e => {
+    const amt  = parseFloat(e.amount) || 0
+    const src  = e.source_type || ''
+    const desc = (e.description || '').toLowerCase()
+    if (e.transaction_type === 'credit') {
+      totalIn += amt
+      perAccount[e.account_id] = (perAccount[e.account_id] || 0) + amt
+      if (src === 'order') salesIn += amt
+      else if (src === 'transfer_in') transferIn += amt
+      else if (src === 'manual' && desc.startsWith('customer payment')) customerIn += amt
+      else otherIn += amt
+    } else if (e.transaction_type === 'debit') {
+      totalOut += amt
+      perAccount[e.account_id] = (perAccount[e.account_id] || 0) - amt
+      if (src === 'expense') expensesOut += amt
+      else if (src === 'supplier_payment') payordersOut += amt
+      else if (src === 'withdrawal') withdrawalsOut += amt
+      else if (src === 'transfer_out') transferOut += amt
+      else if (src === 'order_reversal') orderReversals += amt
+      else if (src === 'manual' && desc.startsWith('customer refund')) refundsOut += amt
+      else otherOut += amt
     }
   })
 
-  // Order-state buckets (not till accounts): credit / unpaid / complimentary / split.
-  const bucketTotal = (name) => nonCancelled
-    .filter(o => (o.payment_method || '').toLowerCase() === name)
-    .reduce((s, o) => s + parseFloat(o.total_amount || 0), 0)
-
-  const special = {
-    Account:       bucketTotal('account'),
-    Unpaid:        bucketTotal('unpaid'),
-    Complimentary: bucketTotal('complimentary'),
-    Split:         bucketTotal('split'),
-  }
-
-  // Split money not itemized into an account line — legs never recorded (all
-  // of them when offline) or matching no configured account. Surfaced so the
-  // breakdown still ties to revenue.
-  const allocatedLegs = accountTotals.reduce((s, a) => s + a.legs, 0)
-  const splitUnallocated = Math.max(0, special.Split - allocatedLegs)
-
   return {
-    ...orderSummary(orders),   // totalOrders, creditOrders, totalSales, creditSales, totalDiscounts
-    totalRevenue,
-    cancelledOrders: cancelled.length,
-    pendingOrders:   pending.length,
-    accountTotals,
-    special,
-    splitUnallocated,
-    splitByMethod: splitByMethod || {},
+    accountsBalance,
+    activeCount: accounts.length,
+    accounts: accounts.map(a => ({ ...a, todayNet: perAccount[a.id] || 0 })),
+    opening: accountsBalance - (totalIn - totalOut),
+    salesNet: salesIn - orderReversals,   // cancelled-order reversals net out of sales
+    customerIn, otherIn,
+    expensesOut, payordersOut, withdrawalsOut, refundsOut, otherOut,
+    transferMoved: Math.max(transferIn, transferOut),
+    transferNet:   transferIn - transferOut,   // ≠0 only when a leg left our scope (e.g. cashier drawer)
+    netToday: totalIn - totalOut,
   }
+}
+
+// Rows for the printed report — preformatted app-side so the Electron ESC/POS
+// template stays dumb (it just renders label/value lines, dividers, headings).
+// Plain ASCII '+'/'-' only: thermal charsets don't have '−'.
+function buildReportRows(os, fin, printedBy, bizLabel) {
+  const money = (n) => `Rs ${fmt(n)}`
+  const rows = []
+  rows.push({ t: 'row', label: 'Printed by:', value: printedBy })
+  rows.push({ t: 'row', label: 'Business Day:', value: bizLabel })
+  rows.push({ t: 'div' })
+  rows.push({ t: 'head', text: 'ORDERS' })
+  rows.push({ t: 'row', label: 'Total Orders:', value: String(os.totalOrders) })
+  rows.push({ t: 'row', label: 'Total Sales:', value: money(os.totalSales) })
+  rows.push({ t: 'row', label: 'Pending Orders:', value: `${os.pendingCount} (${money(os.pendingAmount)})` })
+  rows.push({ t: 'row', label: 'Credit Orders:', value: `${os.creditCount} (${money(os.creditAmount)})` })
+  rows.push({ t: 'row', label: 'Total Discounts:', value: money(os.totalDiscounts) })
+  rows.push({ t: 'div' })
+  rows.push({ t: 'head', text: 'FINANCE - TODAY' })
+  rows.push({ t: 'row', label: 'Opening Balance:', value: money(fin.opening) })
+  rows.push({ t: 'row', label: 'Sales Received:', value: '+ ' + money(fin.salesNet) })
+  if (fin.customerIn > 0)     rows.push({ t: 'row', label: 'Customer Payments:', value: '+ ' + money(fin.customerIn) })
+  if (fin.otherIn > 0)        rows.push({ t: 'row', label: 'Other Receipts:', value: '+ ' + money(fin.otherIn) })
+  rows.push({ t: 'row', label: 'Expenses:', value: '- ' + money(fin.expensesOut) })
+  rows.push({ t: 'row', label: 'Payorders:', value: '- ' + money(fin.payordersOut) })
+  if (fin.withdrawalsOut > 0) rows.push({ t: 'row', label: 'Withdrawals:', value: '- ' + money(fin.withdrawalsOut) })
+  if (fin.refundsOut > 0)     rows.push({ t: 'row', label: 'Customer Refunds:', value: '- ' + money(fin.refundsOut) })
+  if (fin.otherOut > 0)       rows.push({ t: 'row', label: 'Other Payouts:', value: '- ' + money(fin.otherOut) })
+  if (fin.transferMoved > 0)  rows.push({ t: 'row', label: 'Internal Transfers:', value: money(fin.transferMoved) })
+  if (Math.abs(fin.transferNet) > 0.5) rows.push({ t: 'row', label: 'Transfers Net:', value: (fin.transferNet >= 0 ? '+ ' : '- ') + money(Math.abs(fin.transferNet)) })
+  rows.push({ t: 'rowb', label: 'Net Today:', value: (fin.netToday >= 0 ? '+ ' : '- ') + money(Math.abs(fin.netToday)) })
+  rows.push({ t: 'div' })
+  rows.push({ t: 'head', text: 'ACCOUNT BALANCES' })
+  fin.accounts.forEach(a => rows.push({ t: 'row', label: `${a.name}:`, value: money(a.current_balance) }))
+  return rows
 }
 
 // ─── Calculator ─────────────────────────────────────────────────────────────
@@ -233,7 +197,7 @@ function Calculator({ isDark, active = true }) {
   const back    = useCallback(() => setDisplay(d => d.length <= 1 || d === 'Error' ? '0' : d.slice(0, -1)), [])
   const percent = useCallback(() => setDisplay(d => (parseFloat(d) / 100).toString()), [])
 
-  // Keyboard support. Only while `active` (the cash-up overlay suspends it),
+  // Keyboard support. Only while `active` (the cash-report overlay suspends it),
   // and never when the user is typing in a form field — a window-level
   // preventDefault would otherwise cancel text insertion into inputs.
   useEffect(() => {
@@ -307,432 +271,162 @@ function Calculator({ isDark, active = true }) {
 }
 
 // ─── Main component ──────────────────────────────────────────────────────────
+// ONE collective Cash Analytics for the whole business — no per-cashier views.
+// Admin, cashier 1 or cashier 2: everyone sees the same real-time picture,
+// driven by the finance accounts (single source of truth). Access to the
+// module itself is controlled by permissions outside this component.
 
 export default function CashierAnalytics({ isOpen, onClose, isDark }) {
-  const [raw, setRaw]         = useState(null)   // { orders, splitByMethod }
-  const [loading, setLoading] = useState(false)
-  const [bizRange, setBizRange] = useState(null)
-  // Default view: an admin opens on the whole business ('All'); a cashier is
-  // locked to their own ('me'). Admin can still switch to 'My Orders' (their own
-  // unattributed punches) or a specific cashier.
-  const [viewFilter, setViewFilter] = useState(() => authManager.isAdmin() ? 'all' : 'me') // 'all' | 'me' | cashier UUID
-  const [cashierList, setCashierList] = useState([])
-  const [accounts, setAccounts] = useState([])       // company tender accounts (dynamic)
-
-  // Simple Cash Report state — an OVERALL shift summary (no per-account drawer
-  // setup, no counted-cash reconciliation). Works whether cashier-drawer mode
-  // is on or off because it is derived purely from orders/expenses/payorders.
+  const [online, setOnline]         = useState(true)
+  const [loading, setLoading]       = useState(false)
+  const [bizRange, setBizRange]     = useState(null)
+  const [orderStats, setOrderStats] = useState(null)   // whole-business order info (info-only)
+  const [finance, setFinance]       = useState(null)   // ledger-driven money figures
+  const [live, setLive]             = useState(false)  // realtime channel subscribed
   const [reportOpen, setReportOpen] = useState(false)
-  const [reportLoading, setReportLoading] = useState(false)
-  const [report, setReport] = useState(null)
-  const [saving, setSaving] = useState(false)
-  // Money paid out (expenses + payorders), scoped to the current view — feeds
-  // the on-screen Shift Summary's Total Expense / Payorders / Cash in Hand.
-  const [moneyOut, setMoneyOut] = useState({ totalExpense: 0, payorders: 0 })
+  const [saving, setSaving]         = useState(false)
+  const debounceRef = useRef(null)
 
-  const stats = useMemo(
-    () => (raw ? computeStats(raw.orders, raw.splitByMethod, accounts) : null),
-    [raw, accounts]
-  )
-
-  // Load dynamic tender accounts. Returns the list so callers that need the
-  // data immediately (openCashReport) don't race the state update.
-  const loadAccounts = useCallback(async () => {
-    const user = authManager.getCurrentUser()
-    if (!user?.id) return []
-    const cacheKey = `pos_analytics_accounts_${user.id}`
-    const online = typeof navigator !== 'undefined' && navigator.onLine
-    const fromCache = () => {
-      try { return JSON.parse(localStorage.getItem(cacheKey) || 'null') || [] } catch { return [] }
-    }
-    if (!online) {
-      const c = fromCache()
-      setAccounts(c)
-      return c
-    }
-    try {
-      const { data } = await supabase
-        .from('payment_accounts')
-        .select('id,name,payment_method_key,icon,color,sort_order')
-        .eq('user_id', user.id)
-        .is('cashier_id', null)
-        .eq('is_active', true)
-        .order('sort_order')
-      const list = data || []
-      setAccounts(list)
-      localStorage.setItem(cacheKey, JSON.stringify(list))
-      return list
-    } catch {
-      const c = fromCache()
-      setAccounts(c)
-      return c
-    }
-  }, [])
-
-  // Fetch cashier list + dynamic tender accounts once when opened
-  useEffect(() => {
-    if (!isOpen) return
+  // Fetch everything: today's orders (info) + active company accounts +
+  // today's ledger (the money truth). Online-only by design — the ledger and
+  // balances aren't cached, and a half report is worse than no report.
+  const fetchAll = useCallback(async (opts = {}) => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) { setOnline(false); return }
+    setOnline(true)
     const user = authManager.getCurrentUser()
     if (!user?.id) return
-
-    const fetchCashiers = async () => {
-      try {
-        const { data } = await supabase
-          .from('cashiers')
-          .select('id, name')
-          .eq('user_id', user.id)
-          .eq('is_active', true)
-          .order('name')
-        setCashierList(data || [])
-      } catch {}
-    }
-
-    // Only admins can switch views, so only they need the cashier list. A
-    // cashier never pulls the roster — it isn't shown to them anyway.
-    if (authManager.isAdmin()) fetchCashiers()
-    loadAccounts()
-  }, [isOpen, loadAccounts])
-
-  const fetchStats = useCallback(async (filterOverride) => {
-    setLoading(true)
-    const activeFilter = filterOverride !== undefined ? filterOverride : viewFilter
+    if (!opts.silent) setLoading(true)
     try {
-      const cashier = authManager.getCashier()
-      const user    = authManager.getCurrentUser()
-      const myCashierId = cashier?.id
-      const userId    = user?.id
-
-      const profile   = getProfile()
-      const startTime = profile.business_start_time || '10:00'
-      const endTime   = profile.business_end_time   || '03:00'
-
-      const todayBiz = getTodaysBusinessDate(startTime, endTime)
-      const { startDateTime, endDateTime } = getBusinessDayRange(todayBiz, startTime, endTime)
-      setBizRange({ startDateTime, endDateTime, todayBiz })
-
-      const startTs = new Date(startDateTime)
-      const endTs   = new Date(endDateTime)
-
-      // Determine the scope.
-      //  • 'all'             → whole business (no filter).
-      //  • 'me' as a cashier → that cashier's own orders (cashier_id / order_taker_id).
-      //  • 'me' as an admin  → the owner's OWN punches only. An admin isn't a
-      //    cashier, so their orders carry NO cashier_id and NO order_taker_id —
-      //    filter to that unattributed bucket, NOT everything. (The bug was that
-      //    admin "My Orders" fell through to no-filter and showed every cashier's
-      //    orders too.)
-      //  • specific UUID     → that cashier.
-      const isAdmin = authManager.isAdmin()
-      const ownerMode = isAdmin && activeFilter === 'me'
-      const filterCashierId = activeFilter === 'all' ? null
-        : activeFilter === 'me' ? (isAdmin ? null : myCashierId)
-        : activeFilter // specific cashier UUID
-
-      // Start from cache
-      let orders = (cacheManager.cache?.orders || []).filter(o => {
-        if (ownerMode) {
-          if (o.cashier_id || o.order_taker_id) return false
-        } else if (filterCashierId && o.cashier_id !== filterCashierId && o.order_taker_id !== filterCashierId) {
-          return false
-        }
-        const ts = new Date(o.created_at)
-        return ts >= startTs && ts < endTs
-      })
-
-      let splitByMethod = {}
-
-      // If online, get fresh DB data
-      if (typeof navigator !== 'undefined' && navigator.onLine) {
-        try {
-          let query = supabase
-            .from('orders')
-            .select('id,cashier_id,order_taker_id,order_status,payment_method,payment_status,total_amount,discount_amount,loyalty_discount_amount,created_at')
-            .eq('user_id', userId)
-            .gte('created_at', startDateTime)
-            .lt('created_at', endDateTime)
-
-          if (ownerMode) {
-            query = query.is('cashier_id', null).is('order_taker_id', null)
-          } else if (filterCashierId) {
-            query = query.or(`cashier_id.eq.${filterCashierId},order_taker_id.eq.${filterCashierId}`)
-          }
-
-          const { data, error } = await query
-          if (!error && data) orders = data
-
-          // Split payment breakdown via order_payment_transactions (keyed lowercased)
-          const splitIds = orders.filter(o => o.payment_method === 'Split').map(o => o.id)
-          if (splitIds.length > 0) {
-            const { data: txs } = await supabase
-              .from('order_payment_transactions')
-              .select('payment_method,amount')
-              .in('order_id', splitIds)
-            ;(txs || []).forEach(tx => {
-              const k = (tx.payment_method || '').toLowerCase()
-              splitByMethod[k] = (splitByMethod[k] || 0) + (parseFloat(tx.amount) || 0)
-            })
-          }
-        } catch {
-          // fall through to cached result
-        }
-      }
-
-      setRaw({ orders, splitByMethod })
-
-      // Money paid out this view (expenses + payorders) for the Shift Summary.
-      // Online-only, same source/scope as the printed Cash Report so the two
-      // never disagree. Offline shows Rs 0 (these tables aren't cached).
-      if (typeof navigator !== 'undefined' && navigator.onLine && userId) {
-        const mo = await fetchMoneyOut({
-          userId,
-          subjectCashierId: filterCashierId,
-          ownerMode,
-          startISO: startDateTime,
-          endISO: endDateTime,
-        })
-        setMoneyOut(mo)
-      } else {
-        setMoneyOut({ totalExpense: 0, payorders: 0 })
-      }
-    } catch (err) {
-      console.error('[CashierAnalytics] error:', err)
-    } finally {
-      setLoading(false)
-    }
-  }, [viewFilter])
-
-  useEffect(() => {
-    if (isOpen) fetchStats()
-  }, [isOpen, fetchStats])
-
-  // ── Cash Report: gather the subject's overall shift figures + open panel ──
-  const openCashReport = useCallback(async () => {
-    const user         = authManager.getCurrentUser()
-    const loginCashier = authManager.getCashier()   // null for an admin/owner login
-    if (!user?.id) { notify.error('Please log in first'); return }
-
-    // Resolve WHO the report is for ("the subject"), matching the analytics view
-    // so "what you see is what you print":
-    //  • Cashier login          → always themselves; the snapshot is saved so the
-    //    admin can reconcile it later (save block gated on the LOGIN cashier).
-    //  • Admin, a cashier chosen → that cashier's shift.
-    //  • Admin, 'My Orders'      → the owner's OWN punches only (unattributed:
-    //    no cashier_id, no order_taker_id) — NOT the whole business.
-    //  • Admin, 'All'            → the whole business day.
-    //  Admin prints for their records but never persists a cashier snapshot
-    //  (only a cashier login saves its own row).
-    let subjectCashierId = null   // set ⇒ scope to exactly one cashier
-    let ownerMode = false         // admin 'My Orders' ⇒ owner's unattributed orders
-    let subjectName
-    if (loginCashier?.id) {
-      subjectCashierId = loginCashier.id
-      subjectName      = loginCashier.name || 'Cashier'
-    } else if (viewFilter && viewFilter !== 'all' && viewFilter !== 'me') {
-      subjectCashierId = viewFilter
-      subjectName      = cashierList.find(c => c.id === viewFilter)?.name || 'Cashier'
-    } else if (viewFilter === 'me') {
-      ownerMode   = true
-      subjectName = authManager.getDisplayName() || 'Owner'
-    } else {
-      subjectName = authManager.getDisplayName() || 'Owner'   // 'All' ⇒ whole business
-    }
-    const canSave = !!loginCashier?.id   // only a cashier's own count is persisted
-
-    setReportLoading(true)
-    setReportOpen(true)
-    try {
-      const online = typeof navigator !== 'undefined' && navigator.onLine
-
-      // Shift window = the subject's current BUSINESS DAY (start → now) — the
-      // same window the analytics panel shows, so "what you see is what you
-      // print". Independent of cashier-drawer mode: it's derived purely from
-      // orders + expenses + payorders, so it works with the drawer on or off.
       const profile   = getProfile()
       const startTime = profile.business_start_time || '10:00'
       const endTime   = profile.business_end_time   || '03:00'
       const todayBiz  = getTodaysBusinessDate(startTime, endTime)
-      const { startDateTime } = getBusinessDayRange(todayBiz, startTime, endTime)
-      const shiftStart = startDateTime
-      const shiftEnd   = new Date().toISOString()
+      const { startDateTime, endDateTime } = getBusinessDayRange(todayBiz, startTime, endTime)
+      setBizRange({ startDateTime, endDateTime, todayBiz })
+      const nowISO = new Date().toISOString()
 
-      // Reference the active session id (for the saved snapshot only), if any.
-      let sessionId = null
-      if (online && subjectCashierId) {
-        try {
-          const { data: sess } = await supabase
-            .from('cashier_sessions')
-            .select('id')
-            .eq('cashier_id', subjectCashierId)
-            .eq('is_active', true)
-            .order('login_time', { ascending: false })
-            .limit(1)
-            .maybeSingle()
-          if (sess?.id) sessionId = sess.id
-        } catch {}
-      }
-
-      // Orders inside the shift window. Per-cashier attribution is EXCLUSIVE so
-      // the same order can never land in two cashiers' reports — it belongs to
-      // the cashier who cashiered it; order_taker_id only counts when none is
-      // set. Whole-business subject (admin 'All'): every order for the day.
-      let orders = []
-      if (online) {
-        let q = supabase
+      const [ordersRes, accountsRes] = await Promise.all([
+        supabase
           .from('orders')
-          .select('id,cashier_id,order_taker_id,order_status,payment_method,total_amount,discount_amount,loyalty_discount_amount,created_at')
+          .select('order_status,payment_method,total_amount,discount_amount,loyalty_discount_amount,created_at')
           .eq('user_id', user.id)
-          .gte('created_at', shiftStart)
-          .lt('created_at', shiftEnd)
-        if (subjectCashierId) {
-          q = q.or(`cashier_id.eq.${subjectCashierId},and(cashier_id.is.null,order_taker_id.eq.${subjectCashierId})`)
-        } else if (ownerMode) {
-          q = q.is('cashier_id', null).is('order_taker_id', null)
-        }
-        const { data } = await q
-        orders = data || []
-      } else {
-        const s = new Date(shiftStart), e = new Date(shiftEnd)
-        orders = (cacheManager.cache?.orders || []).filter(o => {
-          if (subjectCashierId) {
-            const mine = o.cashier_id === subjectCashierId || (!o.cashier_id && o.order_taker_id === subjectCashierId)
-            if (!mine) return false
-          } else if (ownerMode) {
-            if (o.cashier_id || o.order_taker_id) return false
-          }
-          const ts = new Date(o.created_at)
-          return ts >= s && ts < e
-        })
+          .gte('created_at', startDateTime)
+          .lt('created_at', endDateTime),
+        supabase
+          .from('payment_accounts')
+          .select('id,name,payment_method_key,icon,color,sort_order,current_balance')
+          .eq('user_id', user.id)
+          .is('cashier_id', null)      // main finance accounts (not cashier drawers)
+          .eq('is_active', true)       // exclude disabled accounts
+          .order('sort_order'),
+      ])
+      const orders   = ordersRes.data || []
+      const accounts = accountsRes.data || []
+
+      let ledger = []
+      const ids = accounts.map(a => a.id)
+      if (ids.length > 0) {
+        const { data: led } = await supabase
+          .from('payment_account_ledger')
+          .select('account_id,transaction_type,amount,source_type,description,created_at')
+          .in('account_id', ids)
+          .gte('created_at', startDateTime)
+          .lt('created_at', nowISO)
+        ledger = led || []
       }
 
-      // Overall figures — no per-account split, no drawer count. Simple.
-      const summ = orderSummary(orders)
-      const mo   = online
-        ? await fetchMoneyOut({ userId: user.id, subjectCashierId, ownerMode, startISO: shiftStart, endISO: shiftEnd })
-        : { totalExpense: 0, payorders: 0 }
-      // Collective / cash in hand = collected sales (Total − Credit) less the
-      // cash paid out (expenses + supplier/PO payments). Discounts are already
-      // netted into total_amount, so they don't subtract here.
-      const cashInHand = summ.totalSales - summ.creditSales - mo.totalExpense - mo.payorders
-
-      setReport({
-        shiftStart, shiftEnd, sessionId,
-        cashierName: subjectName,
-        canSave,
-        storeName: profile.store_name || profile.customer_name || '',
-        offline: !online,
-        ...summ,
-        totalExpense: mo.totalExpense,
-        payorders:    mo.payorders,
-        cashInHand,
-      })
+      setOrderStats(computeOrderStats(orders))
+      setFinance(computeFinance(accounts, ledger))
     } catch (err) {
-      console.error('[CashierAnalytics] cash report error:', err)
-      notify.error('Failed to build cash report')
-      setReportOpen(false)
+      console.error('[CashierAnalytics] fetch error:', err)
     } finally {
-      setReportLoading(false)
+      if (!opts.silent) setLoading(false)
     }
-  }, [viewFilter, cashierList])
+  }, [])
 
-  const doPrintAndSave = useCallback(async () => {
-    if (!report) return
+  // While open: initial fetch, realtime push on ledger/orders/balances, a 60s
+  // polling fallback (in case realtime isn't enabled on a table), and
+  // online/offline transitions.
+  useEffect(() => {
+    if (!isOpen) return
+    fetchAll()
+
+    const user = authManager.getCurrentUser()
+    let channel = null
+    if (user?.id) {
+      const bump = () => {
+        if (debounceRef.current) clearTimeout(debounceRef.current)
+        debounceRef.current = setTimeout(() => fetchAll({ silent: true }), 1200)
+      }
+      try {
+        channel = supabase
+          .channel(`cash_analytics_${user.id}`)
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_account_ledger', filter: `user_id=eq.${user.id}` }, bump)
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'orders',                 filter: `user_id=eq.${user.id}` }, bump)
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_accounts',       filter: `user_id=eq.${user.id}` }, bump)
+          .subscribe((status) => setLive(status === 'SUBSCRIBED'))
+      } catch (e) {
+        console.warn('[CashierAnalytics] realtime unavailable, polling only:', e?.message)
+      }
+    }
+
+    const poll = setInterval(() => fetchAll({ silent: true }), 60000)
+    const goOnline  = () => fetchAll()
+    const goOffline = () => setOnline(false)
+    window.addEventListener('online', goOnline)
+    window.addEventListener('offline', goOffline)
+
+    return () => {
+      clearInterval(poll)
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+      window.removeEventListener('online', goOnline)
+      window.removeEventListener('offline', goOffline)
+      if (channel) { try { supabase.removeChannel(channel) } catch {} }
+      setLive(false)
+    }
+  }, [isOpen, fetchAll])
+
+  // ── Print the collective business report. Same for everyone; nothing is
+  //    persisted — the finance ledger IS the record, the print is a paper copy.
+  const doPrint = useCallback(async () => {
+    if (!orderStats || !finance) return
     setSaving(true)
     try {
-      const user    = authManager.getCurrentUser()
-      const cashier = authManager.getCashier()
+      const user      = authManager.getCurrentUser()
+      const profile   = getProfile()
+      const printedBy = authManager.getDisplayName() || authManager.getCashier()?.name || 'Staff'
+
+      const fmt2 = (d) => new Date(d).toLocaleString('en-PK', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true })
+      const bizLabel = bizRange ? `${fmt2(bizRange.startDateTime)} - now` : 'Today'
 
       const reportData = {
         title: 'CASH REPORT',
-        subtitle: 'SHIFT SUMMARY',
-        storeName: report.storeName,
-        cashierName: report.cashierName,
-        shiftStart: report.shiftStart,
-        shiftEnd: report.shiftEnd,
+        subtitle: 'BUSINESS SUMMARY',
+        storeName: profile.store_name || profile.customer_name || '',
         printedAt: new Date().toISOString(),
-        offline: !!report.offline,
         currency: 'Rs',
-        totalOrders:    report.totalOrders,
-        creditOrders:   report.creditOrders,
-        totalSales:     report.totalSales,
-        creditSales:    report.creditSales,
-        totalDiscounts: report.totalDiscounts,
-        totalExpense:   report.totalExpense,
-        payorders:      report.payorders,
-        cashInHand:     report.cashInHand,
+        reportRows: buildReportRows(orderStats, finance, printedBy, bizLabel),
+        cashInHand: finance.accountsBalance,
+        cashInHandLabel: 'CASH IN HAND (ALL ACCOUNTS)',
       }
 
-      // ── Print ──
-      let printed = false
       try {
         if (user?.id && !printerManager.currentUserId) printerManager.setUserId(user.id)
         const printerConfig = await printerManager.getPrinterForPrinting()
         if (!printerConfig) {
           notify.error(printerManager.isElectron() ? 'No thermal printer configured' : 'Printing only available in the desktop app')
         } else {
-          const userProfile = getProfile()
-          const res = await printerManager.printCashReport(reportData, userProfile, printerConfig)
-          if (res?.success) { printed = true; notify.success('Cash report printed') }
+          const res = await printerManager.printCashReport(reportData, getProfile(), printerConfig)
+          if (res?.success) { notify.success('Cash report printed'); setReportOpen(false) }
           else notify.error('Print failed: ' + (res?.error || res?.message || 'unknown'))
         }
       } catch (e) {
         notify.error('Print error: ' + (e?.message || e))
       }
-
-      // ── Save a simple snapshot (cashier login, online only). One row per
-      //    cashier per shift (upsert on shift_start) so a reprint updates the
-      //    row instead of duplicating. There's no counted-cash reconciliation
-      //    here, so the counted/over-short columns stay null — the summary lives
-      //    in `breakdown`. Admin/owner prints don't persist a cashier row. ──
-      if (report.canSave && typeof navigator !== 'undefined' && navigator.onLine && user?.id && cashier?.id) {
-        try {
-          const payload = {
-            user_id: user.id,
-            cashier_id: cashier.id,
-            session_id: report.sessionId || null,
-            shift_start: report.shiftStart,
-            shift_end: report.shiftEnd,
-            opening_float: 0,
-            breakdown: {
-              total_orders:    report.totalOrders,
-              credit_orders:   report.creditOrders,
-              total_sales:     report.totalSales,
-              credit_sales:    report.creditSales,
-              total_discounts: report.totalDiscounts,
-              total_expense:   report.totalExpense,
-              payorders:       report.payorders,
-              cash_in_hand:    report.cashInHand,
-            },
-            total_collected: report.totalSales - report.creditSales,
-            total_expected_cash: report.cashInHand,
-            total_counted_cash: null,
-            cash_over_short: null,
-            order_count: report.totalOrders,
-          }
-          const { data: existing } = await supabase
-            .from('cashier_cashups')
-            .select('id')
-            .eq('cashier_id', cashier.id)
-            .eq('shift_start', report.shiftStart)
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle()
-          const { error: saveErr } = existing?.id
-            ? await supabase.from('cashier_cashups').update(payload).eq('id', existing.id)
-            : await supabase.from('cashier_cashups').insert(payload)
-          if (saveErr) throw saveErr
-        } catch (e) {
-          console.warn('[CashierAnalytics] cash report save failed (non-blocking):', e?.message)
-          notify.error('Snapshot NOT saved — tell your admin (report still printed)')
-        }
-      } else if (report.offline) {
-        notify.warning('Offline — report printed but the snapshot was not saved')
-      }
-
-      if (printed) setReportOpen(false)
     } finally {
       setSaving(false)
     }
-  }, [report])
+  }, [orderStats, finance, bizRange])
 
   if (!isOpen) return null
 
@@ -743,16 +437,6 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
   const textSec = isDark ? 'text-gray-400' : 'text-gray-500'
   const cardBg  = isDark ? 'bg-gray-800/60' : 'bg-gray-50'
 
-  // Cash Report is available to any logged-in user. A cashier reports on their
-  // own shift (and saves the snapshot); an admin/owner prints for the currently
-  // selected view (a chosen cashier, or the whole business day).
-  const canShowCashReport = !!authManager.getCurrentUser()?.id
-
-  // Only an admin/owner may switch the view (whole business or another cashier).
-  // A cashier is locked to their own sales — they must never see the overall
-  // figures or a colleague's numbers, even with VIEW_SALES_ANALYTICS granted.
-  const isAdminUser = authManager.isAdmin()
-
   // Format business window label
   let bizLabel = 'Today\'s business day'
   if (bizRange) {
@@ -762,10 +446,7 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
     bizLabel = `${fmt2(s)} → ${fmt2(e)}`
   }
 
-  const fmtTime = (iso) => {
-    try { return new Date(iso).toLocaleString('en-PK', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }) }
-    catch { return '' }
-  }
+  const canPrint = online && !!orderStats && !!finance
 
   return (
     <div className="fixed inset-0 z-[999] flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
@@ -783,42 +464,30 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
               <BarChart2 className="w-4.5 h-4.5 text-indigo-500" style={{ width: 18, height: 18 }} />
             </div>
             <div>
-              <h2 className={`text-sm font-bold ${text}`}>
-                {viewFilter === 'all' ? 'Overall Sales' : viewFilter === 'me' ? 'My Shift Analytics' : `${cashierList.find(c => c.id === viewFilter)?.name || 'Cashier'}'s Sales`}
+              <h2 className={`text-sm font-bold ${text} flex items-center gap-2`}>
+                Cash Analytics · Whole Business
+                {online && live && (
+                  <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-500">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    LIVE
+                  </span>
+                )}
               </h2>
               <p className={`text-[11px] ${textSec}`}>{bizLabel}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {canShowCashReport && (
-              <button
-                onClick={openCashReport}
-                className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium transition-colors bg-emerald-500 hover:bg-emerald-600 text-white"
-                title="Print end-of-shift cash report"
-              >
-                <Printer className="w-3.5 h-3.5" />
-                Cash Report
-              </button>
-            )}
-            {isAdminUser && (
-              <select
-                value={viewFilter}
-                onChange={(e) => {
-                  const val = e.target.value
-                  setViewFilter(val)
-                  fetchStats(val)
-                }}
-                className={`text-xs px-2 py-1.5 rounded-lg border transition-colors ${isDark ? 'bg-gray-800 border-gray-600 text-gray-200' : 'bg-white border-gray-300 text-gray-700'}`}
-              >
-                <option value="all">All (Overall)</option>
-                <option value="me">My Orders</option>
-                {cashierList.map(c => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
-            )}
             <button
-              onClick={() => fetchStats()}
+              onClick={() => setReportOpen(true)}
+              disabled={!canPrint}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium transition-colors bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed text-white"
+              title="Print the collective business cash report"
+            >
+              <Printer className="w-3.5 h-3.5" />
+              Cash Report
+            </button>
+            <button
+              onClick={() => fetchAll()}
               disabled={loading}
               className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-colors ${isDark ? 'bg-indigo-900/40 text-indigo-300 hover:bg-indigo-900/60' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'}`}
             >
@@ -838,136 +507,145 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
         <div className="flex" style={{ height: 520 }}>
           {/* ── Left: Stats 60% ── */}
           <div className={`border-r ${border} overflow-y-auto p-4 space-y-2.5`} style={{ width: '60%' }}>
-            {loading && !stats ? (
+            {!online ? (
+              /* Friendly offline notice — no broken/half report */
+              <div className="flex flex-col items-center justify-center h-full text-center px-6">
+                <div className={`p-3 rounded-2xl mb-3 ${isDark ? 'bg-gray-800' : 'bg-gray-100'}`}>
+                  <WifiOff className={`w-7 h-7 ${textSec}`} />
+                </div>
+                <p className={`text-sm font-semibold ${text} mb-1`}>Cash Analytics is available online</p>
+                <p className={`text-xs ${textSec} max-w-xs mb-4`}>
+                  Live figures come straight from your finance accounts, which need an internet
+                  connection. Reconnect and they will appear automatically.
+                </p>
+                <button
+                  onClick={() => fetchAll()}
+                  className="flex items-center gap-1.5 text-xs px-4 py-2 rounded-lg font-medium bg-indigo-500 hover:bg-indigo-600 text-white transition-colors"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Try again
+                </button>
+              </div>
+            ) : loading && !finance ? (
               <div className="flex items-center justify-center h-full">
                 <div className="animate-spin rounded-full h-8 w-8 border-2 border-indigo-400 border-t-transparent" />
               </div>
-            ) : stats ? (
+            ) : orderStats && finance ? (
               <>
-                {/* Revenue + Orders */}
+                {/* Orders — whole business, informational */}
                 <div className="grid grid-cols-2 gap-2">
                   <StatCard
                     icon={<TrendingUp className="w-4 h-4 text-emerald-500" />}
-                    label="Total Revenue"
-                    value={`Rs ${fmt(stats.totalRevenue)}`}
+                    label="Total Sales (Today)"
+                    value={`Rs ${fmt(orderStats.totalSales)}`}
                     valueColor="text-emerald-500"
                     bg={cardBg} border={border} text={text} textSec={textSec}
                   />
                   <StatCard
                     icon={<ShoppingBag className="w-4 h-4 text-blue-500" />}
-                    label="Orders Processed"
-                    value={stats.totalOrders}
+                    label="Total Orders"
+                    value={orderStats.totalOrders}
                     valueColor="text-blue-500"
                     bg={cardBg} border={border} text={text} textSec={textSec}
                   />
                 </div>
-
-                {/* Pending + Cancelled */}
                 <div className="grid grid-cols-2 gap-2">
                   <StatCard
                     icon={<Clock className="w-4 h-4 text-amber-500" />}
-                    label="Pending / Active"
-                    value={stats.pendingOrders}
+                    label="Pending Orders"
+                    value={orderStats.pendingCount}
+                    sub={`Rs ${fmt(orderStats.pendingAmount)}`}
                     valueColor="text-amber-500"
                     bg={cardBg} border={border} text={text} textSec={textSec}
                   />
                   <StatCard
-                    icon={<X className="w-4 h-4 text-red-500" />}
-                    label="Cancelled"
-                    value={stats.cancelledOrders}
-                    valueColor="text-red-500"
+                    icon={<CreditCard className="w-4 h-4 text-purple-500" />}
+                    label="Credit Orders (Khata)"
+                    value={orderStats.creditCount}
+                    sub={`Rs ${fmt(orderStats.creditAmount)}`}
+                    valueColor="text-purple-500"
                     bg={cardBg} border={border} text={text} textSec={textSec}
                   />
                 </div>
+                <div className={`${cardBg} rounded-xl p-3 border ${border} space-y-1.5`}>
+                  <SumRow label="Cancelled Orders" value={orderStats.cancelledOrders}                text={text} textSec={textSec} />
+                  <SumRow label="Total Discounts"  value={`Rs ${fmt(orderStats.totalDiscounts)}`}    text={text} textSec={textSec} />
+                  <p className={`text-[10px] ${textSec} pt-0.5`}>
+                    Pending &amp; credit orders are info only — they haven't touched the finance accounts yet.
+                  </p>
+                </div>
 
-                {/* Shift Summary — the exact figures printed on the Cash Report */}
+                {/* Finance — TODAY. The single source of truth: every rupee in or
+                    out of the finance accounts, reconciling opening → available. */}
                 <div className={`${cardBg} rounded-xl p-3 border ${border}`}>
-                  <p className={`text-[10px] uppercase tracking-wide font-semibold ${textSec} mb-2.5`}>Shift Summary</p>
+                  <div className="flex items-center justify-between mb-2.5">
+                    <p className={`text-[10px] uppercase tracking-wide font-semibold ${textSec}`}>Finance · Today</p>
+                    <span className={`text-[10px] ${textSec}`}>{finance.activeCount} active account{finance.activeCount !== 1 ? 's' : ''}</span>
+                  </div>
                   <div className="space-y-1.5">
-                    <SumRow label="Total Orders"     value={stats.totalOrders}                        text={text} textSec={textSec} />
-                    <SumRow label="Credit Orders"    value={stats.creditOrders}                       text={text} textSec={textSec} />
-                    <SumRow label="Total Sales"      value={`Rs ${fmt(stats.totalSales)}`}            text={text} textSec={textSec} />
-                    <SumRow label="Credit Sales"     value={`Rs ${fmt(stats.creditSales)}`}           text={text} textSec={textSec} />
-                    <SumRow label="Total Discounts"  value={`Rs ${fmt(stats.totalDiscounts)}`}        text={text} textSec={textSec} />
-                    <SumRow label="Total Expense"    value={`Rs ${fmt(moneyOut.totalExpense)}`}       text={text} textSec={textSec} />
-                    <SumRow label="Payorders Amount" value={`Rs ${fmt(moneyOut.payorders)}`}          text={text} textSec={textSec} />
+                    <SumRow label="Opening Balance (day start)" value={`Rs ${fmt(finance.opening)}`} text={text} textSec={textSec} />
+                    <SumRow label="Sales Received"     value={`+ Rs ${fmt(finance.salesNet)}`}       valueColor="text-emerald-500" text={text} textSec={textSec} />
+                    {finance.customerIn > 0 && (
+                      <SumRow label="Customer Payments (khata)" value={`+ Rs ${fmt(finance.customerIn)}`} valueColor="text-emerald-500" text={text} textSec={textSec} />
+                    )}
+                    {finance.otherIn > 0 && (
+                      <SumRow label="Other Receipts"   value={`+ Rs ${fmt(finance.otherIn)}`}        valueColor="text-emerald-500" text={text} textSec={textSec} />
+                    )}
+                    <SumRow label="Expenses"           value={`− Rs ${fmt(finance.expensesOut)}`}    valueColor="text-red-500" text={text} textSec={textSec} />
+                    <SumRow label="Payorders"          value={`− Rs ${fmt(finance.payordersOut)}`}   valueColor="text-red-500" text={text} textSec={textSec} />
+                    {finance.withdrawalsOut > 0 && (
+                      <SumRow label="Withdrawals"      value={`− Rs ${fmt(finance.withdrawalsOut)}`} valueColor="text-red-500" text={text} textSec={textSec} />
+                    )}
+                    {finance.refundsOut > 0 && (
+                      <SumRow label="Customer Refunds" value={`− Rs ${fmt(finance.refundsOut)}`}     valueColor="text-red-500" text={text} textSec={textSec} />
+                    )}
+                    {finance.otherOut > 0 && (
+                      <SumRow label="Other Payouts"    value={`− Rs ${fmt(finance.otherOut)}`}       valueColor="text-red-500" text={text} textSec={textSec} />
+                    )}
+                    {finance.transferMoved > 0 && (
+                      <SumRow label="Internal Transfers (between accounts)" value={`Rs ${fmt(finance.transferMoved)}`} text={text} textSec={textSec} />
+                    )}
+                    {Math.abs(finance.transferNet) > 0.5 && (
+                      <SumRow label="Transfers Net" value={`${finance.transferNet >= 0 ? '+' : '−'} Rs ${fmt(Math.abs(finance.transferNet))}`} valueColor={finance.transferNet >= 0 ? 'text-emerald-500' : 'text-red-500'} text={text} textSec={textSec} />
+                    )}
                     <div className={`flex items-center justify-between pt-2 mt-1 border-t ${border}`}>
-                      <span className={`text-sm font-bold ${text}`}>Cash in Hand</span>
-                      <span className="text-sm font-bold text-emerald-500 tabular-nums">
-                        Rs {fmt(stats.totalSales - stats.creditSales - moneyOut.totalExpense - moneyOut.payorders)}
-                      </span>
+                      <span className={`text-sm font-bold ${text}`}>Cash in Hand (All Accounts)</span>
+                      <span className="text-xl font-bold text-emerald-500 tabular-nums">Rs {fmt(finance.accountsBalance)}</span>
                     </div>
+                    <p className={`text-[10px] ${textSec} pt-0.5`}>
+                      Real balance across all finance accounts · today's net {finance.netToday >= 0 ? '+' : '−'} Rs {fmt(Math.abs(finance.netToday))}
+                    </p>
                   </div>
                 </div>
 
-                {/* Payment breakdown — dynamic accounts */}
+                {/* Per-account balances + today's movement */}
                 <div className={`${cardBg} rounded-xl p-3 border ${border}`}>
-                  <p className={`text-[10px] uppercase tracking-wide font-semibold ${textSec} mb-2.5`}>Payment Breakdown</p>
+                  <p className={`text-[10px] uppercase tracking-wide font-semibold ${textSec} mb-2.5`}>Accounts</p>
                   <div className="space-y-1.5">
-                    {stats.accountTotals.length === 0 && (
+                    {finance.accounts.length === 0 && (
                       <p className={`text-xs ${textSec}`}>No payment accounts configured.</p>
                     )}
-                    {stats.accountTotals.map((acc) => {
+                    {finance.accounts.map((acc) => {
                       const Icon = getAccountIcon(acc.icon)
                       return (
                         <div key={acc.id} className="flex items-center justify-between">
-                          <div className="flex items-center gap-2" style={{ color: acc.color }}>
+                          <div className="flex items-center gap-2" style={{ color: acc.color || '#6366f1' }}>
                             <Icon className="w-3.5 h-3.5" />
                             <span className={`text-xs font-medium ${text}`}>{acc.name}</span>
                           </div>
-                          <span className={`text-xs font-bold ${acc.tender > 0 ? text : textSec}`}>
-                            {acc.tender > 0 ? `Rs ${fmt(acc.tender)}` : '—'}
-                          </span>
-                        </div>
-                      )
-                    })}
-
-                    {/* Split money with no recorded legs (e.g. offline) */}
-                    {stats.splitUnallocated > 0.5 && (
-                      <div className={`flex items-center justify-between pt-1.5 mt-1.5 border-t ${border}`}>
-                        <div className={`flex items-center gap-2 ${METHOD_META.Split.color}`}>
-                          {METHOD_META.Split.icon}
-                          <span className={`text-xs font-medium ${text}`}>Split (unallocated)</span>
-                        </div>
-                        <span className={`text-xs font-bold ${text}`}>Rs {fmt(stats.splitUnallocated)}</span>
-                      </div>
-                    )}
-
-                    {/* Order-state buckets (only when non-zero) */}
-                    {['Account', 'Unpaid', 'Complimentary'].map((k) => {
-                      const amount = stats.special[k] || 0
-                      if (amount <= 0) return null
-                      const meta = METHOD_META[k]
-                      return (
-                        <div key={k} className={`flex items-center justify-between pt-1.5 mt-1.5 border-t ${border}`}>
-                          <div className={`flex items-center gap-2 ${meta.color}`}>
-                            {meta.icon}
-                            <span className={`text-xs font-medium ${text}`}>{k === 'Account' ? 'Account (Credit)' : k}</span>
+                          <div className="flex items-center gap-2.5">
+                            {Math.abs(acc.todayNet) > 0.5 && (
+                              <span className={`text-[10px] tabular-nums ${acc.todayNet >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                                {acc.todayNet >= 0 ? '+' : '−'} Rs {fmt(Math.abs(acc.todayNet))}
+                              </span>
+                            )}
+                            <span className={`text-xs font-bold tabular-nums ${text}`}>Rs {fmt(acc.current_balance)}</span>
                           </div>
-                          <span className={`text-xs font-bold ${text}`}>Rs {fmt(amount)}</span>
                         </div>
                       )
                     })}
                   </div>
                 </div>
-
-                {/* Split detail (online only) */}
-                {Object.keys(stats.splitByMethod).length > 0 && (
-                  <div className={`${cardBg} rounded-xl p-3 border ${border}`}>
-                    <p className={`text-[10px] uppercase tracking-wide font-semibold ${textSec} mb-2`}>Split Payment Detail</p>
-                    <div className="space-y-1.5">
-                      {Object.entries(stats.splitByMethod).map(([method, amount]) => (
-                        <div key={method} className="flex items-center justify-between">
-                          <div className={`flex items-center gap-2 ${textSec}`}>
-                            <Layers className="w-3.5 h-3.5" />
-                            <span className={`text-xs capitalize ${text}`}>{method}</span>
-                          </div>
-                          <span className={`text-xs font-semibold ${text}`}>Rs {fmt(amount)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </>
             ) : (
               <div className={`flex items-center justify-center h-full text-sm ${textSec}`}>No data</div>
@@ -980,17 +658,17 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
           </div>
         </div>
 
-        {/* ── Simple Cash Report overlay (overall summary — no drawer setup) ── */}
+        {/* ── Cash Report overlay (collective business summary) ── */}
         <AnimatePresence>
           {reportOpen && (
             <CashReportPanel
               isDark={isDark}
-              loading={reportLoading}
               saving={saving}
-              report={report}
-              fmtTime={fmtTime}
+              orderStats={orderStats}
+              finance={finance}
+              bizRange={bizRange}
               onClose={() => setReportOpen(false)}
-              onPrint={doPrintAndSave}
+              onPrint={doPrint}
             />
           )}
         </AnimatePresence>
@@ -999,39 +677,47 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
   )
 }
 
-function StatCard({ icon, label, value, valueColor, bg, border, text, textSec }) {
+function StatCard({ icon, label, value, sub, valueColor, bg, border, text, textSec }) {
   return (
     <div className={`${bg} rounded-xl p-3 border ${border}`}>
       <div className="flex items-center gap-1.5 mb-1">
         {icon}
         <span className={`text-[10px] uppercase tracking-wide font-semibold ${textSec}`}>{label}</span>
       </div>
-      <p className={`text-xl font-bold ${valueColor}`}>{value}</p>
+      <div className="flex items-baseline gap-2">
+        <p className={`text-xl font-bold ${valueColor}`}>{value}</p>
+        {sub && <p className={`text-[11px] font-semibold tabular-nums ${textSec}`}>{sub}</p>}
+      </div>
     </div>
   )
 }
 
-// One label/value line of the on-screen Shift Summary card.
-function SumRow({ label, value, text, textSec }) {
+// One label/value line of a summary card.
+function SumRow({ label, value, text, textSec, valueColor }) {
   return (
     <div className="flex items-center justify-between">
       <span className={`text-xs ${textSec}`}>{label}</span>
-      <span className={`text-xs font-semibold tabular-nums ${text}`}>{value}</span>
+      <span className={`text-xs font-semibold tabular-nums ${valueColor || text}`}>{value}</span>
     </div>
   )
 }
 
-// ─── Cash Report panel (simple overall shift summary) ────────────────────────
-// A read-only summary — NO drawer setup, NO counted-cash reconciliation. Shows
-// exactly what prints, and prints whether cashier-drawer mode is on or off.
+// ─── Cash Report panel (collective business summary) ─────────────────────────
+// Mirrors exactly what prints — the same on-screen figures, nothing persisted.
+// The finance ledger is the permanent record; this is a paper copy of it.
 
-function CashReportPanel({ isDark, loading, saving, report, fmtTime, onClose, onPrint }) {
+function CashReportPanel({ isDark, saving, orderStats, finance, bizRange, onClose, onPrint }) {
   const bg      = isDark ? 'bg-gray-900' : 'bg-white'
   const border  = isDark ? 'border-gray-700' : 'border-gray-200'
   const text    = isDark ? 'text-gray-100' : 'text-gray-900'
   const textSec = isDark ? 'text-gray-400' : 'text-gray-500'
   const cardBg  = isDark ? 'bg-gray-800/60' : 'bg-gray-50'
   const money   = (n) => `Rs ${fmt(n)}`
+
+  const fmtTime = (iso) => {
+    try { return new Date(iso).toLocaleString('en-PK', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }) }
+    catch { return '' }
+  }
 
   // One label/value row of the summary. Strong = the emphasised final line.
   const Line = ({ label, value, strong }) => (
@@ -1058,13 +744,14 @@ function CashReportPanel({ isDark, loading, saving, report, fmtTime, onClose, on
             <Receipt className="w-4.5 h-4.5 text-emerald-500" style={{ width: 18, height: 18 }} />
           </div>
           <div>
-            <h2 className={`text-sm font-bold ${text}`}>Cash Report</h2>
+            <h2 className={`text-sm font-bold ${text}`}>Cash Report · Whole Business</h2>
             <p className={`text-[11px] ${textSec} flex items-center gap-1.5`}>
-              {report && (
+              <User className="w-3 h-3" />
+              {authManager.getDisplayName() || authManager.getCashier()?.name || 'Staff'}
+              {bizRange && (
                 <>
-                  <User className="w-3 h-3" />{report.cashierName}
                   <span className="opacity-40">·</span>
-                  {fmtTime(report.shiftStart)} → {fmtTime(report.shiftEnd)}
+                  {fmtTime(bizRange.startDateTime)} → now
                 </>
               )}
             </p>
@@ -1077,40 +764,53 @@ function CashReportPanel({ isDark, loading, saving, report, fmtTime, onClose, on
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto p-4 space-y-3" style={{ maxHeight: 470 }}>
-        {loading || !report ? (
+        {!orderStats || !finance ? (
           <div className="flex items-center justify-center h-full">
             <div className="animate-spin rounded-full h-8 w-8 border-2 border-emerald-400 border-t-transparent" />
           </div>
         ) : (
           <>
-            {/* Offline = expenses & payorders unavailable → cash-in-hand is partial */}
-            {report.offline && (
-              <div className={`flex items-center gap-2 rounded-xl px-3 py-2 border text-xs font-medium bg-amber-500/15 border-amber-500/40 ${isDark ? 'text-amber-400' : 'text-amber-600'}`}>
-                <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                Offline — expenses and payorders are unavailable, so Cash in Hand is partial. This report will not be saved.
-              </div>
-            )}
-
-            {/* Counts */}
-            <div className="grid grid-cols-2 gap-2">
+            {/* Order counts — info only */}
+            <div className="grid grid-cols-3 gap-2">
               <div className={`${cardBg} rounded-xl p-3 border ${border}`}>
                 <p className={`text-[10px] uppercase tracking-wide font-semibold ${textSec}`}>Total Orders</p>
-                <p className={`text-xl font-bold ${text}`}>{report.totalOrders}</p>
+                <p className={`text-xl font-bold ${text}`}>{orderStats.totalOrders}</p>
               </div>
               <div className={`${cardBg} rounded-xl p-3 border ${border}`}>
-                <p className={`text-[10px] uppercase tracking-wide font-semibold ${textSec}`}>Credit Orders</p>
-                <p className={`text-xl font-bold text-purple-500`}>{report.creditOrders}</p>
+                <p className={`text-[10px] uppercase tracking-wide font-semibold ${textSec}`}>Pending</p>
+                <p className="text-xl font-bold text-amber-500">{orderStats.pendingCount}</p>
+              </div>
+              <div className={`${cardBg} rounded-xl p-3 border ${border}`}>
+                <p className={`text-[10px] uppercase tracking-wide font-semibold ${textSec}`}>Credit (Khata)</p>
+                <p className="text-xl font-bold text-purple-500">{orderStats.creditCount}</p>
               </div>
             </div>
 
-            {/* Money summary — mirrors the printed template exactly */}
+            {/* Finance summary — mirrors the printed template exactly */}
             <div className={`${cardBg} rounded-xl p-3 border ${border} space-y-1.5`}>
-              <Line label="Total Sales"      value={money(report.totalSales)} />
-              <Line label="Credit Sales"     value={money(report.creditSales)} />
-              <Line label="Total Discounts"  value={money(report.totalDiscounts)} />
-              <Line label="Total Expense"    value={money(report.totalExpense)} />
-              <Line label="Payorders Amount" value={money(report.payorders)} />
-              <Line label="Collective / Cash in Hand" value={money(report.cashInHand)} strong />
+              <Line label="Total Sales (orders)"  value={money(orderStats.totalSales)} />
+              <Line label="Pending Amount"        value={money(orderStats.pendingAmount)} />
+              <Line label="Credit Amount (khata)" value={money(orderStats.creditAmount)} />
+              <div className={`pt-2 mt-1 border-t ${border}`} />
+              <Line label="Opening Balance"       value={money(finance.opening)} />
+              <Line label="Sales Received"        value={`+ ${money(finance.salesNet)}`} />
+              {finance.customerIn > 0 &&     <Line label="Customer Payments" value={`+ ${money(finance.customerIn)}`} />}
+              {finance.otherIn > 0 &&        <Line label="Other Receipts"    value={`+ ${money(finance.otherIn)}`} />}
+              <Line label="Expenses"              value={`− ${money(finance.expensesOut)}`} />
+              <Line label="Payorders"             value={`− ${money(finance.payordersOut)}`} />
+              {finance.withdrawalsOut > 0 && <Line label="Withdrawals"       value={`− ${money(finance.withdrawalsOut)}`} />}
+              {finance.refundsOut > 0 &&     <Line label="Customer Refunds"  value={`− ${money(finance.refundsOut)}`} />}
+              {finance.otherOut > 0 &&       <Line label="Other Payouts"     value={`− ${money(finance.otherOut)}`} />}
+              {finance.transferMoved > 0 &&  <Line label="Internal Transfers" value={money(finance.transferMoved)} />}
+              <Line label="Cash in Hand (All Accounts)" value={money(finance.accountsBalance)} strong />
+            </div>
+
+            {/* Per-account balances */}
+            <div className={`${cardBg} rounded-xl p-3 border ${border} space-y-1.5`}>
+              <p className={`text-[10px] uppercase tracking-wide font-semibold ${textSec}`}>Account Balances</p>
+              {finance.accounts.map(acc => (
+                <Line key={acc.id} label={acc.name} value={money(acc.current_balance)} />
+              ))}
             </div>
           </>
         )}
@@ -1119,19 +819,17 @@ function CashReportPanel({ isDark, loading, saving, report, fmtTime, onClose, on
       {/* Footer */}
       <div className={`flex-shrink-0 px-4 py-3 border-t ${border} flex items-center gap-3`}>
         <p className={`text-[11px] flex-1 ${textSec}`}>
-          {report?.canSave === false
-            ? 'Prints on the thermal printer for your records. It does not log you out or move money.'
-            : 'Prints on the thermal printer and saves a snapshot your admin can see. It does not log you out or move money.'}
+          Prints the collective business report on the thermal printer. It does not log you out or move money.
         </p>
         <button
           onClick={onPrint}
-          disabled={saving || loading || !report}
+          disabled={saving || !orderStats || !finance}
           className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-emerald-500 hover:bg-emerald-600 disabled:opacity-60 disabled:cursor-not-allowed text-white transition-colors"
         >
           {saving
             ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
             : <Printer className="w-4 h-4" />}
-          Print &amp; Save
+          Print
         </button>
       </div>
     </motion.div>

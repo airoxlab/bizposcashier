@@ -52,6 +52,8 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsive
 import { themeManager } from '../../lib/themeManager'
 import { getTodaysBusinessDate, getBusinessDate } from '../../lib/utils/businessDayUtils'
 import dailySerialManager from '../../lib/utils/dailySerialManager'
+import BusinessDateFilter from '../../components/ui/BusinessDateFilter'
+import { authManager } from '../../lib/authManager'
 import LedgerTab from '../../components/reports/LedgerTab'
 import { ledgerManager } from '../../lib/ledgerManager'
 import NotificationSystem, { notify } from '../../components/ui/NotificationSystem'
@@ -158,6 +160,7 @@ export default function ReportsPage() {
   const [rawExpenses, setRawExpenses] = useState([])
   const [cashiers, setCashiers] = useState([])
   const [expenseCategories, setExpenseCategories] = useState([])
+  const [paymentAccounts, setPaymentAccounts] = useState([]) // dynamic Finance accounts (drawer-aware)
 
   // Daily P&L State
   const [dailyPnLData, setDailyPnLData] = useState(null)
@@ -311,6 +314,27 @@ useEffect(() => {
     themeManager.setTheme(newTheme)
   }
 
+  // Shared BusinessDateFilter → maps its business-day range onto the page's existing
+  // dateFrom/dateTo/timeFrom/timeTo convention (mirrors the mount default + Reset), so the
+  // proven business-hours + PKT fetch math stays exactly the same — no financial-number risk.
+  const handleDateRange = ({ from, to }) => {
+    if (!from) return
+    const { startTime, endTime } = dailySerialManager.getBusinessHours()
+    setDateFrom(from)
+    if (endTime < startTime && to) {
+      const d = new Date(to + 'T12:00:00')
+      d.setDate(d.getDate() + 1)
+      setDateTo(d.toISOString().split('T')[0])
+    } else {
+      setDateTo(to || from)
+    }
+    setTimeFrom(startTime)
+    setTimeTo(endTime)
+  }
+
+  // Business hours for the shared BusinessDateFilter (drives its Today/Yesterday/… presets).
+  const { startTime: bizStartTime, endTime: bizEndTime } = dailySerialManager.getBusinessHours()
+
 const fetchInitialData = async (userId) => {
   try {
     // Check if online
@@ -326,6 +350,26 @@ const fetchInitialData = async (userId) => {
 
       if (!cashiersError) {
         setCashiers(cashiersData || [])
+      }
+
+      // Payment accounts — dynamic Finance accounts (drawer-aware), same source the
+      // expenses page & POS use. Their `name` is what gets stored as `payment_method`,
+      // so filtering by it matches custom/renamed accounts (not just Cash/EasyPaisa/…).
+      try {
+        const cu = authManager.getCurrentUser()
+        const cashier = authManager.getCashier?.()
+        const drawerEnabled = cu?.use_cashier_drawer === true ||
+          (() => { try { return JSON.parse(localStorage.getItem('pos_cashier_drawer_enabled') || 'false') } catch { return false } })()
+        let pq = supabase.from('payment_accounts')
+          .select('id, name, payment_method_key')
+          .eq('user_id', userId)
+          .eq('is_active', true)
+          .order('sort_order')
+        pq = (drawerEnabled && cashier?.id) ? pq.eq('cashier_id', cashier.id) : pq.is('cashier_id', null)
+        const { data: accts } = await pq
+        if (accts) setPaymentAccounts(accts)
+      } catch (e) {
+        console.warn('Payment accounts fetch failed (non-blocking):', e?.message)
       }
     }
 
@@ -1693,31 +1737,10 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
           </div>
         </div>
 
-        {/* Filter Toggle - Matching Orders page */}
-        <div className={`px-3 py-2 ${isDark ? 'bg-gray-700/50' : 'bg-gray-100'} ${themeClasses.border} border-b`}>
-          <motion.button
-            whileHover={{ scale: 1.02 }}
-            whileTap={{ scale: 0.98 }}
-            onClick={() => setShowFilters(!showFilters)}
-            className={`w-full flex items-center justify-between px-3 py-2 ${themeClasses.button} rounded-lg transition-all text-sm font-medium`}
-          >
-            <div className="flex items-center">
-              <Filter className="w-4 h-4 mr-2" />
-              Filter
-            </div>
-            {showFilters ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-          </motion.button>
-        </div>
-
-        {/* Orders Count - Matching Orders page */}
-        <div className={`px-3 py-1 ${isDark ? 'bg-gray-700/50' : 'bg-gray-100'} ${themeClasses.border} border-b`}>
-          <p className={`text-xs font-semibold ${themeClasses.textPrimary}`}>
-            Total {rawOrders.length + rawExpenses.length} Records
-          </p>
-        </div>
-
-        {/* Summary Stats in Sidebar - positioned at bottom like Orders page */}
-        <div className={`mt-auto p-3 ${themeClasses.border} border-t ${isDark ? 'bg-gray-800' : 'bg-gray-50'}`}>
+        {/* Quick Summary — persistent across all tabs. Moved up from the bottom (was
+            mt-auto and got clipped on short screens). The Filter toggle + records count
+            now live in the content top toolbar. */}
+        <div className={`p-3 ${themeClasses.border} border-b ${isDark ? 'bg-gray-800' : 'bg-gray-50'}`}>
           <div className={`text-xs ${themeClasses.textSecondary} mb-2 font-medium`}>Quick Summary</div>
           <div className="space-y-2">
             <div className="flex justify-between text-xs">
@@ -1744,7 +1767,33 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
 
       {/* Right Panel - Main Content */}
       <div className={`flex-1 flex flex-col ${themeClasses.card} overflow-hidden`}>
-        {/* Collapsible Filters - at top of right panel */}
+        {/* Top toolbar — always-visible business-hours date filter + advanced-filter toggle.
+            Filter button relocated here from the sidebar; date range now uses the shared
+            BusinessDateFilter (Today/Yesterday/This Week/… presets, overnight-safe). */}
+        <div className={`px-3 py-2 flex items-center gap-3 flex-wrap ${themeClasses.border} border-b ${isDark ? 'bg-gray-800/60' : 'bg-gray-50'}`}>
+          <BusinessDateFilter
+            startTime={bizStartTime}
+            endTime={bizEndTime}
+            isDark={isDark}
+            onChange={handleDateRange}
+            className="w-44"
+          />
+          <span className={`text-xs font-semibold ${themeClasses.textSecondary}`}>
+            {rawOrders.length + rawExpenses.length} records
+          </span>
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={() => setShowFilters(!showFilters)}
+            className={`ml-auto flex items-center gap-2 px-3 py-1.5 ${themeClasses.button} rounded-lg transition-all text-sm font-medium ${showFilters ? 'ring-1 ring-purple-500' : ''}`}
+          >
+            <Filter className="w-4 h-4" />
+            Filters
+            {showFilters ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </motion.button>
+        </div>
+
+        {/* Collapsible advanced filters */}
         <AnimatePresence>
           {showFilters && (
             <motion.div
@@ -1754,56 +1803,8 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
               className={`overflow-hidden ${themeClasses.border} border-b ${isDark ? 'bg-gray-800/50' : 'bg-gray-50'}`}
             >
               <div className="p-3 space-y-3">
-                {/* Date Filters */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2">
-                  <div>
-                    <label className={`block text-xs font-medium ${themeClasses.textPrimary} mb-1`}>From Date</label>
-                    <input
-                      type="date"
-                      value={dateFrom}
-                      onChange={(e) => {
-                        const newFrom = e.target.value
-                        setDateFrom(newFrom)
-                        // For overnight businesses, auto-set To Date = From Date + 1 day
-                        const { startTime: s, endTime: en } = dailySerialManager.getBusinessHours()
-                        if (en < s && newFrom) {
-                          const d = new Date(newFrom + 'T12:00:00')
-                          d.setDate(d.getDate() + 1)
-                          setDateTo(d.toISOString().split('T')[0])
-                        }
-                      }}
-                      className={`w-full px-2 py-1.5 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-xs`}
-                    />
-                  </div>
-                  <div>
-                    <label className={`block text-xs font-medium ${themeClasses.textPrimary} mb-1`}>To Date</label>
-                    <input
-                      type="date"
-                      value={dateTo}
-                      onChange={(e) => setDateTo(e.target.value)}
-                      className={`w-full px-2 py-1.5 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-xs`}
-                    />
-                  </div>
-                  <div>
-                    <label className={`block text-xs font-medium ${themeClasses.textPrimary} mb-1`}>From Time</label>
-                    <input
-                      type="time"
-                      value={timeFrom}
-                      onChange={(e) => setTimeFrom(e.target.value)}
-                      className={`w-full px-2 py-1.5 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-xs`}
-                    />
-                  </div>
-                  <div>
-                    <label className={`block text-xs font-medium ${themeClasses.textPrimary} mb-1`}>To Time</label>
-                    <input
-                      type="time"
-                      value={timeTo}
-                      onChange={(e) => setTimeTo(e.target.value)}
-                      className={`w-full px-2 py-1.5 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-xs`}
-                    />
-                  </div>
-                </div>
-
+                {/* Date range is set via the BusinessDateFilter in the toolbar above.
+                    These are the additional (non-date) filters. */}
                 {/* Category Filters */}
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-2">
                   <div>
@@ -1828,12 +1829,13 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       className={`w-full px-2 py-1.5 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-xs`}
                     >
                       <option value="All">All Methods</option>
-                      <option value="Cash">Cash</option>
-                      <option value="EasyPaisa">EasyPaisa</option>
-                      <option value="JazzCash">JazzCash</option>
-                      <option value="Bank">Bank</option>
-                      <option value="Account">Account</option>
+                      {/* Dynamic Finance accounts (their name is stored as payment_method) */}
+                      {paymentAccounts.map(a => (
+                        <option key={a.id} value={a.name}>{a.name}</option>
+                      ))}
+                      {/* Special methods that exist regardless of Finance setup */}
                       <option value="Split">Split</option>
+                      <option value="Account">Account</option>
                       <option value="Unpaid">Unpaid</option>
                       <option value="Complimentary">Complimentary</option>
                     </select>
@@ -1906,10 +1908,10 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       className={`w-full px-2 py-1.5 ${themeClasses.input} rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-xs`}
                     >
                       <option value="All">All Methods</option>
-                      <option value="Cash">Cash</option>
-                      <option value="EasyPaisa">EasyPaisa</option>
-                      <option value="JazzCash">JazzCash</option>
-                      <option value="Bank">Bank</option>
+                      {/* Same dynamic Finance accounts as the expenses page filter */}
+                      {paymentAccounts.map(a => (
+                        <option key={a.id} value={a.name}>{a.name}</option>
+                      ))}
                       <option value="Account">Account</option>
                       <option value="Unpaid">Unpaid</option>
                     </select>
@@ -1923,19 +1925,8 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                     onClick={() => {
-                      const { startTime: rStart, endTime: rEnd } = dailySerialManager.getBusinessHours()
-                      const todayBiz = getTodaysBusinessDate(rStart, rEnd)
-                      setDateFrom(todayBiz)
-                      const isOvernight = rEnd < rStart
-                      if (isOvernight) {
-                        const d = new Date(todayBiz + 'T12:00:00')
-                        d.setDate(d.getDate() + 1)
-                        setDateTo(d.toISOString().split('T')[0])
-                      } else {
-                        setDateTo(todayBiz)
-                      }
-                      setTimeFrom(rStart)
-                      setTimeTo(rEnd)
+                      // Date range is owned by the toolbar's BusinessDateFilter, so Reset
+                      // only clears these advanced filters (leaves the selected period intact).
                       setOrderTypeFilter('All')
                       setPaymentMethodFilter('All')
                       setOrderStatusFilter('All')
@@ -1943,12 +1934,11 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
                       setCashierFilter('All')
                       setExpenseCategoryFilter('All')
                       setExpensePaymentFilter('All')
-                      setShowFilters(false)
                     }}
                     className={`flex items-center px-4 py-2 ${themeClasses.button} rounded-lg transition-all font-medium text-sm`}
                   >
                     <Settings className="w-4 h-4 mr-2" />
-                    Reset All Filters
+                    Reset Filters
                   </motion.button>
                 </div>
               </div>
@@ -1964,7 +1954,7 @@ const calculateProfitData = (salesDataParam, expenseDataParam, cogsDataParam = {
               {activeReportTab === 'overview' && (
                 <>
                   {/* Key Metrics Cards */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-4">
                     <motion.div
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}

@@ -1281,29 +1281,53 @@ async function generateCashReportESCPOS(reportData, userProfile, assets) {
     commands.push(drawLine('-'));
   }
 
-  // ── META (Date/Time + who the report is for) ──
+  // ── META (Date/Time) ──
   commands.push(CMD.ALIGN_LEFT);
   commands.push(leftRight('Date/Time:', fmtDT(reportData.printedAt || reportData.shiftEnd)));
-  commands.push(leftRight('Cashier:', String(reportData.cashierName || '')));
-  commands.push(drawLine('-'));
 
-  // ── ORDER COUNTS ──
-  commands.push(leftRight('Total Orders:', String(reportData.totalOrders ?? 0)));
-  commands.push(leftRight('Credit Orders:', String(reportData.creditOrders ?? 0)));
-  commands.push(drawLine('-'));
+  if (Array.isArray(reportData.reportRows) && reportData.reportRows.length > 0) {
+    // ── NEW data-driven format: the app sends preformatted rows so the report
+    //    content can change without touching this template. Row types:
+    //    row  = label/value line     rowb = bold label/value line
+    //    head = centered bold title  div  = '-' rule    div2 = '=' rule
+    for (const r of reportData.reportRows) {
+      if (!r) continue;
+      if (r.t === 'div') commands.push(drawLine('-'));
+      else if (r.t === 'div2') commands.push(drawLine('='));
+      else if (r.t === 'head') {
+        commands.push(CMD.ALIGN_CENTER);
+        commands.push(CMD.BOLD_ON);
+        commands.push(text(String(r.text || '') + '\n'));
+        commands.push(CMD.BOLD_OFF);
+        commands.push(CMD.ALIGN_LEFT);
+      } else if (r.t === 'rowb') {
+        commands.push(CMD.BOLD_ON);
+        commands.push(leftRight(String(r.label || ''), String(r.value ?? '')));
+        commands.push(CMD.BOLD_OFF);
+      } else {
+        commands.push(leftRight(String(r.label || ''), String(r.value ?? '')));
+      }
+    }
+  } else {
+    // ── LEGACY fixed-field format (per-cashier shift summary) — kept so a
+    //    print server running behind the client app still renders old payloads.
+    commands.push(leftRight('Cashier:', String(reportData.cashierName || '')));
+    commands.push(drawLine('-'));
+    commands.push(leftRight('Total Orders:', String(reportData.totalOrders ?? 0)));
+    commands.push(leftRight('Credit Orders:', String(reportData.creditOrders ?? 0)));
+    commands.push(drawLine('-'));
+    commands.push(leftRight('Total Sales:', money(reportData.totalSales)));
+    commands.push(leftRight('Credit Sales:', money(reportData.creditSales)));
+    commands.push(leftRight('Total Discounts:', money(reportData.totalDiscounts)));
+    commands.push(leftRight('Total Expense:', money(reportData.totalExpense)));
+    commands.push(leftRight('Payorders Amount:', money(reportData.payorders)));
+  }
 
-  // ── MONEY — OVERALL figures (not per-account) ──
-  commands.push(leftRight('Total Sales:', money(reportData.totalSales)));
-  commands.push(leftRight('Credit Sales:', money(reportData.creditSales)));
-  commands.push(leftRight('Total Discounts:', money(reportData.totalDiscounts)));
-  commands.push(leftRight('Total Expense:', money(reportData.totalExpense)));
-  commands.push(leftRight('Payorders Amount:', money(reportData.payorders)));
-
-  // ── COLLECTIVE / CASH IN HAND — the bottom line (Sales - Credit - Expense - Payorders) ──
+  // ── CASH IN HAND — the bottom line ──
   commands.push(drawLine('='));
   commands.push(CMD.ALIGN_CENTER);
   commands.push(CMD.BOLD_ON);
-  commands.push(text('COLLECTIVE / CASH IN HAND\n'));
+  commands.push(text((reportData.cashInHandLabel || 'COLLECTIVE / CASH IN HAND') + '\n'));
   commands.push(CMD.DOUBLE_HEIGHT);
   commands.push(text(money(reportData.cashInHand) + '\n'));
   commands.push(CMD.NORMAL);

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Table2, Users, MapPin, Check, RefreshCw, MoreVertical, CheckCircle, XCircle } from 'lucide-react'
+import { Table2, Users, MapPin, Check, RefreshCw, MoreVertical, CheckCircle, XCircle, ArrowLeft } from 'lucide-react'
 import { cacheManager } from '../../lib/cacheManager'
 import { isInTodaysBusinessDay } from '../../lib/utils/businessDayUtils'
 
@@ -238,11 +238,24 @@ export default function TableSelectionPanel({
       {/* Header */}
       <div className={`p-6 ${classes.border} border-b`}>
         <div className="flex items-center justify-between">
-          <div>
-            <h2 className={`text-2xl font-bold ${classes.textPrimary}`}>Select Table</h2>
-            <p className={`${classes.textSecondary} text-sm mt-1`}>
-              {tables.length} tables available
-            </p>
+          <div className="flex items-center gap-3">
+            {onClose && (
+              <motion.button
+                whileHover={{ x: -2 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={onClose}
+                className={`p-2 rounded-lg ${classes.button} transition-all`}
+                title="Back to menu"
+              >
+                <ArrowLeft className={`w-5 h-5 ${classes.textSecondary}`} />
+              </motion.button>
+            )}
+            <div>
+              <h2 className={`text-2xl font-bold ${classes.textPrimary}`}>Select Table</h2>
+              <p className={`${classes.textSecondary} text-sm mt-1`}>
+                {tables.length} tables available
+              </p>
+            </div>
           </div>
           <motion.button
             whileHover={{ scale: 1.05 }}

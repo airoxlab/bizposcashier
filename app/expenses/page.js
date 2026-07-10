@@ -38,6 +38,14 @@ import OwnerFingerprintUnlock from '../../components/ui/OwnerFingerprintUnlock'
 import ConfirmModal from '../../components/ui/ConfirmModal'
 import NotificationSystem, { notify } from '../../components/ui/NotificationSystem'
 import themeManager from '../../lib/themeManager'
+import { getTodaysBusinessDate, getBusinessDayRange } from '../../lib/utils/businessDayUtils'
+
+// Non-operating rows that live in the expenses table but are NOT business expenses:
+// supplier settlements (payorders) and payroll salary/advance mirrors. They are
+// excluded from this page's list + total so "Total Expenses" means real operating
+// expenses (matching the admin Expenses page and the shift-analytics figure).
+const EXCLUDED_EXPENSE_SOURCE_TYPES = ['supplier_payment', 'payroll_salary', 'payroll_advance']
+const isOperatingExpense = (e) => !EXCLUDED_EXPENSE_SOURCE_TYPES.includes(e?.source_type)
 
 // ─── Offline cache keys ────────────────────────────────────────────────────────
 const EXPENSE_CACHE = {
@@ -59,28 +67,48 @@ const localDateStr = (d) => {
   return `${y}-${m}-${day}`
 }
 
-function getDateRangeFromPreset(preset) {
-  const today = new Date()
+// "HH:MM:SS" / "HH:MM" (24h) → "h:MM AM/PM".
+const fmtTime12 = (t) => {
+  if (!t) return ''
+  const parts = String(t).split(':')
+  let h = parseInt(parts[0], 10)
+  if (isNaN(h)) return t
+  const m = (parts[1] || '00').padStart(2, '0')
+  const ap = h >= 12 ? 'PM' : 'AM'
+  h = h % 12 || 12
+  return `${h}:${m} ${ap}`
+}
+
+// Preset → { from, to } as BUSINESS dates (YYYY-MM-DD). "Today" is anchored to the
+// current BUSINESS day (getTodaysBusinessDate), so after midnight on an overnight
+// shift (e.g. 12PM–6AM) it still resolves to the open business day, not the new
+// calendar date. The returned dates are converted to created_at timestamp bounds
+// via businessBounds() so filtering matches the shift analytics / admin exactly.
+function getDateRangeFromPreset(preset, startTime = '10:00', endTime = '03:00') {
+  const todayBiz = getTodaysBusinessDate(startTime, endTime)
+  const [ty, tm, td] = todayBiz.split('-').map(Number)
+  const anchor = new Date(ty, tm - 1, td)
   const fmt = localDateStr
+  const shift = (base, days) => { const d = new Date(base); d.setDate(d.getDate() + days); return d }
 
   switch (preset) {
     case 'today':
-      return { from: fmt(today), to: fmt(today) }
+      return { from: todayBiz, to: todayBiz }
     case 'yesterday': {
-      const y = new Date(today); y.setDate(today.getDate() - 1)
+      const y = shift(anchor, -1)
       return { from: fmt(y), to: fmt(y) }
     }
     case 'this_week': {
-      const dow = today.getDay()
-      const mon = new Date(today); mon.setDate(today.getDate() - (dow === 0 ? 6 : dow - 1))
-      return { from: fmt(mon), to: fmt(today) }
+      const dow = anchor.getDay()
+      const mon = shift(anchor, -(dow === 0 ? 6 : dow - 1))
+      return { from: fmt(mon), to: todayBiz }
     }
     case 'this_month': {
-      const first = new Date(today.getFullYear(), today.getMonth(), 1)
-      return { from: fmt(first), to: fmt(today) }
+      const first = new Date(ty, tm - 1, 1)
+      return { from: fmt(first), to: todayBiz }
     }
     case 'last_month': {
-      const firstThisMonth = new Date(today.getFullYear(), today.getMonth(), 1)
+      const firstThisMonth = new Date(ty, tm - 1, 1)
       const lastLastMonth = new Date(firstThisMonth); lastLastMonth.setDate(0)
       const firstLastMonth = new Date(lastLastMonth.getFullYear(), lastLastMonth.getMonth(), 1)
       return { from: fmt(firstLastMonth), to: fmt(lastLastMonth) }
@@ -88,6 +116,17 @@ function getDateRangeFromPreset(preset) {
     default:
       return { from: '', to: '' }
   }
+}
+
+// Convert a business-date range to created_at timestamp bounds [startISO, endISO).
+// Overnight-safe: a day's end is the business-end moment on the next calendar day.
+function businessBounds(from, to, startTime, endTime) {
+  if (!from || !to) return { startISO: null, endISO: null }
+  try {
+    const { startDateTime: startISO } = getBusinessDayRange(from, startTime, endTime)
+    const { endDateTime: endISO }     = getBusinessDayRange(to, startTime, endTime)
+    return { startISO, endISO }
+  } catch { return { startISO: null, endISO: null } }
 }
 
 export default function ExpensesPage() {
@@ -202,12 +241,27 @@ export default function ExpensesPage() {
     } catch { setPendingCount(0) }
   }
 
+  // Business hours from the cached profile (same source the shift analytics uses).
+  const bizHours = () => {
+    try {
+      const p = JSON.parse(localStorage.getItem('user_profile') || localStorage.getItem('user') || '{}')
+      return { start: p.business_start_time || '10:00', end: p.business_end_time || '03:00' }
+    } catch { return { start: '10:00', end: '03:00' } }
+  }
+
   const filterCachedExpenses = (all) => {
     const cashierId = authManager.getCashier()?.id
-    let list = all
+    const { start, end } = bizHours()
+    const { startISO, endISO } = businessBounds(dateFrom, dateTo, start, end)
+    // Match a cached row to the business-day window by its true created_at; fall
+    // back to the calendar expense_date only for offline rows with no created_at.
+    const inWindow = (e) => {
+      if (e.created_at) return (!startISO || e.created_at >= startISO) && (!endISO || e.created_at < endISO)
+      return (!dateFrom || e.expense_date >= dateFrom) && (!dateTo || e.expense_date <= dateTo)
+    }
+    let list = all.filter(isOperatingExpense)
     if (cashierId) list = list.filter(e => e.cashier_id === cashierId)
-    if (dateFrom) list = list.filter(e => e.expense_date >= dateFrom)
-    if (dateTo) list = list.filter(e => e.expense_date <= dateTo)
+    list = list.filter(inWindow)
     if (categoryFilter !== 'All') list = list.filter(e => e.category_id === categoryFilter)
     if (subcategoryFilter !== 'All') list = list.filter(e => e.subcategory_id === subcategoryFilter)
     if (paymentFilter !== 'All') list = list.filter(e => e.payment_method === paymentFilter)
@@ -229,8 +283,9 @@ export default function ExpensesPage() {
 
     themeManager.applyTheme()
 
-    // Apply 'today' preset on mount
-    const { from, to } = getDateRangeFromPreset('today')
+    // Apply 'today' preset on mount (business-day aware).
+    const { start, end } = bizHours()
+    const { from, to } = getDateRangeFromPreset('today', start, end)
     setDateFrom(from)
     setDateTo(to)
   }, [router])
@@ -277,7 +332,8 @@ export default function ExpensesPage() {
   const handleDatePresetChange = (preset) => {
     setDatePreset(preset)
     if (preset !== 'custom') {
-      const { from, to } = getDateRangeFromPreset(preset)
+      const { start, end } = bizHours()
+      const { from, to } = getDateRangeFromPreset(preset, start, end)
       setDateFrom(from)
       setDateTo(to)
     }
@@ -343,26 +399,31 @@ export default function ExpensesPage() {
       const [expensesResult, categoriesResult, subcategoriesResult] = await Promise.all([
         (async () => {
           const currentCashierId = authManager.getCashier()?.id
+          const { start, end } = bizHours()
+          const { startISO, endISO } = businessBounds(dateFrom, dateTo, start, end)
           let query = supabase
             .from('expenses')
             .select(`
               id, amount, description, payment_method, expense_date, expense_time,
-              tax_rate, tax_amount, total_amount, created_at, category_id, subcategory_id, cashier_id, supplier_id,
+              tax_rate, tax_amount, total_amount, created_at, source_type, category_id, subcategory_id, cashier_id, supplier_id,
               category:expense_categories (id, name),
               subcategory:expense_subcategories (id, name),
               supplier:suppliers (id, name)
             `)
             .eq('user_id', user.id)
-            .order('expense_date', { ascending: false })
+            .order('created_at', { ascending: false })
 
           if (currentCashierId) query = query.eq('cashier_id', currentCashierId)
-          if (dateFrom) query = query.gte('expense_date', dateFrom)
-          if (dateTo) query = query.lte('expense_date', dateTo)
+          // Filter by created_at against business-day bounds (overnight-safe),
+          // matching the admin Expenses page and shift analytics — not the raw
+          // calendar expense_date.
+          if (startISO) query = query.gte('created_at', startISO)
+          if (endISO) query = query.lt('created_at', endISO)
           if (categoryFilter !== 'All') query = query.eq('category_id', categoryFilter)
           if (subcategoryFilter !== 'All') query = query.eq('subcategory_id', subcategoryFilter)
           if (paymentFilter !== 'All') query = query.eq('payment_method', paymentFilter)
 
-          return query.limit(200)
+          return query.limit(500)
         })(),
 
         supabase.from('expense_categories').select('id, name, description').eq('user_id', user.id).order('name'),
@@ -377,11 +438,12 @@ export default function ExpensesPage() {
         return (b.expense_time || '').localeCompare(a.expense_time || '')
       })
 
-      setExpenses(sorted)
+      // Show operating expenses only (supplier payments / payroll mirrors excluded).
+      setExpenses(sorted.filter(isOperatingExpense))
       setCategories(categoriesResult.data || [])
       setSubcategories(subcategoriesResult.data || [])
 
-      // Cache for offline use
+      // Cache the full window (with source_type) so the offline filter can exclude too.
       localStorage.setItem(EXPENSE_CACHE.all, JSON.stringify(sorted))
       localStorage.setItem(EXPENSE_CACHE.categories, JSON.stringify(categoriesResult.data || []))
       localStorage.setItem(EXPENSE_CACHE.subcategories, JSON.stringify(subcategoriesResult.data || []))
@@ -400,30 +462,32 @@ export default function ExpensesPage() {
     try {
       if (!user?.id) return
       const currentCashierId = authManager.getCashier()?.id
+      const { start, end } = bizHours()
+      const { startISO, endISO } = businessBounds(dateFrom, dateTo, start, end)
       let query = supabase
         .from('expenses')
         .select(`
           id, amount, description, payment_method, expense_date, expense_time,
-          tax_rate, tax_amount, total_amount, created_at, category_id, subcategory_id,
+          tax_rate, tax_amount, total_amount, created_at, source_type, category_id, subcategory_id,
           category:expense_categories (id, name),
           subcategory:expense_subcategories (id, name)
         `)
         .eq('user_id', user.id)
-        .order('expense_date', { ascending: false })
+        .order('created_at', { ascending: false })
 
       if (currentCashierId) query = query.eq('cashier_id', currentCashierId)
-      if (dateFrom) query = query.gte('expense_date', dateFrom)
-      if (dateTo) query = query.lte('expense_date', dateTo)
+      if (startISO) query = query.gte('created_at', startISO)
+      if (endISO) query = query.lt('created_at', endISO)
       if (categoryFilter !== 'All') query = query.eq('category_id', categoryFilter)
       if (subcategoryFilter !== 'All') query = query.eq('subcategory_id', subcategoryFilter)
       if (paymentFilter !== 'All') query = query.eq('payment_method', paymentFilter)
 
-      const { data } = await query.limit(200)
+      const { data } = await query.limit(500)
       const sorted = (data || []).sort((a, b) => {
         if (a.expense_date !== b.expense_date) return b.expense_date.localeCompare(a.expense_date)
         return (b.expense_time || '').localeCompare(a.expense_time || '')
       })
-      setExpenses(sorted)
+      setExpenses(sorted.filter(isOperatingExpense))
     } catch (error) {
       console.error('Error fetching expenses:', error)
     }
@@ -1053,6 +1117,41 @@ export default function ExpensesPage() {
     ? subcategories
     : subcategories.filter(s => s.category_id === categoryFilter)
 
+  // Summary for the current filter window (business-day + operating expenses only,
+  // so these cards always agree with the admin Expenses page & shift analytics).
+  const periodLabel = {
+    today: 'Today', yesterday: 'Yesterday', this_week: 'This Week',
+    this_month: 'This Month', last_month: 'Last Month', custom: 'Selected Range',
+  }[datePreset] || 'Period'
+
+  const expenseStats = (() => {
+    const list = filteredExpenses
+    const amt = (e) => parseFloat(e.total_amount || e.amount || 0) || 0
+    const total = list.reduce((s, e) => s + amt(e), 0)
+    const count = list.length
+    const byCat = {}
+    list.forEach(e => {
+      const name = e.category?.name || 'Uncategorized'
+      byCat[name] = (byCat[name] || 0) + amt(e)
+    })
+    const cats = Object.keys(byCat)
+    const topCategory = cats.sort((a, b) => byCat[b] - byCat[a])[0] || null
+    const cash = list
+      .filter(e => (e.payment_method || '').toLowerCase() === 'cash')
+      .reduce((s, e) => s + amt(e), 0)
+    return {
+      total, count, avg: count ? total / count : 0,
+      categoryCount: cats.length,
+      topCategory, topCategoryAmount: topCategory ? byCat[topCategory] : 0,
+      cash,
+    }
+  })()
+
+  const pkr = (n) => 'PKR ' + Math.round(n || 0).toLocaleString('en-PK')
+
+  // Shared style for the icon-wrapped filter selects.
+  const filterSelectCls = `w-full appearance-none pl-8 pr-7 py-2 text-xs rounded-lg border ${themeClasses.input} ${themeClasses.border} cursor-pointer focus:outline-none focus:ring-1 focus:ring-indigo-400 transition-colors`
+
   // ─── PIN gate ──────────────────────────────────────────────────────────────
   if (!isAuthenticated) {
     return (
@@ -1175,75 +1274,74 @@ export default function ExpensesPage() {
             </div>
           )}
 
-          {/* Filter row */}
-          <div className={`p-2 space-y-1.5 ${isDark ? 'bg-gray-700/80' : 'bg-gray-50/80'} ${themeClasses.border} border-b`}>
-            {/* Date preset */}
-            <select
-              value={datePreset}
-              onChange={(e) => handleDatePresetChange(e.target.value)}
-              className={`w-full text-xs ${themeClasses.input} border ${themeClasses.border} rounded px-2 py-1`}
-            >
-              <option value="today">Today</option>
-              <option value="yesterday">Yesterday</option>
-              <option value="this_week">This Week</option>
-              <option value="this_month">This Month</option>
-              <option value="last_month">Last Month</option>
-              <option value="custom">Custom Range</option>
-            </select>
+          {/* ── Filters ── */}
+          <div className={`p-2.5 space-y-2 ${isDark ? 'bg-gray-800/50' : 'bg-gray-50'} ${themeClasses.border} border-b`}>
+            {/* Category — searchable, first row */}
+            <div className="relative">
+              <Tag className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-blue-500 pointer-events-none z-20" />
+              <SearchableDropdown
+                value={categoryFilter}
+                options={[{ id: 'All', label: 'All Categories' }, ...categories.map(c => ({ id: c.id, label: c.name }))]}
+                placeholder="All Categories"
+                searchPlaceholder="Search categories..."
+                onChange={(id) => { setCategoryFilter(id); setSubcategoryFilter('All') }}
+                isDark={isDark}
+                panelWidth="w-full"
+                triggerCls={`pl-8 pr-2.5 py-2 text-xs rounded-lg border ${themeClasses.input} ${themeClasses.border}`}
+              />
+            </div>
+
+            {/* Date preset + Subcategory */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="relative">
+                <Clock className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-purple-500 pointer-events-none z-10" />
+                <select value={datePreset} onChange={(e) => handleDatePresetChange(e.target.value)} className={filterSelectCls}>
+                  <option value="today">Today</option>
+                  <option value="yesterday">Yesterday</option>
+                  <option value="this_week">This Week</option>
+                  <option value="this_month">This Month</option>
+                  <option value="last_month">Last Month</option>
+                  <option value="custom">Custom Range</option>
+                </select>
+                <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+              </div>
+              <div className="relative">
+                <FileText className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-teal-500 pointer-events-none z-10" />
+                <select value={subcategoryFilter} onChange={(e) => setSubcategoryFilter(e.target.value)} className={filterSelectCls}>
+                  <option value="All">All Subcats</option>
+                  {filteredSubcatOptions.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+                <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+              </div>
+            </div>
 
             {/* Custom date inputs */}
             {datePreset === 'custom' && (
-              <div className="grid grid-cols-2 gap-1.5">
-                <input
-                  type="date"
-                  value={dateFrom}
-                  onChange={(e) => setDateFrom(e.target.value)}
-                  className={`text-xs ${themeClasses.input} border ${themeClasses.border} rounded px-2 py-1`}
-                />
-                <input
-                  type="date"
-                  value={dateTo}
-                  onChange={(e) => setDateTo(e.target.value)}
-                  className={`text-xs ${themeClasses.input} border ${themeClasses.border} rounded px-2 py-1`}
-                />
+              <div className="grid grid-cols-2 gap-2">
+                <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
+                  className={`text-xs ${themeClasses.input} border ${themeClasses.border} rounded-lg px-2.5 py-2`} />
+                <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
+                  className={`text-xs ${themeClasses.input} border ${themeClasses.border} rounded-lg px-2.5 py-2`} />
               </div>
             )}
 
-            {/* Category filter */}
-            <select
-              value={categoryFilter}
-              onChange={(e) => { setCategoryFilter(e.target.value); setSubcategoryFilter('All') }}
-              className={`w-full text-xs ${themeClasses.input} border ${themeClasses.border} rounded px-2 py-1`}
-            >
-              <option value="All">All Categories</option>
-              {categories.map(cat => <option key={cat.id} value={cat.id}>{cat.name}</option>)}
-            </select>
+            {/* Payment method */}
+            <div className="relative">
+              <CreditCard className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-emerald-500 pointer-events-none z-10" />
+              <select value={paymentFilter} onChange={(e) => setPaymentFilter(e.target.value)} className={filterSelectCls}>
+                <option value="All">All Payment Methods</option>
+                {paymentAccounts.map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
+              </select>
+              <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+            </div>
 
-            {/* Subcategory filter */}
-            <select
-              value={subcategoryFilter}
-              onChange={(e) => setSubcategoryFilter(e.target.value)}
-              className={`w-full text-xs ${themeClasses.input} border ${themeClasses.border} rounded px-2 py-1`}
-            >
-              <option value="All">All Subcategories</option>
-              {filteredSubcatOptions.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-
-            {/* Payment filter */}
-            <select
-              value={paymentFilter}
-              onChange={(e) => setPaymentFilter(e.target.value)}
-              className={`w-full text-xs ${themeClasses.input} border ${themeClasses.border} rounded px-2 py-1`}
-            >
-              <option value="All">All Payment Methods</option>
-              {paymentAccounts.map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
-            </select>
-
-            {/* Summary row */}
-            <div className="flex items-center justify-between pt-0.5">
-              <span className={`text-xs ${themeClasses.textSecondary}`}>{filteredExpenses.length} expense{filteredExpenses.length !== 1 ? 's' : ''}</span>
-              <span className={`text-xs font-bold ${isDark ? 'text-green-400' : 'text-green-600'}`}>
-                PKR {getTotalExpenses().toFixed(2)}
+            {/* Summary strip */}
+            <div className={`flex items-center justify-between px-3 py-2 rounded-lg border ${isDark ? 'bg-gray-900/40 border-gray-700' : 'bg-white border-gray-200'}`}>
+              <span className={`text-xs ${themeClasses.textSecondary} flex items-center gap-1.5`}>
+                <Receipt className="w-3.5 h-3.5" /> {filteredExpenses.length} expense{filteredExpenses.length !== 1 ? 's' : ''}
+              </span>
+              <span className={`text-sm font-bold ${isDark ? 'text-green-400' : 'text-green-600'} tabular-nums`}>
+                {pkr(getTotalExpenses())}
               </span>
             </div>
           </div>
@@ -1310,7 +1408,7 @@ export default function ExpensesPage() {
 
                       {/* Row 2: time + actions */}
                       <div className="flex items-center justify-between">
-                        <span className={`text-xs ${themeClasses.textSecondary}`}>{expense.expense_time || ''}</span>
+                        <span className={`text-xs ${themeClasses.textSecondary}`}>{fmtTime12(expense.expense_time)}</span>
                         <div className="flex gap-1">
                           <button
                             onClick={(e) => { e.stopPropagation(); openEditExpense(expense) }}
@@ -1335,137 +1433,175 @@ export default function ExpensesPage() {
         </div>
 
         {/* ── Right Panel ─────────────────────────────────────────────────── */}
-        <div className={`flex-1 flex flex-col ${themeClasses.card} backdrop-blur-xl`}>
+        <div className={`flex-1 flex flex-col ${themeClasses.card} backdrop-blur-xl overflow-hidden`}>
+          {/* ── Pinned business-day summary cards (always visible above the detail) ── */}
+          <div className="p-5 pb-0 flex-shrink-0">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className={`text-sm font-bold ${themeClasses.textPrimary}`}>Expense Summary</h3>
+              <span className={`text-xs px-2 py-0.5 rounded-full ${isDark ? 'bg-gray-700 text-gray-300' : 'bg-gray-100 text-gray-600'} flex items-center gap-1`}>
+                <Clock className="w-3 h-3" /> {periodLabel}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              {/* Total Expenses */}
+              <div className={`${themeClasses.card} ${themeClasses.border} border rounded-2xl p-4`}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className={`text-[10px] font-semibold uppercase tracking-wide ${themeClasses.textSecondary}`}>Total Expenses</span>
+                  <div className="w-8 h-8 rounded-lg bg-green-500/15 flex items-center justify-center flex-shrink-0"><DollarSign className="w-4 h-4 text-green-500" /></div>
+                </div>
+                <p className={`text-2xl font-bold text-green-600 dark:text-green-400 tabular-nums`}>{pkr(expenseStats.total)}</p>
+                <p className={`text-[11px] ${themeClasses.textSecondary} mt-0.5`}>{periodLabel} · operating</p>
+              </div>
+              {/* Transactions */}
+              <div className={`${themeClasses.card} ${themeClasses.border} border rounded-2xl p-4`}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className={`text-[10px] font-semibold uppercase tracking-wide ${themeClasses.textSecondary}`}>Transactions</span>
+                  <div className="w-8 h-8 rounded-lg bg-blue-500/15 flex items-center justify-center flex-shrink-0"><Receipt className="w-4 h-4 text-blue-500" /></div>
+                </div>
+                <p className={`text-2xl font-bold ${themeClasses.textPrimary} tabular-nums`}>{expenseStats.count}</p>
+                <p className={`text-[11px] ${themeClasses.textSecondary} mt-0.5`}>expense{expenseStats.count !== 1 ? 's' : ''}</p>
+              </div>
+              {/* Average */}
+              <div className={`${themeClasses.card} ${themeClasses.border} border rounded-2xl p-4`}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className={`text-[10px] font-semibold uppercase tracking-wide ${themeClasses.textSecondary}`}>Avg Expense</span>
+                  <div className="w-8 h-8 rounded-lg bg-indigo-500/15 flex items-center justify-center flex-shrink-0"><Wallet className="w-4 h-4 text-indigo-500" /></div>
+                </div>
+                <p className={`text-2xl font-bold ${themeClasses.textPrimary} tabular-nums`}>{pkr(expenseStats.avg)}</p>
+                <p className={`text-[11px] ${themeClasses.textSecondary} mt-0.5`}>per transaction</p>
+              </div>
+              {/* Top Category */}
+              <div className={`${themeClasses.card} ${themeClasses.border} border rounded-2xl p-4`}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className={`text-[10px] font-semibold uppercase tracking-wide ${themeClasses.textSecondary}`}>Top Category</span>
+                  <div className="w-8 h-8 rounded-lg bg-purple-500/15 flex items-center justify-center flex-shrink-0"><Tag className="w-4 h-4 text-purple-500" /></div>
+                </div>
+                <p className={`text-lg font-bold ${themeClasses.textPrimary} truncate`} title={expenseStats.topCategory || '—'}>{expenseStats.topCategory || '—'}</p>
+                <p className={`text-[11px] ${themeClasses.textSecondary} mt-0.5`}>
+                  {expenseStats.topCategory ? `${pkr(expenseStats.topCategoryAmount)} · ${expenseStats.categoryCount} categor${expenseStats.categoryCount !== 1 ? 'ies' : 'y'}` : 'No expenses'}
+                </p>
+              </div>
+            </div>
+          </div>
+
           {selectedExpense ? (
-            <>
-              {/* Header */}
-              <div className={`p-6 ${themeClasses.border} border-b ${isDark ? 'bg-gray-700/80' : 'bg-gray-50/80'}`}>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center">
-                    <div className={`w-12 h-12 rounded-xl bg-gradient-to-r ${getPaymentMethodColor(selectedExpense.payment_method)} flex items-center justify-center mr-4`}>
-                      {React.createElement(getPaymentMethodIcon(selectedExpense.payment_method), { className: 'w-6 h-6 text-white' })}
+            <div className="flex-1 overflow-y-auto p-5">
+              <div className="space-y-4 max-w-4xl">
+
+                {/* ── Hero ── */}
+                <div className={`relative overflow-hidden rounded-2xl border ${themeClasses.border} ${isDark ? 'bg-gray-800/60' : 'bg-white'} p-5`}>
+                  <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${getPaymentMethodColor(selectedExpense.payment_method)}`} />
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${getPaymentMethodColor(selectedExpense.payment_method)} flex items-center justify-center flex-shrink-0 shadow-sm`}>
+                        {React.createElement(getPaymentMethodIcon(selectedExpense.payment_method), { className: 'w-6 h-6 text-white' })}
+                      </div>
+                      <div className="min-w-0">
+                        <h2 className={`text-lg font-bold ${themeClasses.textPrimary} truncate`}>{selectedExpense.category?.name || 'Uncategorized'}</h2>
+                        <p className={`text-xs ${themeClasses.textSecondary} flex items-center gap-1.5 mt-0.5`}>
+                          {selectedExpense.subcategory?.name && <><span className="truncate">{selectedExpense.subcategory.name}</span><span className="opacity-40">·</span></>}
+                          <Clock className="w-3 h-3 flex-shrink-0" />
+                          <span className="truncate">{new Date(selectedExpense.expense_date).toLocaleDateString()} · {fmtTime12(selectedExpense.expense_time)}</span>
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <h2 className={`text-xl font-bold ${themeClasses.textPrimary}`}>
-                        {selectedExpense.category?.name || 'Uncategorized'}
-                      </h2>
-                      <p className={themeClasses.textSecondary}>
-                        {selectedExpense.subcategory?.name && `${selectedExpense.subcategory.name} · `}
-                        {new Date(selectedExpense.expense_date).toLocaleDateString()}
-                      </p>
+                    <div className="text-right flex-shrink-0">
+                      <p className={`text-2xl font-bold ${themeClasses.textPrimary} tabular-nums`}>PKR {parseFloat(selectedExpense.total_amount || selectedExpense.amount).toFixed(2)}</p>
+                      <span className={`inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${isDark ? 'bg-gray-700 text-gray-200' : 'bg-gray-100 text-gray-700'}`}>
+                        {React.createElement(getPaymentMethodIcon(selectedExpense.payment_method), { className: 'w-3 h-3' })}
+                        {selectedExpense.payment_method}
+                      </span>
                     </div>
                   </div>
-                  <div className="text-right">
-                    <p className={`text-2xl font-bold ${themeClasses.textPrimary}`}>
-                      PKR {parseFloat(selectedExpense.total_amount || selectedExpense.amount).toFixed(2)}
-                    </p>
-                    <p className={`text-sm ${themeClasses.textSecondary}`}>{selectedExpense.payment_method}</p>
+                  <div className="flex gap-2 mt-4">
+                    <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }} onClick={() => openEditExpense(selectedExpense)}
+                      className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-blue-500 hover:bg-blue-600 text-white text-sm font-semibold transition-colors">
+                      <Edit3 className="w-4 h-4" /> Edit
+                    </motion.button>
+                    <motion.button whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.98 }} onClick={() => handleDeleteExpense(selectedExpense.id)}
+                      className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold transition-colors ${isDark ? 'bg-red-900/30 text-red-400 hover:bg-red-900/50' : 'bg-red-50 text-red-600 hover:bg-red-100'}`}>
+                      <Trash2 className="w-4 h-4" /> Delete
+                    </motion.button>
                   </div>
                 </div>
-              </div>
 
-              {/* Details */}
-              <div className="flex-1 overflow-y-auto p-6">
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {/* Payment Info */}
-                  <div className={`${themeClasses.card} rounded-2xl p-6 ${themeClasses.border} border`}>
-                    <h3 className={`text-lg font-bold ${themeClasses.textPrimary} mb-4 flex items-center`}>
-                      <DollarSign className="w-5 h-5 mr-2 text-green-500" />
-                      Payment Information
-                    </h3>
-                    <div className="space-y-3">
-                      <div className="flex justify-between">
-                        <span className={themeClasses.textSecondary}>Base Amount:</span>
-                        <span className={`font-semibold ${themeClasses.textPrimary}`}>PKR {parseFloat(selectedExpense.amount).toFixed(2)}</span>
-                      </div>
-                      {selectedExpense.tax_rate > 0 && (
-                        <>
-                          <div className="flex justify-between">
-                            <span className={themeClasses.textSecondary}>Tax ({selectedExpense.tax_rate}%):</span>
-                            <span className={`font-semibold ${themeClasses.textPrimary}`}>PKR {parseFloat(selectedExpense.tax_amount || 0).toFixed(2)}</span>
-                          </div>
-                          <div className={`flex justify-between ${themeClasses.border} border-t pt-2`}>
-                            <span className={`${themeClasses.textPrimary} font-semibold`}>Total Amount:</span>
-                            <span className={`font-bold text-lg ${themeClasses.textPrimary}`}>PKR {parseFloat(selectedExpense.total_amount || selectedExpense.amount).toFixed(2)}</span>
-                          </div>
-                        </>
-                      )}
-                      <div className="flex justify-between">
-                        <span className={themeClasses.textSecondary}>Payment Method:</span>
-                        <span className={`font-semibold ${themeClasses.textPrimary}`}>{selectedExpense.payment_method}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className={themeClasses.textSecondary}>Date & Time:</span>
-                        <span className={`font-semibold ${themeClasses.textPrimary}`}>
-                          {new Date(selectedExpense.expense_date).toLocaleDateString()} at {selectedExpense.expense_time}
-                        </span>
-                      </div>
-                    </div>
+                {/* ── Amount breakdown tiles ── */}
+                <div className={`grid ${selectedExpense.tax_rate > 0 ? 'grid-cols-3' : 'grid-cols-2'} gap-3`}>
+                  <div className={`rounded-2xl border ${themeClasses.border} ${isDark ? 'bg-gray-800/60' : 'bg-white'} p-4`}>
+                    <p className={`text-[10px] font-semibold uppercase tracking-wide ${themeClasses.textSecondary} mb-1`}>Base Amount</p>
+                    <p className={`text-lg font-bold ${themeClasses.textPrimary} tabular-nums`}>PKR {parseFloat(selectedExpense.amount).toFixed(2)}</p>
                   </div>
-
-                  {/* Category Info */}
-                  <div className={`${themeClasses.card} rounded-2xl p-6 ${themeClasses.border} border`}>
-                    <h3 className={`text-lg font-bold ${themeClasses.textPrimary} mb-4 flex items-center`}>
-                      <Tag className="w-5 h-5 mr-2 text-purple-500" />
-                      Category Details
-                    </h3>
-                    <div className="space-y-3">
-                      <div>
-                        <span className={`${themeClasses.textSecondary} block`}>Category:</span>
-                        <span className={`font-semibold text-lg ${themeClasses.textPrimary}`}>{selectedExpense.category?.name || 'Uncategorized'}</span>
-                      </div>
-                      {selectedExpense.subcategory?.name && (
-                        <div>
-                          <span className={`${themeClasses.textSecondary} block`}>Subcategory:</span>
-                          <span className={`font-semibold ${themeClasses.textPrimary}`}>{selectedExpense.subcategory.name}</span>
-                        </div>
-                      )}
-                      {selectedExpense.description && (
-                        <div>
-                          <span className={`${themeClasses.textSecondary} block`}>Description:</span>
-                          <p className={`font-semibold ${themeClasses.textPrimary}`}>{selectedExpense.description}</p>
-                        </div>
-                      )}
+                  {selectedExpense.tax_rate > 0 && (
+                    <div className={`rounded-2xl border ${themeClasses.border} ${isDark ? 'bg-gray-800/60' : 'bg-white'} p-4`}>
+                      <p className={`text-[10px] font-semibold uppercase tracking-wide ${themeClasses.textSecondary} mb-1`}>Tax ({selectedExpense.tax_rate}%)</p>
+                      <p className={`text-lg font-bold text-amber-500 tabular-nums`}>PKR {parseFloat(selectedExpense.tax_amount || 0).toFixed(2)}</p>
                     </div>
-                  </div>
-
-                  {/* Actions */}
-                  <div className="lg:col-span-2">
-                    <div className={`${themeClasses.card} rounded-2xl p-6 ${themeClasses.border} border`}>
-                      <h3 className={`text-lg font-bold ${themeClasses.textPrimary} mb-4`}>Actions</h3>
-                      <div className="flex space-x-3">
-                        <motion.button
-                          whileHover={{ scale: 1.02 }}
-                          whileTap={{ scale: 0.98 }}
-                          onClick={() => openEditExpense(selectedExpense)}
-                          className="flex-1 flex items-center justify-center py-3 px-4 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white rounded-xl transition-all font-semibold"
-                        >
-                          <Edit3 className="w-4 h-4 mr-2" />
-                          Edit Expense
-                        </motion.button>
-                        <motion.button
-                          whileHover={{ scale: 1.02 }}
-                          whileTap={{ scale: 0.98 }}
-                          onClick={() => handleDeleteExpense(selectedExpense.id)}
-                          className="flex-1 flex items-center justify-center py-3 px-4 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white rounded-xl transition-all font-semibold"
-                        >
-                          <Trash2 className="w-4 h-4 mr-2" />
-                          Delete Expense
-                        </motion.button>
-                      </div>
-                    </div>
+                  )}
+                  <div className={`rounded-2xl border ${isDark ? 'border-green-800/50 bg-green-900/15' : 'border-green-200 bg-green-50'} p-4`}>
+                    <p className={`text-[10px] font-semibold uppercase tracking-wide ${isDark ? 'text-green-400/80' : 'text-green-600/80'} mb-1`}>Total</p>
+                    <p className={`text-lg font-bold ${isDark ? 'text-green-400' : 'text-green-600'} tabular-nums`}>PKR {parseFloat(selectedExpense.total_amount || selectedExpense.amount).toFixed(2)}</p>
                   </div>
                 </div>
+
+                {/* ── Details ── */}
+                <div className={`rounded-2xl border ${themeClasses.border} ${isDark ? 'bg-gray-800/60' : 'bg-white'} p-5`}>
+                  <h3 className={`text-sm font-bold ${themeClasses.textPrimary} mb-3 flex items-center gap-2`}>
+                    <FileText className="w-4 h-4 text-purple-500" /> Details
+                  </h3>
+                  <div className={`divide-y ${isDark ? 'divide-gray-700/60' : 'divide-gray-100'}`}>
+                    <div className="flex items-center justify-between py-2 gap-4">
+                      <span className={`text-xs ${themeClasses.textSecondary} flex-shrink-0`}>Category</span>
+                      <span className={`text-sm font-semibold ${themeClasses.textPrimary} text-right`}>{selectedExpense.category?.name || 'Uncategorized'}</span>
+                    </div>
+                    {selectedExpense.subcategory?.name && (
+                      <div className="flex items-center justify-between py-2 gap-4">
+                        <span className={`text-xs ${themeClasses.textSecondary} flex-shrink-0`}>Subcategory</span>
+                        <span className={`text-sm font-semibold ${themeClasses.textPrimary} text-right`}>{selectedExpense.subcategory.name}</span>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between py-2 gap-4">
+                      <span className={`text-xs ${themeClasses.textSecondary} flex-shrink-0`}>Payment Method</span>
+                      <span className={`text-sm font-semibold ${themeClasses.textPrimary} text-right`}>{selectedExpense.payment_method}</span>
+                    </div>
+                    <div className="flex items-center justify-between py-2 gap-4">
+                      <span className={`text-xs ${themeClasses.textSecondary} flex-shrink-0`}>Date &amp; Time</span>
+                      <span className={`text-sm font-semibold ${themeClasses.textPrimary} text-right`}>{new Date(selectedExpense.expense_date).toLocaleDateString()} at {fmtTime12(selectedExpense.expense_time)}</span>
+                    </div>
+                    {selectedExpense.description && (
+                      <div className="py-2">
+                        <span className={`text-xs ${themeClasses.textSecondary} block mb-1`}>Description</span>
+                        <p className={`text-sm ${themeClasses.textPrimary}`}>{selectedExpense.description}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
               </div>
-            </>
+            </div>
           ) : (
-            <div className="flex-1 flex items-center justify-center">
-              <div className="text-center">
-                <div className={`w-24 h-24 ${isDark ? 'bg-gradient-to-br from-purple-900/50 to-blue-900/50' : 'bg-gradient-to-br from-purple-100 to-blue-100'} rounded-full flex items-center justify-center mx-auto mb-6`}>
-                  <Receipt className="w-12 h-12 text-purple-500" />
+            <div className="flex-1 overflow-y-auto p-5">
+
+              {/* Cash payout strip */}
+              {expenseStats.count > 0 && (
+                <div className={`${themeClasses.card} ${themeClasses.border} border rounded-2xl p-4 mb-6 flex items-center justify-between`}>
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-xl bg-emerald-500/15 flex items-center justify-center"><Wallet className="w-4.5 h-4.5 text-emerald-500" style={{ width: 18, height: 18 }} /></div>
+                    <div>
+                      <p className={`text-sm font-semibold ${themeClasses.textPrimary}`}>Cash paid out</p>
+                      <p className={`text-[11px] ${themeClasses.textSecondary}`}>{periodLabel} · cash-method expenses</p>
+                    </div>
+                  </div>
+                  <p className={`text-xl font-bold text-emerald-600 dark:text-emerald-400 tabular-nums`}>{pkr(expenseStats.cash)}</p>
                 </div>
-                <h3 className={`text-2xl font-bold ${themeClasses.textSecondary} mb-3`}>Select an Expense</h3>
-                <p className={`${themeClasses.textSecondary} text-lg`}>Choose an expense from the list to view details</p>
+              )}
+
+              {/* ── Empty prompt ── */}
+              <div className="flex flex-col items-center justify-center text-center py-12">
+                <div className={`w-20 h-20 ${isDark ? 'bg-gradient-to-br from-purple-900/50 to-blue-900/50' : 'bg-gradient-to-br from-purple-100 to-blue-100'} rounded-full flex items-center justify-center mb-5`}>
+                  <Receipt className="w-10 h-10 text-purple-500" />
+                </div>
+                <h3 className={`text-xl font-bold ${themeClasses.textSecondary} mb-2`}>Select an Expense</h3>
+                <p className={`${themeClasses.textSecondary}`}>Choose an expense from the list to view details</p>
               </div>
             </div>
           )}

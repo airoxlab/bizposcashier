@@ -12,6 +12,8 @@ import {
   BarChart3,
   Settings,
   Sun,
+  Sunrise,
+  Sunset,
   Moon,
   User,
   Store,
@@ -102,6 +104,32 @@ function fmtDuration(ms) {
   if (hours >= 1) return `${hours}h ${mins}m`
   if (mins >= 1)  return `${mins}m`
   return '<1m'
+}
+
+// Format a stored business-hours time ("HH:MM" or "HH:MM:SS", 24h) as 12h "h:MM AM/PM".
+function fmtBusinessTime(t) {
+  if (!t) return ''
+  const [hStr, mStr] = String(t).split(':')
+  let h = parseInt(hStr, 10)
+  if (Number.isNaN(h)) return ''
+  const m    = (mStr ?? '00').padStart(2, '0')
+  const ampm = h >= 12 ? 'PM' : 'AM'
+  h = h % 12
+  if (h === 0) h = 12
+  return `${h}:${m} ${ampm}`
+}
+
+// Friendly, time-of-day greeting for the dashboard header. Bucketed by the local
+// hour so the message stays stable within its window (no per-second flicker as the
+// clock ticks). Returns a primary greeting, a lucide icon, a short wish, and a
+// time-appropriate color (readable in both light and dark themes).
+function getTimeGreeting(date = new Date()) {
+  const h = date.getHours()
+  if (h < 5)  return { greeting: 'Working late',   Icon: Moon,    wish: 'Take it easy tonight',       color: 'text-indigo-400' }  // 12am–5am
+  if (h < 12) return { greeting: 'Good morning',   Icon: Sunrise, wish: 'Have a great shift',          color: 'text-amber-500'  }  // 5am–12pm
+  if (h < 17) return { greeting: 'Good afternoon', Icon: Sun,     wish: 'Hope your day is going well', color: 'text-sky-500'    }  // 12pm–5pm
+  if (h < 21) return { greeting: 'Good evening',   Icon: Sunset,  wish: 'Finish the day strong',       color: 'text-orange-500' }  // 5pm–9pm
+  return { greeting: 'Good night', Icon: Moon, wish: 'Winding down for the day', color: 'text-indigo-400' }                        // 9pm–12am
 }
 
 // Returns the required plan display name if current plan cannot access route, else null.
@@ -657,6 +685,16 @@ export default function Dashboard() {
 
   const roleBadge = getRoleBadge()
 
+  // Live, time-of-day greeting — derived from currentTime so it updates as the day rolls over.
+  const greet = getTimeGreeting(currentTime)
+
+  // Business hours — read straight off the owner's users row (set in bizpos-admin → Settings as
+  // business_start_time / business_end_time). For a cashier login authManager joins the owner row
+  // into currentUser, so this resolves correctly for BOTH admin and cashier with no extra fetch
+  // (and works offline). Defaults mirror the admin Settings page (04:00–03:00).
+  const bizStart = user?.business_start_time || '04:00:00'
+  const bizEnd   = user?.business_end_time   || '03:00:00'
+
   if (!user) {
     const classes = themeManager.getClasses()
     return <div className={`h-screen w-screen ${classes.background}`} />
@@ -675,54 +713,66 @@ export default function Dashboard() {
         <div className="w-full px-4 py-4">
           <div className="grid grid-cols-3 items-center">
             {/* Left: User Info with Role Badge */}
-            <div className="flex items-center space-x-4">
-              <div className="relative">
+            <div className="flex items-center space-x-4 min-w-0">
+              <div className="relative flex-shrink-0">
                 <div className="w-12 h-12 bg-gradient-to-r from-purple-500 to-blue-500 rounded-xl flex items-center justify-center shadow-lg">
                   <Store className="w-6 h-6 text-white" />
                 </div>
-                {/* Role Indicator Badge */}
-                <div className={`absolute -bottom-1 -right-1 w-5 h-5 ${roleBadge.bg} rounded-full flex items-center justify-center border-2 ${themeClasses.border}`}>
-                  <roleBadge.icon className={`w-3 h-3 ${roleBadge.text}`} />
+                {/* WhatsApp Status Indicator — mini badge on the store icon (color = connection state) */}
+                <div
+                  title={waStatus === 'connected' ? 'WhatsApp Connected' : waStatus === 'connecting' || waStatus === 'qr_ready' ? 'WhatsApp Connecting...' : 'WhatsApp Disconnected'}
+                  className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center ${
+                    waStatus === 'connected'
+                      ? isDark ? 'bg-green-900/50 text-green-400' : 'bg-green-100 text-green-600'
+                      : waStatus === 'connecting' || waStatus === 'qr_ready'
+                      ? `${isDark ? 'bg-yellow-900/50 text-yellow-400' : 'bg-yellow-100 text-yellow-600'} animate-pulse`
+                      : isDark ? 'bg-red-900/50 text-red-400' : 'bg-red-100 text-red-600'
+                  }`}
+                >
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" className="flex-shrink-0">
+                    <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347zM12 0C5.373 0 0 5.373 0 12c0 2.135.561 4.14 1.541 5.874L0 24l6.336-1.521A11.94 11.94 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.8 9.8 0 01-5.015-1.374l-.36-.214-3.762.903.964-3.674-.234-.375A9.778 9.778 0 012.182 12C2.182 6.57 6.57 2.182 12 2.182S21.818 6.57 21.818 12 17.43 21.818 12 21.818z"/>
+                  </svg>
                 </div>
               </div>
-              <div>
-                <div className="flex items-center space-x-2">
-                  <h1 className={`text-2xl font-bold ${themeClasses.textPrimary}`}>
-                    Welcome, {displayName}
-                  </h1>
-                  <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${roleBadge.bg} ${roleBadge.text}`}>
-                    {userRole?.toUpperCase()}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 mt-0.5">
-                  <p className={`${themeClasses.textSecondary} font-medium`}>
+              <div className="min-w-0 flex-1">
+                {/* Row 1: dynamic, color-coded time-of-day greeting — Row 2: customer/store name (truncates with … when long) */}
+                <p className="flex items-center gap-1 text-xs sm:text-sm font-medium leading-none min-w-0">
+                  <greet.Icon className={`w-3.5 h-3.5 flex-shrink-0 ${greet.color}`} />
+                  <span className={`flex-shrink-0 ${greet.color}`}>{greet.greeting}</span>
+                  <span className={`hidden sm:inline truncate ${themeClasses.textSecondary}`}>· {greet.wish}</span>
+                </p>
+                <h1
+                  title={displayName}
+                  className={`text-lg sm:text-xl lg:text-2xl font-bold ${themeClasses.textPrimary} leading-tight truncate`}
+                >
+                  {displayName}
+                </h1>
+                {/* Store name — shown only when it differs from the name above (cashier login:
+                    person's name on top, store here). For admins the name IS the store, so we
+                    skip the duplicate line. */}
+                {user.store_name && user.store_name !== displayName && (
+                  <p className={`${themeClasses.textSecondary} font-medium truncate mt-0.5`}>
                     {user.store_name}
                   </p>
-                  {/* WhatsApp Status Badge */}
-                  <div
-                    title={waStatus === 'connected' ? 'WhatsApp Connected' : waStatus === 'connecting' || waStatus === 'qr_ready' ? 'WhatsApp Connecting...' : 'WhatsApp Disconnected'}
-                    style={{ cursor: 'not-allowed' }}
-                    className={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-xs font-medium select-none ${
-                      waStatus === 'connected'
-                        ? isDark ? 'bg-green-500/15 border-green-500/30 text-green-400' : 'bg-green-50 border-green-200 text-green-700'
-                        : waStatus === 'connecting' || waStatus === 'qr_ready'
-                        ? isDark ? 'bg-yellow-500/15 border-yellow-500/30 text-yellow-400' : 'bg-yellow-50 border-yellow-200 text-yellow-700'
-                        : isDark ? 'bg-red-500/15 border-red-500/30 text-red-400' : 'bg-red-50 border-red-200 text-red-600'
-                    }`}
-                  >
-                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                      waStatus === 'connected' ? 'bg-green-500' :
-                      waStatus === 'connecting' || waStatus === 'qr_ready' ? 'bg-yellow-400 animate-pulse' :
-                      'bg-red-500'
-                    }`} />
-                    <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" className="flex-shrink-0">
-                      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347zM12 0C5.373 0 0 5.373 0 12c0 2.135.561 4.14 1.541 5.874L0 24l6.336-1.521A11.94 11.94 0 0012 24c6.627 0 12-5.373 12-12S18.627 0 12 0zm0 21.818a9.8 9.8 0 01-5.015-1.374l-.36-.214-3.762.903.964-3.674-.234-.375A9.778 9.778 0 012.182 12C2.182 6.57 6.57 2.182 12 2.182S21.818 6.57 21.818 12 17.43 21.818 12 21.818z"/>
-                    </svg>
-                  </div>
-                </div>
+                )}
 
                   {/* Plan + Invoice status row */}
                   <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                    {/* Role Badge — start of row, distinct color (amber=admin, teal=cashier) */}
+                    {userRole && (
+                      <span
+                        title={`Signed in as ${userRole}`}
+                        className={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-xs font-semibold ${
+                          userRole === 'admin'
+                            ? isDark ? 'bg-amber-500/15 border-amber-500/30 text-amber-400' : 'bg-amber-50 border-amber-200 text-amber-700'
+                            : isDark ? 'bg-teal-500/15 border-teal-500/30 text-teal-400' : 'bg-teal-50 border-teal-200 text-teal-700'
+                        }`}
+                      >
+                        <roleBadge.icon className="w-3 h-3 flex-shrink-0" />
+                        {userRole.toUpperCase()}
+                      </span>
+                    )}
+
                     {/* Plan Badge */}
                     {(() => {
                       const colors   = planManager.getPlanColors()
@@ -752,6 +802,18 @@ export default function Dashboard() {
                         </button>
                       )
                     })()}
+
+                    {/* Business Hours Badge — from bizpos-admin → Settings (business_start_time /
+                        business_end_time on the owner's users row). Shows for admin AND cashier. */}
+                    <span
+                      title={`Business hours: ${fmtBusinessTime(bizStart)} – ${fmtBusinessTime(bizEnd)}`}
+                      className={`flex items-center gap-1 px-1.5 py-0.5 rounded-lg border text-xs font-semibold ${
+                        isDark ? 'bg-blue-500/15 border-blue-500/30 text-blue-400' : 'bg-blue-50 border-blue-200 text-blue-700'
+                      }`}
+                    >
+                      <Clock className="w-3 h-3 flex-shrink-0" />
+                      {fmtBusinessTime(bizStart)} – {fmtBusinessTime(bizEnd)}
+                    </span>
 
                     {/* Invoice Due Badge — updates every second via currentTime re-render */}
                     {planReady && (() => {

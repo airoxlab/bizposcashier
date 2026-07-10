@@ -67,9 +67,6 @@ export default function RulesPanel({ userId }) {
   const [lateAfter, setLateAfter] = useState('')
   const [halfDayAfter, setHalfDayAfter] = useState('')
   const [absentAfter, setAbsentAfter] = useState('')
-  const [minHoursFullDay, setMinHoursFullDay] = useState('')
-  const [minHoursHalfDay, setMinHoursHalfDay] = useState('')
-  const [earlyCheckoutBefore, setEarlyCheckoutBefore] = useState('')
 
   const [bizStart, setBizStart] = useState('')
   const [bizEnd, setBizEnd] = useState('')
@@ -91,9 +88,6 @@ export default function RulesPanel({ userId }) {
         setLateAfter(t5(pol.late_after_time))
         setHalfDayAfter(t5(pol.half_day_after_time))
         setAbsentAfter(t5(pol.absent_after_time))
-        setMinHoursFullDay(pol.min_hours_full_day != null ? String(pol.min_hours_full_day) : '')
-        setMinHoursHalfDay(pol.min_hours_half_day != null ? String(pol.min_hours_half_day) : '')
-        setEarlyCheckoutBefore(t5(pol.early_checkout_before_time))
       }
       if (u) {
         setBizStart(t5(u.business_start_time))
@@ -123,9 +117,10 @@ export default function RulesPanel({ userId }) {
         late_after_time: orNull(lateAfter),
         half_day_after_time: orNull(halfDayAfter),
         absent_after_time: orNull(absentAfter),
-        min_hours_full_day: numOrNull(minHoursFullDay),
-        min_hours_half_day: numOrNull(minHoursHalfDay),
-        early_checkout_before_time: orNull(earlyCheckoutBefore),
+        // Retired (arrival-only model — checkout applies no rules).
+        min_hours_full_day: null,
+        min_hours_half_day: null,
+        early_checkout_before_time: null,
         updated_at: new Date().toISOString(),
       }
       const { error } = await supabase
@@ -151,9 +146,6 @@ export default function RulesPanel({ userId }) {
   if (lateAfter) summary.push(`Check in at or after ${fmt12(lateAfter)} → marked Late`)
   if (halfDayAfter) summary.push(`Check in at or after ${fmt12(halfDayAfter)} → marked Half Day`)
   if (absentAfter) summary.push(`Check in at or after ${fmt12(absentAfter)} → marked Absent`)
-  if (minHoursFullDay) summary.push(`Worked under ${minHoursFullDay} h → downgraded to Half Day`)
-  if (minHoursHalfDay) summary.push(`Worked under ${minHoursHalfDay} h → marked Absent`)
-  if (earlyCheckoutBefore) summary.push(`Check out before ${fmt12(earlyCheckoutBefore)} → flagged Early Checkout`)
 
   return (
     <div>
@@ -226,29 +218,22 @@ export default function RulesPanel({ userId }) {
           </div>
         </div>
 
-        {/* Hours & checkout rules */}
-        <div className={`bg-white dark:bg-slate-800 rounded-lg shadow dark:shadow-slate-700/30 overflow-hidden transition-opacity ${dim}`}>
+        {/* Checkout — informational: no rules apply at checkout */}
+        <div className="bg-white dark:bg-slate-800 rounded-lg shadow dark:shadow-slate-700/30 overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-200 dark:border-slate-700">
             <h2 className="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-              <Timer className="w-4 h-4 text-blue-500" /> Hours & checkout rules
+              <Timer className="w-4 h-4 text-blue-500" /> Checkout
             </h2>
             <p className="text-xs text-gray-500 dark:text-slate-400 mt-0.5">
-              Applied once a person checks out (or is auto-closed at the end of the business day).
+              Status is decided at check-in only — checkout never changes it.
             </p>
           </div>
-          <div className="p-4 space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <NumField label="Min hours for a full day" value={minHoursFullDay} onChange={setMinHoursFullDay}
-                suffix="hours" help="Worked less than this → Half Day" />
-              <NumField label="Min hours for half day" value={minHoursHalfDay} onChange={setMinHoursHalfDay}
-                suffix="hours" help="Worked less than this → Absent" />
-            </div>
-            <TimeField label="Early checkout before" value={earlyCheckoutBefore} onChange={setEarlyCheckoutBefore}
-              help="Leaving before this time is flagged as an early checkout" />
+          <div className="p-4">
             <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg px-3 py-2 flex items-start gap-2">
               <Info className="w-4 h-4 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
               <p className="text-xs text-blue-700 dark:text-blue-300">
-                The "cannot check out within N minutes" rule lives in the <strong>Settings</strong> tab (Minimum gap before check-out).
+                A second scan checks the person out (record only). The "cannot check out within N minutes" gap lives in the
+                <strong> Settings</strong> tab. Anyone who doesn't check out is auto-closed at the end of the business day.
                 Rules set here are shared with the admin panel.
               </p>
             </div>

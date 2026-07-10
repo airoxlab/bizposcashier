@@ -2,7 +2,9 @@
 
 import { useState } from 'react'
 import { motion } from 'framer-motion'
-import { Coffee, Utensils, Cookie, Gift, ArrowLeft, Table2, ClipboardList, LayoutList, Layers, ChevronDown, ChevronRight } from 'lucide-react'
+import { Coffee, Utensils, Cookie, Gift, ArrowLeft, Table2, ClipboardList, LayoutList, Layers, ChevronDown, ChevronRight, SlidersHorizontal } from 'lucide-react'
+import { permissionManager } from '../../lib/permissionManager'
+import OrderSettingsDrawer from '../settings/OrderSettingsDrawer'
 
 export default function CategorySidebar({
   categories = [],
@@ -23,6 +25,8 @@ export default function CategorySidebar({
 }) {
   const [isGrouped, setIsGrouped] = useState(menus.length > 0)
   const [collapsedMenus, setCollapsedMenus] = useState({})
+  const [showOrderSettings, setShowOrderSettings] = useState(false)
+  const canAccessSettings = permissionManager.hasPermission('SETTINGS')
 
   const toggleMenuCollapse = (menuId) => {
     setCollapsedMenus(prev => ({ ...prev, [menuId]: !prev[menuId] }))
@@ -138,14 +142,33 @@ export default function CategorySidebar({
           <span className="font-medium text-sm">Back to Dashboard</span>
         </motion.button>
 
-        <div className="flex items-center justify-between mb-2">
-          <div>
-            <h2 className={`text-xl font-bold ${classes.textPrimary}`}>
+        <div className="flex items-center justify-between gap-1.5 mb-2">
+          <div className="min-w-0 flex-1">
+            <h2 className={`text-base font-bold truncate ${classes.textPrimary}`}>
               {isReopenedOrder ? 'Reopened Order' : 'New Order'}
             </h2>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 flex-shrink-0">
+            {/* Order Settings — opens the POS & Order Settings panel as a slide-in
+                drawer, so a cashier can tweak charges/printing/rules without losing
+                the order in progress. Purple + text label, stacked, to match
+                Orders/Table. */}
+            {canAccessSettings && (
+              <motion.button
+                whileHover={{ scale: 1.08 }}
+                whileTap={{ scale: 0.95 }}
+                onClick={() => setShowOrderSettings(true)}
+                className={`px-1.5 py-1 rounded-lg transition-all flex flex-col items-center gap-0 border ${
+                  isDark ? 'bg-purple-900/20 border-purple-800/40 hover:bg-purple-900/40' : 'bg-purple-50 border-purple-200 hover:bg-purple-100'
+                }`}
+                title="Order Settings"
+              >
+                <SlidersHorizontal className={`w-4 h-4 ${isDark ? 'text-purple-400' : 'text-purple-600'}`} />
+                <span className={`text-[9px] font-semibold leading-tight ${isDark ? 'text-purple-300' : 'text-purple-700'}`}>Settings</span>
+              </motion.button>
+            )}
+
             {/* Orders Icon - For walkin, takeaway, and delivery orders.
                 Color-coded blue + text label so cashiers know what it does at a glance. */}
             {(orderType === 'walkin' || orderType === 'takeaway' || orderType === 'delivery') && onOrdersClick && (
@@ -153,15 +176,15 @@ export default function CategorySidebar({
                 whileHover={{ scale: 1.08 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={onOrdersClick}
-                className={`px-2.5 py-2 rounded-lg transition-all relative flex flex-col items-center gap-0.5 border ${
+                className={`px-1.5 py-1 rounded-lg transition-all relative flex flex-col items-center gap-0 border ${
                   showOrdersView
                     ? (isDark ? 'bg-blue-600/30 border-blue-500' : 'bg-blue-100 border-blue-400')
                     : (isDark ? 'bg-blue-900/20 border-blue-800/40 hover:bg-blue-900/40' : 'bg-blue-50 border-blue-200 hover:bg-blue-100')
                 }`}
                 title="View pending orders"
               >
-                <ClipboardList className={`w-5 h-5 ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
-                <span className={`text-xs font-semibold ${isDark ? 'text-blue-300' : 'text-blue-700'}`}>Orders</span>
+                <ClipboardList className={`w-4 h-4 ${isDark ? 'text-blue-400' : 'text-blue-600'}`} />
+                <span className={`text-[9px] font-semibold leading-tight ${isDark ? 'text-blue-300' : 'text-blue-700'}`}>Orders</span>
               </motion.button>
             )}
 
@@ -172,19 +195,19 @@ export default function CategorySidebar({
                 whileHover={{ scale: 1.08 }}
                 whileTap={{ scale: 0.95 }}
                 onClick={onTableClick}
-                className={`px-2.5 py-2 rounded-lg transition-all relative flex flex-col items-center gap-0.5 border ${
+                className={`px-1.5 py-1 rounded-lg transition-all relative flex flex-col items-center gap-0 border ${
                   selectedTable
                     ? (isDark ? 'bg-green-600/30 border-green-500' : 'bg-green-100 border-green-400')
                     : (isDark ? 'bg-green-900/20 border-green-800/40 hover:bg-green-900/40' : 'bg-green-50 border-green-200 hover:bg-green-100')
                 }`}
                 title={selectedTable ? `Table: ${selectedTable.table_name || selectedTable.table_number}` : 'Select Table'}
               >
-                <Table2 className={`w-5 h-5 ${isDark ? 'text-green-400' : 'text-green-600'}`} />
-                <span className={`text-xs font-semibold max-w-[80px] truncate ${isDark ? 'text-green-300' : 'text-green-700'}`}>
+                <Table2 className={`w-4 h-4 ${isDark ? 'text-green-400' : 'text-green-600'}`} />
+                <span className={`text-[9px] font-semibold leading-tight max-w-[44px] truncate ${isDark ? 'text-green-300' : 'text-green-700'}`}>
                   {selectedTable ? (selectedTable.table_name || `Table ${selectedTable.table_number}`) : 'Table'}
                 </span>
                 {selectedTable && (
-                  <div className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-green-500 rounded-full border-2 border-white dark:border-gray-800 shadow-sm"></div>
+                  <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-500 rounded-full border-2 border-white dark:border-gray-800 shadow-sm"></div>
                 )}
               </motion.button>
             )}
@@ -256,6 +279,15 @@ export default function CategorySidebar({
           </>
         )}
       </div>
+
+      {canAccessSettings && (
+        <OrderSettingsDrawer
+          isOpen={showOrderSettings}
+          onClose={() => setShowOrderSettings(false)}
+          isDark={isDark}
+          classes={classes}
+        />
+      )}
     </div>
   )
 }
