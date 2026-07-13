@@ -30,6 +30,7 @@ import { themeManager } from "../../lib/themeManager";
 import { authManager } from "../../lib/authManager";
 import { printerManager } from "../../lib/printerManager";
 import { cacheManager } from "../../lib/cacheManager";
+import dailySerialManager from "../../lib/utils/dailySerialManager";
 import { usePermissions } from "../../lib/permissionManager";
 import { webOrderNotificationManager } from "../../lib/webOrderNotification";
 import { mapKitchenItems, mapReceiptItems, buildKitchenTokenPayload, buildKitchenUserProfile, buildProductCategoryMap } from "../../lib/utils/printPayload";
@@ -901,8 +902,16 @@ function WebOrdersPage({ embedded = false, onBack, onOrdersChanged } = {}) {
       setIsProcessing(true);
       console.log("✅ [Web Orders] Approving order:", order.order_number);
 
-      // Update order in database
-      const { error } = await supabase
+      // Treat the approved web order exactly like a freshly-punched POS order and
+      // stamp it onto TODAY's business day. The website insert only sets order_date
+      // to the DB's CURRENT_DATE (UTC), which can disagree with the business day —
+      // so we set it explicitly here to keep the daily-serial scoping correct
+      // (assign_daily_serial groups its MAX by order_date).
+      const businessDate = dailySerialManager.getTodayDate();
+
+      // Update order in database. Ask for the affected row back so we can tell
+      // whether WE actually approved it (vs. another terminal winning the race).
+      const { data: approvedRows, error } = await supabase
         .from("orders")
         .update({
           order_source: "POS", // Change current source to POS
@@ -910,11 +919,46 @@ function WebOrdersPage({ embedded = false, onBack, onOrdersChanged } = {}) {
           approved_at: new Date().toISOString(),
           approved_by_cashier_id: cashier?.id || null,
           approval_notes: "Approved from Web Orders page",
+          order_date: businessDate,
         })
         .eq("id", order.id)
-        .eq("is_approved", false); // Only approve if not already approved (idempotency guard)
+        .eq("is_approved", false) // Only approve if not already approved (idempotency guard)
+        .select("id, daily_serial");
 
       if (error) throw error;
+
+      const approvedRow = approvedRows?.[0];
+
+      // Assign a gap-free daily serial (the "#012" kitchen token real POS orders
+      // get) — but ONLY if our update actually flipped this row and it doesn't
+      // already carry one. assign_daily_serial is NOT idempotent: a second call
+      // bumps the number, so this guard stops a serial from jumping on re-approve
+      // or a two-terminal race.
+      if (approvedRow && approvedRow.daily_serial == null) {
+        try {
+          const { data: serial, error: serialErr } = await supabase.rpc(
+            "assign_daily_serial",
+            {
+              p_user_id: user.id,
+              p_order_date: businessDate,
+              p_order_id: order.id,
+            }
+          );
+          if (serialErr) throw serialErr;
+          if (serial != null) {
+            // Keep this terminal's local counter/display in step with the DB value.
+            dailySerialManager.setSerial(order.order_number, serial);
+            console.log(`🔢 [Web Orders] Daily serial #${serial} assigned to ${order.order_number}`);
+          }
+        } catch (serialErr) {
+          // A missing serial must not block approval — the order is already
+          // approved; just surface it in the console.
+          console.error(
+            "⚠️ [Web Orders] Failed to assign daily serial:",
+            serialErr?.message || serialErr
+          );
+        }
+      }
 
       // Close details modal and show print options modal
       setShowDetailsModal(false);

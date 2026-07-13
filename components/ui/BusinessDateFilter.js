@@ -18,7 +18,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { Clock, ChevronDown } from 'lucide-react'
-import { getBusinessDateRangeForPreset, DATE_PRESETS } from '../../lib/utils/businessDayUtils'
+import { getContiguousBusinessDateRangeForPreset, DATE_PRESETS } from '../../lib/utils/businessDayUtils'
 
 export default function BusinessDateFilter({
   startTime = '10:00',
@@ -39,7 +39,7 @@ export default function BusinessDateFilter({
 
   // Seed from/to once so the custom inputs are pre-filled with the active range.
   useEffect(() => {
-    const r = getBusinessDateRangeForPreset(defaultPreset, startTime, endTime)
+    const r = getContiguousBusinessDateRangeForPreset(defaultPreset, startTime, endTime)
     setFrom(r.from)
     setTo(r.to)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -47,7 +47,7 @@ export default function BusinessDateFilter({
 
   // Emit the resolved range whenever the selection or business hours change.
   useEffect(() => {
-    const range = getBusinessDateRangeForPreset(preset, startTime, endTime, from, to)
+    const range = getContiguousBusinessDateRangeForPreset(preset, startTime, endTime, from, to)
     onChangeRef.current?.({ preset, ...range })
   }, [preset, from, to, startTime, endTime])
 
@@ -55,7 +55,7 @@ export default function BusinessDateFilter({
     setPreset(p)
     // Populate the range for the chosen preset (for custom, seed with today so the
     // date inputs aren't empty).
-    const r = getBusinessDateRangeForPreset(p === 'custom' ? 'today' : p, startTime, endTime, from, to)
+    const r = getContiguousBusinessDateRangeForPreset(p === 'custom' ? 'today' : p, startTime, endTime, from, to)
     setFrom(r.from)
     setTo(r.to)
   }

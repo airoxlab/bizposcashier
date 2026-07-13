@@ -46,7 +46,7 @@ import { authManager } from '../../lib/authManager'
 import { cacheManager } from '../../lib/cacheManager'
 import { printerManager } from '../../lib/printerManager'
 import dailySerialManager from '../../lib/utils/dailySerialManager'
-import { getTodaysBusinessDate, filterOrdersByBusinessDate, getBusinessDayRange } from '../../lib/utils/businessDayUtils'
+import { getTodaysBusinessDate, filterOrdersByBusinessDate, getBusinessDayRange, getCurrentContiguousBusinessDate, getContiguousBusinessWindow } from '../../lib/utils/businessDayUtils'
 import { getOrderChanges, getOrderItemsWithChanges, getCurrentUpdateVersion } from '../../lib/utils/orderChangesTracker'
 import { mapKitchenItems, buildKitchenTokenPayload, buildKitchenUserProfile, buildProductCategoryMap } from '../../lib/utils/printPayload'
 import { fetchOpenAmendments, updateAmendmentStatus } from '../../lib/utils/kdsAmendments'
@@ -506,9 +506,11 @@ export default function KDSPage() {
         console.warn('Could not load business hours from profile, using defaults')
       }
 
-      // Get today's business date based on business hours
-      const todaysBusinessDate = getTodaysBusinessDate(businessStartTime, businessEndTime)
-      const businessDayRange = getBusinessDayRange(todaysBusinessDate, businessStartTime, businessEndTime)
+      // Get today's CONTIGUOUS business date + window (opening → next opening) so
+      // the closed-hours gap is never dropped — consistent with every other view.
+      const todaysBusinessDate = getCurrentContiguousBusinessDate(businessStartTime, businessEndTime)
+      const _cw = getContiguousBusinessWindow(todaysBusinessDate, businessStartTime, businessEndTime)
+      const businessDayRange = { startDateTime: _cw.openISO, endDateTime: _cw.nextOpenISO }
 
       console.log('KDS loading orders for business date:', todaysBusinessDate)
       console.log('Business day range:', businessDayRange)
@@ -700,8 +702,9 @@ export default function KDSPage() {
         }
       } catch (_) {}
 
-      const todaysBusinessDate = getTodaysBusinessDate(businessStartTime, businessEndTime)
-      const range = getBusinessDayRange(todaysBusinessDate, businessStartTime, businessEndTime)
+      const todaysBusinessDate = getCurrentContiguousBusinessDate(businessStartTime, businessEndTime)
+      const _cw = getContiguousBusinessWindow(todaysBusinessDate, businessStartTime, businessEndTime)
+      const range = { startDateTime: _cw.openISO, endDateTime: _cw.nextOpenISO }
 
       const data = await fetchOpenAmendments({
         userId,

@@ -10,7 +10,7 @@ import { notify } from '../ui/NotificationSystem';
 import RecordPaymentModal from './RecordPaymentModal';
 import { themeManager } from '../../lib/themeManager';
 import dailySerialManager from '../../lib/utils/dailySerialManager';
-import { getBusinessDateRangeForPreset } from '../../lib/utils/businessDayUtils';
+import { getContiguousBusinessDateRangeForPreset } from '../../lib/utils/businessDayUtils';
 
 export default function LedgerTab({ userId, startDate, endDate, prefetchedCustomers }) {
   const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -133,7 +133,7 @@ export default function LedgerTab({ userId, startDate, endDate, prefetchedCustom
     }
     const presetMap = { today: 'today', yesterday: 'yesterday', week: 'this_week', month: 'this_month' };
     const { startTime, endTime } = dailySerialManager.getBusinessHours();
-    const { from, to } = getBusinessDateRangeForPreset(presetMap[timePeriod] || 'today', startTime, endTime);
+    const { from, to } = getContiguousBusinessDateRangeForPreset(presetMap[timePeriod] || 'today', startTime, endTime);
     return { start: from, end: to };
   };
 

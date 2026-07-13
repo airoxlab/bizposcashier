@@ -69,6 +69,25 @@ import { getOrderItemsWithChanges, getOrderChanges, getCurrentUpdateVersion, cle
 import { mapKitchenItems, buildKitchenTokenPayload, buildKitchenUserProfile, buildProductCategoryMap } from '../../lib/utils/printPayload';
 import SendBillButton from '../../components/pos/SendBillButton';
 
+// Collapse two copies of the same order (one from the live DB fetch, one still
+// pending-sync in the offline cache) into a single row. A synced copy always
+// wins so the richer DB record (with joined customer/table/cashier) is shown
+// once its insert lands. Mirrors WalkinOrdersSidebar.dedupeByOrderNumber.
+function dedupeByOrderNumber(orders) {
+  if (!Array.isArray(orders)) return [];
+  const byNum = new Map();
+  const noKey = [];
+  for (const o of orders) {
+    if (!o) continue;
+    if (!o.order_number) { noKey.push(o); continue; }
+    const existing = byNum.get(o.order_number);
+    if (!existing || (!existing._isSynced && o._isSynced)) {
+      byNum.set(o.order_number, o);
+    }
+  }
+  return [...byNum.values(), ...noKey];
+}
+
 const OrderSkeleton = ({ isDark }) => {
   return (
     <div
@@ -187,6 +206,8 @@ export default function OrdersPage() {
   const [orderLoyaltyPoints, setOrderLoyaltyPoints] = useState([]);
   const [loyaltyRedemption, setLoyaltyRedemption] = useState(null);
   const [paymentTransactions, setPaymentTransactions] = useState([]);
+  // Outstanding account balance of the selected order's customer (Account payments only)
+  const [accountBalance, setAccountBalance] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -346,6 +367,31 @@ export default function OrdersPage() {
       .catch(() => setOrderHasChanges(false))
   }, [selectedOrder?.id]);
 
+  // Load the customer's outstanding account balance for Account-payment orders so
+  // the Payment card can show who owes and how much.
+  useEffect(() => {
+    let cancelled = false;
+    if (selectedOrder?.payment_method !== 'Account' || !selectedOrder?.customer_id) {
+      setAccountBalance(null);
+      return;
+    }
+    setAccountBalance(null);
+    (async () => {
+      try {
+        const uid = user?.id || authManager.getCurrentUser()?.id;
+        if (!uid) return;
+        const { default: customerLedgerManager } = await import('../../lib/customerLedgerManager');
+        customerLedgerManager.setUserId(uid);
+        const balance = await customerLedgerManager.getCustomerBalance(selectedOrder.customer_id);
+        if (!cancelled) setAccountBalance(balance);
+      } catch (err) {
+        console.error('Failed to load customer account balance:', err);
+        if (!cancelled) setAccountBalance(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedOrder?.id, selectedOrder?.payment_method, selectedOrder?.customer_id, user?.id]);
+
   // Mobile order notification: preload.js bridges IPC → CustomEvent 'bizpos:new-order'
   useEffect(() => {
     const handler = (e) => {
@@ -429,10 +475,23 @@ export default function OrdersPage() {
       })
       .subscribe();
 
+    // Post-sync / reconnect refresh. syncOfflineData dispatches 'ordersUpdated'
+    // once queued offline orders land in the DB; the OS 'online' event fires the
+    // moment connectivity returns. Both re-fetch silently so a just-synced order
+    // converges to its real DB row even if the realtime socket never reconnected
+    // after the blip. fetchOrders keeps pending-sync orders visible in between,
+    // so nothing disappears while we wait.
+    const handleOrdersUpdated = () => fetchOrders(true);
+    const handleBackOnline = () => fetchOrders(true);
+    window.addEventListener("ordersUpdated", handleOrdersUpdated);
+    window.addEventListener("online", handleBackOnline);
+
     return () => {
       console.log("📡 [Orders Page] Cleaning up realtime subscription");
       supabase.removeChannel(channel);
       supabase.removeChannel(mobileChannel);
+      window.removeEventListener("ordersUpdated", handleOrdersUpdated);
+      window.removeEventListener("online", handleBackOnline);
     };
   }, [user?.id, activeTab, statusFilter, dateStartISO, dateEndISO]);
 
@@ -669,6 +728,26 @@ export default function OrdersPage() {
 
           rawOrders = data || [];
           console.log("📦 [Orders Page] Fetched from Supabase:", rawOrders.length);
+
+          // Merge still-unsynced offline orders so a punched-offline order does
+          // NOT vanish the instant connectivity is detected but BEFORE
+          // syncOfflineData has pushed it to the DB. Without this, the moment
+          // cacheManager.isOnline flips true the list is replaced with DB rows
+          // only — dropping any order not yet synced — and it stays gone until
+          // sync finishes AND something re-triggers fetchOrders (realtime INSERT,
+          // ordersUpdated, or a manual reload), which is exactly the "orders
+          // disappear / come back later / next day" behaviour. The client-side
+          // date/type/status/source filters below still apply to these; a synced
+          // DB copy supersedes the cached copy via dedupeByOrderNumber before
+          // setOrders. Skip any whose order_number is already in the DB fetch.
+          const fetchedNums = new Set(rawOrders.map((o) => o.order_number));
+          const pendingOffline = (cacheManager.getOfflineOrders?.() || []).filter(
+            (o) => o && o.order_number && !fetchedNums.has(o.order_number)
+          );
+          if (pendingOffline.length) {
+            console.log(`📴 [Orders Page] Keeping ${pendingOffline.length} pending-sync offline order(s) visible during online transition`);
+            rawOrders = [...rawOrders, ...pendingOffline];
+          }
         } catch (fetchError) {
           // Network error - fall back to cache
           console.warn("🔄 [Orders Page] Network error, falling back to cache:", fetchError.message);
@@ -786,6 +865,10 @@ export default function OrdersPage() {
           );
         });
       }
+
+      // Collapse any transient duplicate (DB row + still-cached offline copy of
+      // the same order, seen in the brief window right after sync) — synced wins.
+      filteredOrders = dedupeByOrderNumber(filteredOrders);
 
       console.log("✅ [Orders Page] Filtered orders:", filteredOrders.length);
 
@@ -3547,6 +3630,33 @@ export default function OrdersPage() {
                       >
                         {selectedOrder.payment_status || "Paid"}
                       </p>
+                      {selectedOrder.payment_method === "Account" && (
+                        <div className={`mt-1 pt-1 border-t ${isDark ? "border-gray-700" : "border-gray-200"}`}>
+                          <p
+                            className={`text-[11px] font-semibold ${themeClasses.textPrimary} truncate`}
+                            title={selectedOrder.customers?.full_name || "Customer"}
+                          >
+                            {selectedOrder.customers?.full_name || "Customer"}
+                          </p>
+                          {accountBalance == null ? (
+                            <p className={`text-[10px] ${themeClasses.textSecondary}`}>
+                              Loading balance…
+                            </p>
+                          ) : Number(accountBalance) > 0 ? (
+                            <p className={`text-[10px] font-semibold ${isDark ? "text-red-400" : "text-red-600"}`}>
+                              Outstanding: Rs {Number(accountBalance).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                            </p>
+                          ) : Number(accountBalance) < 0 ? (
+                            <p className={`text-[10px] font-semibold ${isDark ? "text-green-400" : "text-green-600"}`}>
+                              Advance: Rs {Math.abs(Number(accountBalance)).toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                            </p>
+                          ) : (
+                            <p className={`text-[10px] font-semibold ${isDark ? "text-green-400" : "text-green-600"}`}>
+                              No outstanding balance
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

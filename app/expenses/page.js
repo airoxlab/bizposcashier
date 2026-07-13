@@ -25,7 +25,8 @@ import {
   ChevronUp,
   Sun,
   Moon,
-  CreditCard
+  CreditCard,
+  Users
 } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '../../lib/supabase'
@@ -38,14 +39,7 @@ import OwnerFingerprintUnlock from '../../components/ui/OwnerFingerprintUnlock'
 import ConfirmModal from '../../components/ui/ConfirmModal'
 import NotificationSystem, { notify } from '../../components/ui/NotificationSystem'
 import themeManager from '../../lib/themeManager'
-import { getTodaysBusinessDate, getBusinessDayRange } from '../../lib/utils/businessDayUtils'
-
-// Non-operating rows that live in the expenses table but are NOT business expenses:
-// supplier settlements (payorders) and payroll salary/advance mirrors. They are
-// excluded from this page's list + total so "Total Expenses" means real operating
-// expenses (matching the admin Expenses page and the shift-analytics figure).
-const EXCLUDED_EXPENSE_SOURCE_TYPES = ['supplier_payment', 'payroll_salary', 'payroll_advance']
-const isOperatingExpense = (e) => !EXCLUDED_EXPENSE_SOURCE_TYPES.includes(e?.source_type)
+import { getCurrentContiguousBusinessDate, getContiguousBusinessWindow } from '../../lib/utils/businessDayUtils'
 
 // ─── Offline cache keys ────────────────────────────────────────────────────────
 const EXPENSE_CACHE = {
@@ -55,6 +49,7 @@ const EXPENSE_CACHE = {
   accounts:      'pos_payment_accounts',
   pin:           'pos_expense_pin',
   pending:       'pending_expenses',
+  cashiers:      'pos_expense_cashiers_list',
 }
 
 // ─── Date preset helpers ───────────────────────────────────────────────────────
@@ -80,12 +75,13 @@ const fmtTime12 = (t) => {
 }
 
 // Preset → { from, to } as BUSINESS dates (YYYY-MM-DD). "Today" is anchored to the
-// current BUSINESS day (getTodaysBusinessDate), so after midnight on an overnight
+// current CONTIGUOUS business day (getCurrentContiguousBusinessDate — rolls the
+// closed gap into the day that was just open), so after midnight on an overnight
 // shift (e.g. 12PM–6AM) it still resolves to the open business day, not the new
 // calendar date. The returned dates are converted to created_at timestamp bounds
-// via businessBounds() so filtering matches the shift analytics / admin exactly.
+// via businessBounds() so filtering matches Cash Analytics / admin exactly.
 function getDateRangeFromPreset(preset, startTime = '10:00', endTime = '03:00') {
-  const todayBiz = getTodaysBusinessDate(startTime, endTime)
+  const todayBiz = getCurrentContiguousBusinessDate(startTime, endTime)
   const [ty, tm, td] = todayBiz.split('-').map(Number)
   const anchor = new Date(ty, tm - 1, td)
   const fmt = localDateStr
@@ -119,12 +115,14 @@ function getDateRangeFromPreset(preset, startTime = '10:00', endTime = '03:00') 
 }
 
 // Convert a business-date range to created_at timestamp bounds [startISO, endISO).
-// Overnight-safe: a day's end is the business-end moment on the next calendar day.
+// Uses the CONTIGUOUS window (opening → next opening) — same convention Cash
+// Analytics already uses — so the closed hours between one day's close and the
+// next day's open are never dropped from either adjacent business day.
 function businessBounds(from, to, startTime, endTime) {
   if (!from || !to) return { startISO: null, endISO: null }
   try {
-    const { startDateTime: startISO } = getBusinessDayRange(from, startTime, endTime)
-    const { endDateTime: endISO }     = getBusinessDayRange(to, startTime, endTime)
+    const { openISO: startISO } = getContiguousBusinessWindow(from, startTime, endTime)
+    const { nextOpenISO: endISO } = getContiguousBusinessWindow(to, startTime, endTime)
     return { startISO, endISO }
   } catch { return { startISO: null, endISO: null } }
 }
@@ -154,6 +152,13 @@ export default function ExpensesPage() {
   const [categoryFilter, setCategoryFilter] = useState('All')
   const [subcategoryFilter, setSubcategoryFilter] = useState('All')
   const [paymentFilter, setPaymentFilter] = useState('All')
+
+  // Cashier filter — 'all' shows every expense regardless of who recorded it
+  // (the default, so switching who's logged in on the till never hides history),
+  // 'admin' shows only expenses recorded by the owner/admin, or a specific
+  // cashier id to see just that cashier's expenses.
+  const [cashierFilter, setCashierFilter] = useState('all')
+  const [cashiersList, setCashiersList] = useState([])
 
   // Payment accounts
   const [paymentAccounts, setPaymentAccounts] = useState([])
@@ -250,7 +255,6 @@ export default function ExpensesPage() {
   }
 
   const filterCachedExpenses = (all) => {
-    const cashierId = authManager.getCashier()?.id
     const { start, end } = bizHours()
     const { startISO, endISO } = businessBounds(dateFrom, dateTo, start, end)
     // Match a cached row to the business-day window by its true created_at; fall
@@ -259,8 +263,9 @@ export default function ExpensesPage() {
       if (e.created_at) return (!startISO || e.created_at >= startISO) && (!endISO || e.created_at < endISO)
       return (!dateFrom || e.expense_date >= dateFrom) && (!dateTo || e.expense_date <= dateTo)
     }
-    let list = all.filter(isOperatingExpense)
-    if (cashierId) list = list.filter(e => e.cashier_id === cashierId)
+    let list = all
+    if (cashierFilter === 'admin') list = list.filter(e => !e.cashier_id)
+    else if (cashierFilter !== 'all') list = list.filter(e => e.cashier_id === cashierFilter)
     list = list.filter(inWindow)
     if (categoryFilter !== 'All') list = list.filter(e => e.category_id === categoryFilter)
     if (subcategoryFilter !== 'All') list = list.filter(e => e.subcategory_id === subcategoryFilter)
@@ -317,7 +322,7 @@ export default function ExpensesPage() {
 
   useEffect(() => {
     if (isAuthenticated) fetchData()
-  }, [isAuthenticated, dateFrom, dateTo, categoryFilter, subcategoryFilter, paymentFilter])
+  }, [isAuthenticated, dateFrom, dateTo, categoryFilter, subcategoryFilter, paymentFilter, cashierFilter])
 
   useEffect(() => {
     countPending()
@@ -387,10 +392,12 @@ export default function ExpensesPage() {
           const cats = JSON.parse(localStorage.getItem(EXPENSE_CACHE.categories) || '[]')
           const subcats = JSON.parse(localStorage.getItem(EXPENSE_CACHE.subcategories) || '[]')
           const accts = JSON.parse(localStorage.getItem(EXPENSE_CACHE.accounts) || '[]')
+          const cshrs = JSON.parse(localStorage.getItem(EXPENSE_CACHE.cashiers) || '[]')
           setExpenses(filterCachedExpenses(all))
           setCategories(cats)
           setSubcategories(subcats)
           setPaymentAccounts(accts)
+          setCashiersList(cshrs)
         } catch {}
         setLoading(false)
         return
@@ -398,7 +405,6 @@ export default function ExpensesPage() {
 
       const [expensesResult, categoriesResult, subcategoriesResult] = await Promise.all([
         (async () => {
-          const currentCashierId = authManager.getCashier()?.id
           const { start, end } = bizHours()
           const { startISO, endISO } = businessBounds(dateFrom, dateTo, start, end)
           let query = supabase
@@ -413,7 +419,8 @@ export default function ExpensesPage() {
             .eq('user_id', user.id)
             .order('created_at', { ascending: false })
 
-          if (currentCashierId) query = query.eq('cashier_id', currentCashierId)
+          if (cashierFilter === 'admin') query = query.is('cashier_id', null)
+          else if (cashierFilter !== 'all') query = query.eq('cashier_id', cashierFilter)
           // Filter by created_at against business-day bounds (overnight-safe),
           // matching the admin Expenses page and shift analytics — not the raw
           // calendar expense_date.
@@ -438,18 +445,17 @@ export default function ExpensesPage() {
         return (b.expense_time || '').localeCompare(a.expense_time || '')
       })
 
-      // Show operating expenses only (supplier payments / payroll mirrors excluded).
-      setExpenses(sorted.filter(isOperatingExpense))
+      setExpenses(sorted)
       setCategories(categoriesResult.data || [])
       setSubcategories(subcategoriesResult.data || [])
 
-      // Cache the full window (with source_type) so the offline filter can exclude too.
       localStorage.setItem(EXPENSE_CACHE.all, JSON.stringify(sorted))
       localStorage.setItem(EXPENSE_CACHE.categories, JSON.stringify(categoriesResult.data || []))
       localStorage.setItem(EXPENSE_CACHE.subcategories, JSON.stringify(subcategoriesResult.data || []))
 
       fetchPaymentAccounts()
       fetchSuppliers()
+      fetchCashiersList()
     } catch (error) {
       console.error('Error fetching expense data:', error)
       notify.error(`Failed to load data: ${error.message}`)
@@ -461,21 +467,21 @@ export default function ExpensesPage() {
   const fetchExpenses = async () => {
     try {
       if (!user?.id) return
-      const currentCashierId = authManager.getCashier()?.id
       const { start, end } = bizHours()
       const { startISO, endISO } = businessBounds(dateFrom, dateTo, start, end)
       let query = supabase
         .from('expenses')
         .select(`
           id, amount, description, payment_method, expense_date, expense_time,
-          tax_rate, tax_amount, total_amount, created_at, source_type, category_id, subcategory_id,
+          tax_rate, tax_amount, total_amount, created_at, source_type, category_id, subcategory_id, cashier_id,
           category:expense_categories (id, name),
           subcategory:expense_subcategories (id, name)
         `)
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
 
-      if (currentCashierId) query = query.eq('cashier_id', currentCashierId)
+      if (cashierFilter === 'admin') query = query.is('cashier_id', null)
+      else if (cashierFilter !== 'all') query = query.eq('cashier_id', cashierFilter)
       if (startISO) query = query.gte('created_at', startISO)
       if (endISO) query = query.lt('created_at', endISO)
       if (categoryFilter !== 'All') query = query.eq('category_id', categoryFilter)
@@ -487,7 +493,7 @@ export default function ExpensesPage() {
         if (a.expense_date !== b.expense_date) return b.expense_date.localeCompare(a.expense_date)
         return (b.expense_time || '').localeCompare(a.expense_time || '')
       })
-      setExpenses(sorted.filter(isOperatingExpense))
+      setExpenses(sorted)
     } catch (error) {
       console.error('Error fetching expenses:', error)
     }
@@ -582,6 +588,19 @@ export default function ExpensesPage() {
       setSuppliers(data || [])
       fetchSupplierBalances()
     } catch { /* silent */ }
+  }
+
+  // Cashiers under this owner account, for the "who recorded it" filter dropdown.
+  const fetchCashiersList = async () => {
+    try {
+      if (!user?.id) return
+      const { data, error } = await supabase.from('cashiers').select('id, name').eq('user_id', user.id).order('name')
+      if (error) throw error
+      setCashiersList(data || [])
+      localStorage.setItem(EXPENSE_CACHE.cashiers, JSON.stringify(data || []))
+    } catch (error) {
+      console.error('Error fetching cashiers list:', error)
+    }
   }
 
   // Outstanding balance per supplier — authoritative source used across the app
@@ -1101,6 +1120,10 @@ export default function ExpensesPage() {
   const getTotalExpenses = () =>
     expenses.reduce((sum, e) => sum + parseFloat(e.total_amount || e.amount), 0)
 
+  // Who recorded the expense — no cashier_id means it was recorded by the admin.
+  const getRecordedByName = (cashierId) =>
+    cashierId ? (cashiersList.find(c => c.id === cashierId)?.name || 'Cashier') : 'Admin'
+
   // Client-side search filter
   const filteredExpenses = expenses.filter(expense => {
     if (!searchTerm) return true
@@ -1117,8 +1140,8 @@ export default function ExpensesPage() {
     ? subcategories
     : subcategories.filter(s => s.category_id === categoryFilter)
 
-  // Summary for the current filter window (business-day + operating expenses only,
-  // so these cards always agree with the admin Expenses page & shift analytics).
+  // Summary for the current filter window (business-day bounds), so these cards
+  // always agree with the admin Expenses page.
   const periodLabel = {
     today: 'Today', yesterday: 'Yesterday', this_week: 'This Week',
     this_month: 'This Month', last_month: 'Last Month', custom: 'Selected Range',
@@ -1325,14 +1348,25 @@ export default function ExpensesPage() {
               </div>
             )}
 
-            {/* Payment method */}
-            <div className="relative">
-              <CreditCard className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-emerald-500 pointer-events-none z-10" />
-              <select value={paymentFilter} onChange={(e) => setPaymentFilter(e.target.value)} className={filterSelectCls}>
-                <option value="All">All Payment Methods</option>
-                {paymentAccounts.map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
-              </select>
-              <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+            {/* Payment method + Cashier (who recorded it) */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="relative">
+                <CreditCard className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-emerald-500 pointer-events-none z-10" />
+                <select value={paymentFilter} onChange={(e) => setPaymentFilter(e.target.value)} className={filterSelectCls}>
+                  <option value="All">All Payment Methods</option>
+                  {paymentAccounts.map(a => <option key={a.id} value={a.name}>{a.name}</option>)}
+                </select>
+                <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+              </div>
+              <div className="relative">
+                <Users className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-pink-500 pointer-events-none z-10" />
+                <select value={cashierFilter} onChange={(e) => setCashierFilter(e.target.value)} className={filterSelectCls} title="Filter by who recorded the expense">
+                  <option value="all">All (Cashiers + Admin)</option>
+                  <option value="admin">Admin Only</option>
+                  {cashiersList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+                <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
+              </div>
             </div>
 
             {/* Summary strip */}
@@ -1406,9 +1440,13 @@ export default function ExpensesPage() {
                         </div>
                       </div>
 
-                      {/* Row 2: time + actions */}
+                      {/* Row 2: time + recorded-by + actions */}
                       <div className="flex items-center justify-between">
-                        <span className={`text-xs ${themeClasses.textSecondary}`}>{fmtTime12(expense.expense_time)}</span>
+                        <span className={`text-xs ${themeClasses.textSecondary} flex items-center gap-1`}>
+                          {fmtTime12(expense.expense_time)}
+                          <span className="opacity-40">·</span>
+                          <Users className="w-3 h-3" /> {getRecordedByName(expense.cashier_id)}
+                        </span>
                         <div className="flex gap-1">
                           <button
                             onClick={(e) => { e.stopPropagation(); openEditExpense(expense) }}
@@ -1450,7 +1488,7 @@ export default function ExpensesPage() {
                   <div className="w-8 h-8 rounded-lg bg-green-500/15 flex items-center justify-center flex-shrink-0"><DollarSign className="w-4 h-4 text-green-500" /></div>
                 </div>
                 <p className={`text-2xl font-bold text-green-600 dark:text-green-400 tabular-nums`}>{pkr(expenseStats.total)}</p>
-                <p className={`text-[11px] ${themeClasses.textSecondary} mt-0.5`}>{periodLabel} · operating</p>
+                <p className={`text-[11px] ${themeClasses.textSecondary} mt-0.5`}>{periodLabel}</p>
               </div>
               {/* Transactions */}
               <div className={`${themeClasses.card} ${themeClasses.border} border rounded-2xl p-4`}>
@@ -1510,6 +1548,10 @@ export default function ExpensesPage() {
                       <span className={`inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${isDark ? 'bg-gray-700 text-gray-200' : 'bg-gray-100 text-gray-700'}`}>
                         {React.createElement(getPaymentMethodIcon(selectedExpense.payment_method), { className: 'w-3 h-3' })}
                         {selectedExpense.payment_method}
+                      </span>
+                      <span className={`inline-flex items-center gap-1 mt-1 ml-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${isDark ? 'bg-gray-700 text-gray-200' : 'bg-gray-100 text-gray-700'}`}>
+                        <Users className="w-3 h-3" />
+                        {getRecordedByName(selectedExpense.cashier_id)}
                       </span>
                     </div>
                   </div>

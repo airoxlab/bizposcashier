@@ -12,7 +12,7 @@ import { permissionManager } from '../../lib/permissionManager'
 import { getOrderChanges, getOrderItemsWithChanges, getCurrentUpdateVersion } from '../../lib/utils/orderChangesTracker'
 import { mapKitchenItems, mapReceiptItems, buildKitchenTokenPayload, buildKitchenUserProfile, buildReceiptUserProfile, buildProductCategoryMap, resolveOrderTableName } from '../../lib/utils/printPayload'
 import dailySerialManager from '../../lib/utils/dailySerialManager'
-import { getBusinessDate, getBusinessDateRangeForPreset, formatTime12 } from '../../lib/utils/businessDayUtils'
+import { getBusinessDate, getContiguousBusinessDateRangeForPreset, formatTime12 } from '../../lib/utils/businessDayUtils'
 import AssignRiderButton from '../delivery/AssignRiderButton'
 import OrderSettingsDrawer from '../settings/OrderSettingsDrawer'
 
@@ -422,7 +422,7 @@ export default function WalkinOrdersSidebar({
     // badges match the date-scoped list. Otherwise a badge could show orders the
     // list no longer displays.
     const { startTime, endTime } = dailySerialManager.getBusinessHours()
-    const { startISO, endISO } = getBusinessDateRangeForPreset('today', startTime, endTime)
+    const { startISO, endISO } = getContiguousBusinessDateRangeForPreset('today', startTime, endTime)
     if (navigator.onLine && cacheManager.isOnline) {
       const { data } = await supabase
         .from('orders')
@@ -552,7 +552,7 @@ export default function WalkinOrdersSidebar({
     // matching the orders page. Orders left pending from a previous business day drop off.
     // Defined before the try so the catch-block fallback can reuse it too.
     const { startTime, endTime } = dailySerialManager.getBusinessHours()
-    const { startISO, endISO } = getBusinessDateRangeForPreset('today', startTime, endTime)
+    const { startISO, endISO } = getContiguousBusinessDateRangeForPreset('today', startTime, endTime)
     const startMs = new Date(startISO).getTime()
     const endMs   = new Date(endISO).getTime()
     const inBusinessDay = (o) => {

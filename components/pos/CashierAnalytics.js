@@ -1,18 +1,21 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   X, BarChart2, TrendingUp, ShoppingBag,
   Banknote, Smartphone, CreditCard, Building2, Building, DollarSign,
   Clock, AlertCircle, RefreshCw, Delete, WifiOff,
-  Wallet, Layers, Gift, Printer, Receipt, User, ArrowLeft
+  Wallet, Layers, Gift, Printer, Receipt, User, ArrowLeft, Eye,
+  ChevronLeft, ChevronRight, Calendar, Moon
 } from 'lucide-react'
 import { authManager } from '../../lib/authManager'
 import { supabase } from '../../lib/supabase'
 import { printerManager } from '../../lib/printerManager'
 import { notify } from '../ui/NotificationSystem'
-import { getTodaysBusinessDate, getBusinessDayRange } from '../../lib/utils/businessDayUtils'
+import {
+  getContiguousBusinessWindow, getCurrentContiguousBusinessDate, shiftBusinessDate
+} from '../../lib/utils/businessDayUtils'
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -23,6 +26,17 @@ function getProfile() {
 function fmt(n) {
   if (n == null || isNaN(n)) return '0'
   return Math.round(n).toLocaleString('en-PK')
+}
+
+const fmtDT = (iso) => {
+  try { return new Date(iso).toLocaleString('en-PK', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }) }
+  catch { return '' }
+}
+const fmtDayTitle = (dateStr) => {
+  try {
+    const [y, m, d] = dateStr.split('-').map(Number)
+    return new Date(y, m - 1, d).toLocaleDateString('en-PK', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
+  } catch { return dateStr }
 }
 
 // Icon map keyed by payment_accounts.icon — same set the My Till page uses so
@@ -56,31 +70,41 @@ function computeOrderStats(orders) {
 
 // ── Collective finance figures from the account ledger ──────────────────────
 // The finance accounts are the single source of truth: every rupee in or out
-// today is a payment_account_ledger row. Buckets:
-//   credits → sales (source 'order', net of order_reversal debits),
-//             customer khata payments (manual + "Customer Payment…" description,
-//             the exact description migrations 019/023/024 write), other receipts.
+// in the window is a payment_account_ledger row. Buckets:
+//   credits → sales (source 'order', net of order/order_reversal debits),
+//             customer khata payments (manual + "Customer Payment…"),
+//             other receipts.
 //   debits  → expenses, payorders (supplier_payment), withdrawals,
 //             customer refunds (manual + "Customer refund…"), other payouts.
 // Internal transfers (transfer_in/transfer_out) move money BETWEEN our own
 // accounts, so they are surfaced separately and excluded from received/paid —
 // but they stay inside totalIn/totalOut so the opening-balance math ties:
-//   Opening = Available Balance − (totalIn − totalOut)   … exact, because
-// current_balance is the running result of this same ledger.
-function computeFinance(accounts, ledger) {
-  const accountsBalance = accounts.reduce((s, a) => s + (parseFloat(a.current_balance) || 0), 0)
+//   Opening = ClosingBalance − (totalIn − totalOut)   … exact, because the
+// closing balance is the running result of this same ledger.
+//
+// `closingByAcct` is the balance of each account at the END of the window
+// (live = current_balance; historical = reconstructed from the ledger — NOT the
+// live current_balance, which has moved on since that day). `closeMs` marks the
+// after-hours boundary so the closed-gap tail can be reported separately.
+function computeFinance(accounts, ledger, closingByAcct, closeISO) {
+  const bal = (a) => (closingByAcct && closingByAcct[a.id] != null) ? closingByAcct[a.id] : (parseFloat(a.current_balance) || 0)
+  const accountsBalance = accounts.reduce((s, a) => s + bal(a), 0)
+  const closeMs = closeISO ? new Date(closeISO).getTime() : Infinity
   let salesIn = 0, customerIn = 0, otherIn = 0, transferIn = 0
   let expensesOut = 0, payordersOut = 0, withdrawalsOut = 0, refundsOut = 0, otherOut = 0, transferOut = 0, orderReversals = 0
   let totalIn = 0, totalOut = 0
+  let afterHoursIn = 0, afterHoursOut = 0
   const perAccount = {}
 
   ledger.forEach(e => {
-    const amt  = parseFloat(e.amount) || 0
-    const src  = e.source_type || ''
-    const desc = (e.description || '').toLowerCase()
+    const amt   = parseFloat(e.amount) || 0
+    const src   = e.source_type || ''
+    const desc  = (e.description || '').toLowerCase()
+    const after = new Date(e.created_at).getTime() >= closeMs
     if (e.transaction_type === 'credit') {
       totalIn += amt
       perAccount[e.account_id] = (perAccount[e.account_id] || 0) + amt
+      if (after) afterHoursIn += amt
       if (src === 'order') salesIn += amt
       else if (src === 'transfer_in') transferIn += amt
       else if (src === 'manual' && desc.startsWith('customer payment')) customerIn += amt
@@ -88,11 +112,13 @@ function computeFinance(accounts, ledger) {
     } else if (e.transaction_type === 'debit') {
       totalOut += amt
       perAccount[e.account_id] = (perAccount[e.account_id] || 0) - amt
+      if (after) afterHoursOut += amt
       if (src === 'expense') expensesOut += amt
       else if (src === 'supplier_payment') payordersOut += amt
       else if (src === 'withdrawal') withdrawalsOut += amt
       else if (src === 'transfer_out') transferOut += amt
-      else if (src === 'order_reversal') orderReversals += amt
+      // 'order' debits (amount-reduced corrections) AND 'order_reversal' both give money back out of sales
+      else if (src === 'order_reversal' || src === 'order') orderReversals += amt
       else if (src === 'manual' && desc.startsWith('customer refund')) refundsOut += amt
       else otherOut += amt
     }
@@ -101,21 +127,22 @@ function computeFinance(accounts, ledger) {
   return {
     accountsBalance,
     activeCount: accounts.length,
-    accounts: accounts.map(a => ({ ...a, todayNet: perAccount[a.id] || 0 })),
+    accounts: accounts.map(a => ({ ...a, closingBalance: bal(a), todayNet: perAccount[a.id] || 0 })),
     opening: accountsBalance - (totalIn - totalOut),
-    salesNet: salesIn - orderReversals,   // cancelled-order reversals net out of sales
+    salesNet: salesIn - orderReversals,   // cancelled / reduced order reversals net out of sales
     customerIn, otherIn,
     expensesOut, payordersOut, withdrawalsOut, refundsOut, otherOut,
     transferMoved: Math.max(transferIn, transferOut),
     transferNet:   transferIn - transferOut,   // ≠0 only when a leg left our scope (e.g. cashier drawer)
     netToday: totalIn - totalOut,
+    afterHoursIn, afterHoursOut,
   }
 }
 
 // Rows for the printed report — preformatted app-side so the Electron ESC/POS
 // template stays dumb (it just renders label/value lines, dividers, headings).
 // Plain ASCII '+'/'-' only: thermal charsets don't have '−'.
-function buildReportRows(os, fin, printedBy, bizLabel) {
+function buildReportRows(os, fin, printedBy, bizLabel, isLive, afterHoursLabel) {
   const money = (n) => `Rs ${fmt(n)}`
   const rows = []
   rows.push({ t: 'row', label: 'Printed by:', value: printedBy })
@@ -128,7 +155,7 @@ function buildReportRows(os, fin, printedBy, bizLabel) {
   rows.push({ t: 'row', label: 'Credit Orders:', value: `${os.creditCount} (${money(os.creditAmount)})` })
   rows.push({ t: 'row', label: 'Total Discounts:', value: money(os.totalDiscounts) })
   rows.push({ t: 'div' })
-  rows.push({ t: 'head', text: 'FINANCE - TODAY' })
+  rows.push({ t: 'head', text: isLive ? 'FINANCE - TODAY' : 'FINANCE - DAY' })
   rows.push({ t: 'row', label: 'Opening Balance:', value: money(fin.opening) })
   rows.push({ t: 'row', label: 'Sales Received:', value: '+ ' + money(fin.salesNet) })
   if (fin.customerIn > 0)     rows.push({ t: 'row', label: 'Customer Payments:', value: '+ ' + money(fin.customerIn) })
@@ -140,10 +167,20 @@ function buildReportRows(os, fin, printedBy, bizLabel) {
   if (fin.otherOut > 0)       rows.push({ t: 'row', label: 'Other Payouts:', value: '- ' + money(fin.otherOut) })
   if (fin.transferMoved > 0)  rows.push({ t: 'row', label: 'Internal Transfers:', value: money(fin.transferMoved) })
   if (Math.abs(fin.transferNet) > 0.5) rows.push({ t: 'row', label: 'Transfers Net:', value: (fin.transferNet >= 0 ? '+ ' : '- ') + money(Math.abs(fin.transferNet)) })
-  rows.push({ t: 'rowb', label: 'Net Today:', value: (fin.netToday >= 0 ? '+ ' : '- ') + money(Math.abs(fin.netToday)) })
+  rows.push({ t: 'rowb', label: isLive ? 'Net Today:' : 'Net:', value: (fin.netToday >= 0 ? '+ ' : '- ') + money(Math.abs(fin.netToday)) })
+  // After-hours tail (transactions after closing time, before next opening) — shown
+  // so a 6:01 AM entry is never silently dropped from the day.
+  if (fin.afterHoursIn > 0 || fin.afterHoursOut > 0) {
+    rows.push({ t: 'div' })
+    rows.push({ t: 'head', text: 'AFTER HOURS' })
+    if (afterHoursLabel) rows.push({ t: 'row', label: 'Window:', value: afterHoursLabel })
+    if (fin.afterHoursIn > 0)  rows.push({ t: 'row', label: 'Received:', value: '+ ' + money(fin.afterHoursIn) })
+    if (fin.afterHoursOut > 0) rows.push({ t: 'row', label: 'Paid Out:', value: '- ' + money(fin.afterHoursOut) })
+    rows.push({ t: 'row', label: '(included in day)', value: '' })
+  }
   rows.push({ t: 'div' })
   rows.push({ t: 'head', text: 'ACCOUNT BALANCES' })
-  fin.accounts.forEach(a => rows.push({ t: 'row', label: `${a.name}:`, value: money(a.current_balance) }))
+  fin.accounts.forEach(a => rows.push({ t: 'row', label: `${a.name}:`, value: money(a.closingBalance) }))
   return rows
 }
 
@@ -221,13 +258,13 @@ function Calculator({ isDark, active = true }) {
   }, [active, input, operation, equals, back, clear, percent])
 
   const numBtn = isDark ? 'bg-gray-700 hover:bg-gray-600 text-white' : 'bg-white hover:bg-gray-50 text-gray-900 border border-gray-200'
-  const opBtn  = (active) => active
-    ? 'bg-indigo-500 text-white'
-    : isDark ? 'bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-200'
   const cardBg = isDark ? 'bg-gray-800' : 'bg-gray-50'
   const border = isDark ? 'border-gray-700' : 'border-gray-200'
   const text   = isDark ? 'text-gray-100' : 'text-gray-900'
   const textSec= isDark ? 'text-gray-400' : 'text-gray-500'
+  const opBtn  = (act) => act
+    ? 'bg-indigo-500 text-white'
+    : isDark ? 'bg-indigo-500/20 text-indigo-400 hover:bg-indigo-500/30' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-200'
 
   const shortDisplay = display.length > 14 ? parseFloat(display).toExponential(4) : display
 
@@ -275,6 +312,10 @@ function Calculator({ isDark, active = true }) {
 // Admin, cashier 1 or cashier 2: everyone sees the same real-time picture,
 // driven by the finance accounts (single source of truth). Access to the
 // module itself is controlled by permissions outside this component.
+//
+// Supports reprinting ANY past business day. "Today" is live (realtime); a past
+// day is a static, historically-reconstructed snapshot. The day window is
+// CONTIGUOUS (opening → next opening) so the closed-gap hours are never dropped.
 
 export default function CashierAnalytics({ isOpen, onClose, isDark }) {
   const [online, setOnline]         = useState(true)
@@ -284,12 +325,23 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
   const [finance, setFinance]       = useState(null)   // ledger-driven money figures
   const [live, setLive]             = useState(false)  // realtime channel subscribed
   const [reportOpen, setReportOpen] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
   const [saving, setSaving]         = useState(false)
+  const [selectedDate, setSelectedDate] = useState('') // business date YYYY-MM-DD ('' until resolved)
   const debounceRef = useRef(null)
+  const selectedDateRef = useRef('')
 
-  // Fetch everything: today's orders (info) + active company accounts +
-  // today's ledger (the money truth). Online-only by design — the ledger and
-  // balances aren't cached, and a half report is worse than no report.
+  const bizHours = () => {
+    const p = getProfile()
+    return { startTime: p.business_start_time || '10:00', endTime: p.business_end_time || '03:00' }
+  }
+  const currentBizDate = () => { const { startTime, endTime } = bizHours(); return getCurrentContiguousBusinessDate(startTime, endTime) }
+
+  // Fetch a business day: orders (info) + active company accounts + the ledger
+  // (money truth). For the live day the window runs opening→now and the closing
+  // balance is the live current_balance. For a past day the window runs
+  // opening→next-opening and the closing balance is RECONSTRUCTED from the
+  // ledger (current_balance has moved on since then). Online-only by design.
   const fetchAll = useCallback(async (opts = {}) => {
     if (typeof navigator !== 'undefined' && !navigator.onLine) { setOnline(false); return }
     setOnline(true)
@@ -297,21 +349,21 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
     if (!user?.id) return
     if (!opts.silent) setLoading(true)
     try {
-      const profile   = getProfile()
-      const startTime = profile.business_start_time || '10:00'
-      const endTime   = profile.business_end_time   || '03:00'
-      const todayBiz  = getTodaysBusinessDate(startTime, endTime)
-      const { startDateTime, endDateTime } = getBusinessDayRange(todayBiz, startTime, endTime)
-      setBizRange({ startDateTime, endDateTime, todayBiz })
-      const nowISO = new Date().toISOString()
+      const { startTime, endTime } = bizHours()
+      const curBiz  = getCurrentContiguousBusinessDate(startTime, endTime)
+      const bizDate = opts.date || selectedDateRef.current || curBiz
+      const isLive  = bizDate === curBiz
+      const { openISO, closeISO, nextOpenISO } = getContiguousBusinessWindow(bizDate, startTime, endTime)
+      const endISO  = isLive ? new Date().toISOString() : nextOpenISO
+      setBizRange({ openISO, closeISO, nextOpenISO, endISO, bizDate, isLive })
 
       const [ordersRes, accountsRes] = await Promise.all([
         supabase
           .from('orders')
           .select('order_status,payment_method,total_amount,discount_amount,loyalty_discount_amount,created_at')
           .eq('user_id', user.id)
-          .gte('created_at', startDateTime)
-          .lt('created_at', endDateTime),
+          .gte('created_at', openISO)
+          .lt('created_at', endISO),
         supabase
           .from('payment_accounts')
           .select('id,name,payment_method_key,icon,color,sort_order,current_balance')
@@ -322,21 +374,45 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
       ])
       const orders   = ordersRes.data || []
       const accounts = accountsRes.data || []
+      const ids = accounts.map(a => a.id)
 
       let ledger = []
-      const ids = accounts.map(a => a.id)
       if (ids.length > 0) {
         const { data: led } = await supabase
           .from('payment_account_ledger')
           .select('account_id,transaction_type,amount,source_type,description,created_at')
           .in('account_id', ids)
-          .gte('created_at', startDateTime)
-          .lt('created_at', nowISO)
+          .gte('created_at', openISO)
+          .lt('created_at', endISO)
+          .order('created_at', { ascending: true })
         ledger = led || []
       }
 
+      // Closing balance per account at the end of the window.
+      //  • Live day  → the account's real current_balance (end = now).
+      //  • Past day  → reconstruct: the balance_before of the first ledger entry
+      //    at/after the window end IS the balance at that instant. If no entry
+      //    exists after the window, the balance never changed → current_balance.
+      const closingByAcct = {}
+      if (isLive) {
+        accounts.forEach(a => { closingByAcct[a.id] = parseFloat(a.current_balance) || 0 })
+      } else {
+        await Promise.all(accounts.map(async (a) => {
+          const { data } = await supabase
+            .from('payment_account_ledger')
+            .select('balance_before')
+            .eq('account_id', a.id)
+            .gte('created_at', nextOpenISO)
+            .order('created_at', { ascending: true })
+            .limit(1)
+          closingByAcct[a.id] = (data && data.length)
+            ? (parseFloat(data[0].balance_before) || 0)
+            : (parseFloat(a.current_balance) || 0)
+        }))
+      }
+
       setOrderStats(computeOrderStats(orders))
-      setFinance(computeFinance(accounts, ledger))
+      setFinance(computeFinance(accounts, ledger, closingByAcct, closeISO))
     } catch (err) {
       console.error('[CashierAnalytics] fetch error:', err)
     } finally {
@@ -344,19 +420,31 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
     }
   }, [])
 
-  // While open: initial fetch, realtime push on ledger/orders/balances, a 60s
-  // polling fallback (in case realtime isn't enabled on a table), and
-  // online/offline transitions.
+  // Change the viewed business day (bounded: never past the current day).
+  const changeDate = useCallback((date) => {
+    const cur = currentBizDate()
+    if (date > cur) date = cur
+    selectedDateRef.current = date
+    setSelectedDate(date)
+    fetchAll({ date })
+  }, [fetchAll])
+
+  // On open: resolve the current business day and load it. Realtime only makes
+  // sense for the live day, so bumps are ignored while viewing a past day.
   useEffect(() => {
     if (!isOpen) return
-    fetchAll()
+    const cur = currentBizDate()
+    selectedDateRef.current = cur
+    setSelectedDate(cur)
+    fetchAll({ date: cur })
 
     const user = authManager.getCurrentUser()
     let channel = null
     if (user?.id) {
       const bump = () => {
+        if (selectedDateRef.current !== currentBizDate()) return // viewing a past day → static
         if (debounceRef.current) clearTimeout(debounceRef.current)
-        debounceRef.current = setTimeout(() => fetchAll({ silent: true }), 1200)
+        debounceRef.current = setTimeout(() => fetchAll({ silent: true, date: selectedDateRef.current }), 1200)
       }
       try {
         channel = supabase
@@ -370,8 +458,11 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
       }
     }
 
-    const poll = setInterval(() => fetchAll({ silent: true }), 60000)
-    const goOnline  = () => fetchAll()
+    const poll = setInterval(() => {
+      if (selectedDateRef.current !== currentBizDate()) return
+      fetchAll({ silent: true, date: selectedDateRef.current })
+    }, 60000)
+    const goOnline  = () => fetchAll({ date: selectedDateRef.current })
     const goOffline = () => setOnline(false)
     window.addEventListener('online', goOnline)
     window.addEventListener('offline', goOffline)
@@ -386,30 +477,38 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
     }
   }, [isOpen, fetchAll])
 
-  // ── Print the collective business report. Same for everyone; nothing is
-  //    persisted — the finance ledger IS the record, the print is a paper copy.
+  // ── Report payload — same shape the printer sends, built once and shared by
+  //    both Print and Preview so what you preview is exactly what prints.
+  const reportData = useMemo(() => {
+    if (!orderStats || !finance) return null
+    const profile   = getProfile()
+    const printedBy = authManager.getDisplayName() || authManager.getCashier()?.name || 'Staff'
+
+    const isLive = bizRange?.isLive
+    const bizLabel = bizRange
+      ? (isLive ? `${fmtDT(bizRange.openISO)} - now` : `${fmtDT(bizRange.openISO)} -> ${fmtDT(bizRange.nextOpenISO)}`)
+      : 'Today'
+    const afterHoursLabel = bizRange ? `${fmtDT(bizRange.closeISO)} -> ${fmtDT(bizRange.nextOpenISO)}` : ''
+
+    return {
+      title: 'CASH REPORT',
+      subtitle: isLive ? 'BUSINESS SUMMARY' : `BUSINESS SUMMARY (${fmtDayTitle(bizRange.bizDate)})`,
+      storeName: profile.store_name || profile.customer_name || '',
+      printedAt: new Date().toISOString(),
+      currency: 'Rs',
+      reportRows: buildReportRows(orderStats, finance, printedBy, bizLabel, isLive, afterHoursLabel),
+      cashInHand: finance.accountsBalance,
+      cashInHandLabel: isLive ? 'CASH IN HAND (ALL ACCOUNTS)' : 'CASH IN HAND (DAY END)',
+    }
+  }, [orderStats, finance, bizRange])
+
+  // ── Print the collective business report for the SELECTED day. Same for
+  //    everyone; nothing is persisted — the finance ledger IS the record.
   const doPrint = useCallback(async () => {
-    if (!orderStats || !finance) return
+    if (!reportData) return
     setSaving(true)
     try {
-      const user      = authManager.getCurrentUser()
-      const profile   = getProfile()
-      const printedBy = authManager.getDisplayName() || authManager.getCashier()?.name || 'Staff'
-
-      const fmt2 = (d) => new Date(d).toLocaleString('en-PK', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true })
-      const bizLabel = bizRange ? `${fmt2(bizRange.startDateTime)} - now` : 'Today'
-
-      const reportData = {
-        title: 'CASH REPORT',
-        subtitle: 'BUSINESS SUMMARY',
-        storeName: profile.store_name || profile.customer_name || '',
-        printedAt: new Date().toISOString(),
-        currency: 'Rs',
-        reportRows: buildReportRows(orderStats, finance, printedBy, bizLabel),
-        cashInHand: finance.accountsBalance,
-        cashInHandLabel: 'CASH IN HAND (ALL ACCOUNTS)',
-      }
-
+      const user = authManager.getCurrentUser()
       try {
         if (user?.id && !printerManager.currentUserId) printerManager.setUserId(user.id)
         const printerConfig = await printerManager.getPrinterForPrinting()
@@ -426,7 +525,7 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
     } finally {
       setSaving(false)
     }
-  }, [orderStats, finance, bizRange])
+  }, [reportData])
 
   if (!isOpen) return null
 
@@ -437,16 +536,19 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
   const textSec = isDark ? 'text-gray-400' : 'text-gray-500'
   const cardBg  = isDark ? 'bg-gray-800/60' : 'bg-gray-50'
 
-  // Format business window label
-  let bizLabel = 'Today\'s business day'
+  const isLive  = bizRange?.isLive
+  const curBiz  = selectedDate ? currentBizDate() : ''
+  const yesterday = curBiz ? shiftBusinessDate(curBiz, -1) : ''
+  const dayTitle = !selectedDate ? '' : selectedDate === curBiz ? 'Today' : selectedDate === yesterday ? 'Yesterday' : fmtDayTitle(selectedDate)
+
+  // Window label
+  let bizLabel = 'Business day'
   if (bizRange) {
-    const s = new Date(bizRange.startDateTime)
-    const e = new Date(bizRange.endDateTime)
-    const fmt2 = (d) => d.toLocaleString('en-PK', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true })
-    bizLabel = `${fmt2(s)} → ${fmt2(e)}`
+    bizLabel = isLive ? `${fmtDT(bizRange.openISO)} → now` : `${fmtDT(bizRange.openISO)} → ${fmtDT(bizRange.nextOpenISO)}`
   }
 
   const canPrint = online && !!orderStats && !!finance
+  const atToday  = selectedDate && selectedDate >= curBiz
 
   return (
     <div className="fixed inset-0 z-[999] flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
@@ -466,10 +568,16 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
             <div>
               <h2 className={`text-sm font-bold ${text} flex items-center gap-2`}>
                 Cash Analytics · Whole Business
-                {online && live && (
+                {online && live && isLive && (
                   <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-500">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                     LIVE
+                  </span>
+                )}
+                {!isLive && selectedDate && (
+                  <span className="flex items-center gap-1 text-[10px] font-semibold text-amber-500 px-1.5 py-0.5 rounded bg-amber-500/10">
+                    <Clock className="w-2.5 h-2.5" />
+                    HISTORICAL
                   </span>
                 )}
               </h2>
@@ -487,7 +595,7 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
               Cash Report
             </button>
             <button
-              onClick={() => fetchAll()}
+              onClick={() => fetchAll({ date: selectedDateRef.current })}
               disabled={loading}
               className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-colors ${isDark ? 'bg-indigo-900/40 text-indigo-300 hover:bg-indigo-900/60' : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100'}`}
             >
@@ -503,8 +611,56 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
           </div>
         </div>
 
+        {/* Date navigation bar — reprint any past business day */}
+        <div className={`flex items-center gap-2 px-5 py-2 border-b ${border} ${isDark ? 'bg-gray-800/40' : 'bg-gray-50/60'}`}>
+          <button
+            onClick={() => changeDate(shiftBusinessDate(selectedDate, -1))}
+            disabled={!selectedDate}
+            className={`p-1.5 rounded-lg transition-colors ${isDark ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-200 text-gray-600'} disabled:opacity-40`}
+            title="Previous day"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+          <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg ${isDark ? 'bg-gray-800' : 'bg-white'} border ${border} min-w-[9rem] justify-center`}>
+            <Calendar className={`w-3.5 h-3.5 ${textSec}`} />
+            <span className={`text-xs font-semibold ${text}`}>{dayTitle || '—'}</span>
+          </div>
+          <button
+            onClick={() => changeDate(shiftBusinessDate(selectedDate, 1))}
+            disabled={!selectedDate || atToday}
+            className={`p-1.5 rounded-lg transition-colors ${isDark ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-200 text-gray-600'} disabled:opacity-40`}
+            title="Next day"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+
+          <div className="flex items-center gap-1 ml-1">
+            <button
+              onClick={() => changeDate(curBiz)}
+              className={`text-[11px] px-2 py-1 rounded-lg font-medium transition-colors ${selectedDate === curBiz ? 'bg-indigo-500 text-white' : isDark ? 'bg-gray-800 text-gray-300 hover:bg-gray-700' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-100'}`}
+            >
+              Today
+            </button>
+            <button
+              onClick={() => changeDate(yesterday)}
+              className={`text-[11px] px-2 py-1 rounded-lg font-medium transition-colors ${selectedDate === yesterday ? 'bg-indigo-500 text-white' : isDark ? 'bg-gray-800 text-gray-300 hover:bg-gray-700' : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-100'}`}
+            >
+              Yesterday
+            </button>
+          </div>
+
+          <div className="flex-1" />
+          <input
+            type="date"
+            value={selectedDate}
+            max={curBiz}
+            onChange={(e) => e.target.value && changeDate(e.target.value)}
+            className={`text-[11px] px-2 py-1 rounded-lg border ${border} ${isDark ? 'bg-gray-800 text-gray-200' : 'bg-white text-gray-700'}`}
+          />
+        </div>
+
         {/* Body */}
-        <div className="flex" style={{ height: 520 }}>
+        <div className="flex" style={{ height: 476 }}>
           {/* ── Left: Stats 60% ── */}
           <div className={`border-r ${border} overflow-y-auto p-4 space-y-2.5`} style={{ width: '60%' }}>
             {!online ? (
@@ -519,7 +675,7 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
                   connection. Reconnect and they will appear automatically.
                 </p>
                 <button
-                  onClick={() => fetchAll()}
+                  onClick={() => fetchAll({ date: selectedDateRef.current })}
                   className="flex items-center gap-1.5 text-xs px-4 py-2 rounded-lg font-medium bg-indigo-500 hover:bg-indigo-600 text-white transition-colors"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
@@ -536,7 +692,7 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
                 <div className="grid grid-cols-2 gap-2">
                   <StatCard
                     icon={<TrendingUp className="w-4 h-4 text-emerald-500" />}
-                    label="Total Sales (Today)"
+                    label={isLive ? 'Total Sales (Today)' : 'Total Sales (Day)'}
                     value={`Rs ${fmt(orderStats.totalSales)}`}
                     valueColor="text-emerald-500"
                     bg={cardBg} border={border} text={text} textSec={textSec}
@@ -575,11 +731,11 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
                   </p>
                 </div>
 
-                {/* Finance — TODAY. The single source of truth: every rupee in or
-                    out of the finance accounts, reconciling opening → available. */}
+                {/* Finance — the single source of truth: every rupee in or out of
+                    the finance accounts, reconciling opening → closing. */}
                 <div className={`${cardBg} rounded-xl p-3 border ${border}`}>
                   <div className="flex items-center justify-between mb-2.5">
-                    <p className={`text-[10px] uppercase tracking-wide font-semibold ${textSec}`}>Finance · Today</p>
+                    <p className={`text-[10px] uppercase tracking-wide font-semibold ${textSec}`}>Finance · {isLive ? 'Today' : 'This Day'}</p>
                     <span className={`text-[10px] ${textSec}`}>{finance.activeCount} active account{finance.activeCount !== 1 ? 's' : ''}</span>
                   </div>
                   <div className="space-y-1.5">
@@ -609,16 +765,33 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
                       <SumRow label="Transfers Net" value={`${finance.transferNet >= 0 ? '+' : '−'} Rs ${fmt(Math.abs(finance.transferNet))}`} valueColor={finance.transferNet >= 0 ? 'text-emerald-500' : 'text-red-500'} text={text} textSec={textSec} />
                     )}
                     <div className={`flex items-center justify-between pt-2 mt-1 border-t ${border}`}>
-                      <span className={`text-sm font-bold ${text}`}>Cash in Hand (All Accounts)</span>
+                      <span className={`text-sm font-bold ${text}`}>Cash in Hand {isLive ? '(All Accounts)' : '(Day End)'}</span>
                       <span className="text-xl font-bold text-emerald-500 tabular-nums">Rs {fmt(finance.accountsBalance)}</span>
                     </div>
                     <p className={`text-[10px] ${textSec} pt-0.5`}>
-                      Real balance across all finance accounts · today's net {finance.netToday >= 0 ? '+' : '−'} Rs {fmt(Math.abs(finance.netToday))}
+                      {isLive ? 'Real balance across all finance accounts' : 'Reconstructed account balance at day end'} · {isLive ? "today's" : "day's"} net {finance.netToday >= 0 ? '+' : '−'} Rs {fmt(Math.abs(finance.netToday))}
                     </p>
                   </div>
                 </div>
 
-                {/* Per-account balances + today's movement */}
+                {/* After-hours tail — closed-gap transactions, never dropped */}
+                {(finance.afterHoursIn > 0 || finance.afterHoursOut > 0) && (
+                  <div className={`rounded-xl p-3 border ${isDark ? 'border-amber-800/50 bg-amber-900/10' : 'border-amber-200 bg-amber-50'}`}>
+                    <div className="flex items-center gap-1.5 mb-1.5">
+                      <Moon className="w-3.5 h-3.5 text-amber-500" />
+                      <p className="text-[10px] uppercase tracking-wide font-semibold text-amber-600 dark:text-amber-400">After Hours</p>
+                    </div>
+                    <p className={`text-[10px] ${textSec} mb-1.5`}>
+                      {bizRange && `${fmtDT(bizRange.closeISO)} → ${fmtDT(bizRange.nextOpenISO)}`} — after closing, before next opening (still counted in this day)
+                    </p>
+                    <div className="space-y-1">
+                      {finance.afterHoursIn > 0 && <SumRow label="Received" value={`+ Rs ${fmt(finance.afterHoursIn)}`} valueColor="text-emerald-500" text={text} textSec={textSec} />}
+                      {finance.afterHoursOut > 0 && <SumRow label="Paid Out" value={`− Rs ${fmt(finance.afterHoursOut)}`} valueColor="text-red-500" text={text} textSec={textSec} />}
+                    </div>
+                  </div>
+                )}
+
+                {/* Per-account balances + day's movement */}
                 <div className={`${cardBg} rounded-xl p-3 border ${border}`}>
                   <p className={`text-[10px] uppercase tracking-wide font-semibold ${textSec} mb-2.5`}>Accounts</p>
                   <div className="space-y-1.5">
@@ -639,7 +812,7 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
                                 {acc.todayNet >= 0 ? '+' : '−'} Rs {fmt(Math.abs(acc.todayNet))}
                               </span>
                             )}
-                            <span className={`text-xs font-bold tabular-nums ${text}`}>Rs {fmt(acc.current_balance)}</span>
+                            <span className={`text-xs font-bold tabular-nums ${text}`}>Rs {fmt(acc.closingBalance)}</span>
                           </div>
                         </div>
                       )
@@ -669,10 +842,22 @@ export default function CashierAnalytics({ isOpen, onClose, isDark }) {
               bizRange={bizRange}
               onClose={() => setReportOpen(false)}
               onPrint={doPrint}
+              onPreview={() => setPreviewOpen(true)}
             />
           )}
         </AnimatePresence>
       </motion.div>
+
+      {/* ── Receipt preview — exact text layout of what the thermal printer sends ── */}
+      <AnimatePresence>
+        {previewOpen && (
+          <ReceiptPreviewModal
+            isDark={isDark}
+            reportData={reportData}
+            onClose={() => setPreviewOpen(false)}
+          />
+        )}
+      </AnimatePresence>
     </div>
   )
 }
@@ -706,18 +891,14 @@ function SumRow({ label, value, text, textSec, valueColor }) {
 // Mirrors exactly what prints — the same on-screen figures, nothing persisted.
 // The finance ledger is the permanent record; this is a paper copy of it.
 
-function CashReportPanel({ isDark, saving, orderStats, finance, bizRange, onClose, onPrint }) {
+function CashReportPanel({ isDark, saving, orderStats, finance, bizRange, onClose, onPrint, onPreview }) {
   const bg      = isDark ? 'bg-gray-900' : 'bg-white'
   const border  = isDark ? 'border-gray-700' : 'border-gray-200'
   const text    = isDark ? 'text-gray-100' : 'text-gray-900'
   const textSec = isDark ? 'text-gray-400' : 'text-gray-500'
   const cardBg  = isDark ? 'bg-gray-800/60' : 'bg-gray-50'
   const money   = (n) => `Rs ${fmt(n)}`
-
-  const fmtTime = (iso) => {
-    try { return new Date(iso).toLocaleString('en-PK', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }) }
-    catch { return '' }
-  }
+  const isLive  = bizRange?.isLive
 
   // One label/value row of the summary. Strong = the emphasised final line.
   const Line = ({ label, value, strong }) => (
@@ -744,14 +925,21 @@ function CashReportPanel({ isDark, saving, orderStats, finance, bizRange, onClos
             <Receipt className="w-4.5 h-4.5 text-emerald-500" style={{ width: 18, height: 18 }} />
           </div>
           <div>
-            <h2 className={`text-sm font-bold ${text}`}>Cash Report · Whole Business</h2>
+            <h2 className={`text-sm font-bold ${text} flex items-center gap-2`}>
+              Cash Report · Whole Business
+              {!isLive && bizRange && (
+                <span className="text-[10px] font-semibold text-amber-500 px-1.5 py-0.5 rounded bg-amber-500/10">
+                  {fmtDayTitle(bizRange.bizDate)}
+                </span>
+              )}
+            </h2>
             <p className={`text-[11px] ${textSec} flex items-center gap-1.5`}>
               <User className="w-3 h-3" />
               {authManager.getDisplayName() || authManager.getCashier()?.name || 'Staff'}
               {bizRange && (
                 <>
                   <span className="opacity-40">·</span>
-                  {fmtTime(bizRange.startDateTime)} → now
+                  {isLive ? `${fmtDT(bizRange.openISO)} → now` : `${fmtDT(bizRange.openISO)} → ${fmtDT(bizRange.nextOpenISO)}`}
                 </>
               )}
             </p>
@@ -802,14 +990,17 @@ function CashReportPanel({ isDark, saving, orderStats, finance, bizRange, onClos
               {finance.refundsOut > 0 &&     <Line label="Customer Refunds"  value={`− ${money(finance.refundsOut)}`} />}
               {finance.otherOut > 0 &&       <Line label="Other Payouts"     value={`− ${money(finance.otherOut)}`} />}
               {finance.transferMoved > 0 &&  <Line label="Internal Transfers" value={money(finance.transferMoved)} />}
-              <Line label="Cash in Hand (All Accounts)" value={money(finance.accountsBalance)} strong />
+              {(finance.afterHoursIn > 0 || finance.afterHoursOut > 0) && (
+                <Line label="  · incl. after-hours" value={`${finance.afterHoursIn > 0 ? '+' + fmt(finance.afterHoursIn) : ''}${finance.afterHoursOut > 0 ? ' −' + fmt(finance.afterHoursOut) : ''}`.trim()} />
+              )}
+              <Line label={isLive ? 'Cash in Hand (All Accounts)' : 'Cash in Hand (Day End)'} value={money(finance.accountsBalance)} strong />
             </div>
 
             {/* Per-account balances */}
             <div className={`${cardBg} rounded-xl p-3 border ${border} space-y-1.5`}>
               <p className={`text-[10px] uppercase tracking-wide font-semibold ${textSec}`}>Account Balances</p>
               {finance.accounts.map(acc => (
-                <Line key={acc.id} label={acc.name} value={money(acc.current_balance)} />
+                <Line key={acc.id} label={acc.name} value={money(acc.closingBalance)} />
               ))}
             </div>
           </>
@@ -822,6 +1013,16 @@ function CashReportPanel({ isDark, saving, orderStats, finance, bizRange, onClos
           Prints the collective business report on the thermal printer. It does not log you out or move money.
         </p>
         <button
+          onClick={onPreview}
+          disabled={!orderStats || !finance}
+          className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold border disabled:opacity-60 disabled:cursor-not-allowed transition-colors ${
+            isDark ? 'border-gray-600 text-gray-200 hover:bg-gray-800' : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+          }`}
+        >
+          <Eye className="w-4 h-4" />
+          Preview
+        </button>
+        <button
           onClick={onPrint}
           disabled={saving || !orderStats || !finance}
           className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-emerald-500 hover:bg-emerald-600 disabled:opacity-60 disabled:cursor-not-allowed text-white transition-colors"
@@ -833,5 +1034,120 @@ function CashReportPanel({ isDark, saving, orderStats, finance, bizRange, onClos
         </button>
       </div>
     </motion.div>
+  )
+}
+
+// ─── Receipt preview — plain-text mockup of the ESC/POS thermal receipt ──────
+// Mirrors electron/printing/usbPrinter.js's generateCashReportESCPOS layout:
+// same 42-char width, same leftRight()/drawLine() rules, same row types. Lets
+// staff sanity-check the report without spending paper on a real printer.
+const RECEIPT_WIDTH = 42
+
+function receiptLeftRight(left, right) {
+  left = String(left ?? '')
+  right = String(right ?? '')
+  const maxLeft = RECEIPT_WIDTH - right.length - 1
+  const truncated = left.length > maxLeft ? left.slice(0, Math.max(0, maxLeft)) : left
+  const spaces = Math.max(1, RECEIPT_WIDTH - truncated.length - right.length)
+  return truncated + ' '.repeat(spaces) + right
+}
+
+function receiptCenter(str) {
+  str = String(str ?? '')
+  if (str.length >= RECEIPT_WIDTH) return str.slice(0, RECEIPT_WIDTH)
+  const left = Math.floor((RECEIPT_WIDTH - str.length) / 2)
+  return ' '.repeat(left) + str
+}
+
+function ReceiptPreviewModal({ isDark, reportData, onClose }) {
+  const bg      = isDark ? 'bg-gray-900' : 'bg-white'
+  const border  = isDark ? 'border-gray-700' : 'border-gray-200'
+  const text    = isDark ? 'text-gray-100' : 'text-gray-900'
+  const textSec = isDark ? 'text-gray-400' : 'text-gray-500'
+
+  // Build the exact line sequence the printer would emit, as plain strings.
+  const lines = useMemo(() => {
+    if (!reportData) return []
+    const money = (n) => 'Rs ' + Math.round(Number(n) || 0).toLocaleString('en-PK')
+    const fmtPrintedAt = (iso) => {
+      try { return new Date(iso).toLocaleString('en-PK', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true }) }
+      catch { return String(iso || '') }
+    }
+    const out = []
+    const storeName = (reportData.storeName || 'POS SYSTEM').toUpperCase()
+    out.push({ str: receiptCenter(storeName), bold: true })
+    out.push({ str: '-'.repeat(RECEIPT_WIDTH) })
+    out.push({ str: receiptCenter(reportData.title || 'CASH REPORT'), bold: true })
+    if (reportData.subtitle) out.push({ str: receiptCenter(reportData.subtitle) })
+    out.push({ str: '-'.repeat(RECEIPT_WIDTH) })
+    out.push({ str: receiptLeftRight('Date/Time:', fmtPrintedAt(reportData.printedAt)) })
+
+    for (const r of reportData.reportRows || []) {
+      if (!r) continue
+      if (r.t === 'div') out.push({ str: '-'.repeat(RECEIPT_WIDTH) })
+      else if (r.t === 'div2') out.push({ str: '='.repeat(RECEIPT_WIDTH) })
+      else if (r.t === 'head') out.push({ str: receiptCenter(r.text || ''), bold: true })
+      else if (r.t === 'rowb') out.push({ str: receiptLeftRight(r.label, r.value), bold: true })
+      else out.push({ str: receiptLeftRight(r.label, r.value) })
+    }
+
+    out.push({ str: '='.repeat(RECEIPT_WIDTH) })
+    out.push({ str: receiptCenter(reportData.cashInHandLabel || 'CASH IN HAND'), bold: true })
+    out.push({ str: receiptCenter(money(reportData.cashInHand)), bold: true, big: true })
+    out.push({ str: '='.repeat(RECEIPT_WIDTH) })
+    out.push({ str: receiptCenter('Powered by airoxlab.com') })
+    return out
+  }, [reportData])
+
+  return (
+    <div className="fixed inset-0 z-[1000] flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 8 }}
+        transition={{ duration: 0.18 }}
+        className={`relative w-full max-w-sm ${bg} rounded-2xl shadow-2xl border ${border} overflow-hidden flex flex-col`}
+        style={{ maxHeight: '90vh' }}
+      >
+        {/* Header */}
+        <div className={`flex items-center justify-between px-4 py-3 border-b ${border} flex-shrink-0`}>
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-lg bg-indigo-500/15">
+              <Eye className="w-4 h-4 text-indigo-500" />
+            </div>
+            <h2 className={`text-sm font-bold ${text}`}>Print Preview</h2>
+          </div>
+          <button onClick={onClose} className={`p-1.5 rounded-lg transition-colors ${isDark ? 'hover:bg-gray-800 text-gray-400' : 'hover:bg-gray-100 text-gray-500'}`}>
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Receipt paper */}
+        <div className={`flex-1 overflow-y-auto p-4 ${isDark ? 'bg-gray-950' : 'bg-gray-100'}`}>
+          <div className="mx-auto bg-white text-black rounded shadow-md px-3 py-4" style={{ maxWidth: 300 }}>
+            <pre className="whitespace-pre font-mono leading-snug" style={{ fontSize: 11 }}>
+              {lines.length === 0
+                ? 'Loading report data…'
+                : lines.map((l, i) => (
+                    <div key={i} style={{ fontWeight: l.bold ? 700 : 400, fontSize: l.big ? 14 : undefined }}>
+                      {l.str}
+                    </div>
+                  ))}
+            </pre>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className={`flex-shrink-0 px-4 py-3 border-t ${border} flex items-center justify-between gap-3`}>
+          <p className={`text-[11px] ${textSec}`}>Text preview only — spacing may differ slightly from the printed paper.</p>
+          <button
+            onClick={onClose}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors flex-shrink-0 ${isDark ? 'bg-gray-800 hover:bg-gray-700 text-gray-200' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}
+          >
+            Close
+          </button>
+        </div>
+      </motion.div>
+    </div>
   )
 }

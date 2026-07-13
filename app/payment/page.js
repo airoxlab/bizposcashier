@@ -1185,7 +1185,7 @@ const processOrder = async () => {
     } else {
       // CREATE NEW ORDER or MODIFY OFFLINE (use cacheManager which handles both)
       // CREATE NEW ORDER (or update existing if modifying offline) - WITH delivery_charges and delivery_time
-      const { order, orderNumber: newOrderNumber, dailySerial: _newDailySerial } = await cacheManager.createOrder({
+      const { order, orderNumber: newOrderNumber, dailySerial: _newDailySerial, inventoryDeduction } = await cacheManager.createOrder({
         user_id: currentUser.id,
         cashier_id: cashier?.id || orderData.cashierId || null,
         session_id: currentSession?.id || orderData.sessionId || null,
@@ -1251,11 +1251,18 @@ const processOrder = async () => {
         !(orderData.isModifying && orderData.originalOrderStatus && orderData.originalOrderStatus !== 'Dispatched')
 
       if (wasPlacedAsCompleted && order?.id) {
-        // Inventory deduction is handled by cacheManager.syncOrder when order_status='Completed'
+        // Inventory deduction is handled by cacheManager.syncOrder when order_status='Completed'.
+        // syncOrder returns the actual deduction result so we can surface the same
+        // count-based toast the orders/walkin/takeaway/delivery pages show.
         if (order._isOffline) {
           notify.success('Order saved offline — inventory will be deducted when back online.')
+        } else if (inventoryDeduction?.success && inventoryDeduction.deductionsMade > 0) {
+          notify.success(`Order placed and completed! ${inventoryDeduction.deductionsMade} inventory item${inventoryDeduction.deductionsMade === 1 ? '' : 's'} deducted.`, { duration: 4000 })
+        } else if (inventoryDeduction && inventoryDeduction.attempted && !inventoryDeduction.success) {
+          notify.warning(`Order completed, but inventory deduction failed${inventoryDeduction.error ? `: ${inventoryDeduction.error}` : ''}.`, { duration: 6000 })
         } else {
-          notify.success('Order placed and completed! Inventory deducted.')
+          // Deduction succeeded with nothing to deduct (no recipe), or no inventory configured
+          notify.success('Order placed and completed!')
         }
 
         // ── WhatsApp "thank-you" on Completed ───────────────────────────
