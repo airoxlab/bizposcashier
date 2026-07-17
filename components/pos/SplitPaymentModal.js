@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   X,
@@ -32,6 +32,11 @@ export default function SplitPaymentModal({
   const [errors, setErrors] = useState({})
   const [isProcessing, setIsProcessing] = useState(false)
   const [cashierAccounts, setCashierAccounts] = useState([])
+  // Synchronous re-entry lock — set BEFORE any await, so two clicks (or an
+  // Enter keypress landing in the same tick as a click) can never both run
+  // onPaymentComplete and insert duplicate tender rows. React state alone is
+  // not enough: isProcessing hasn't flushed within the same event burst.
+  const processingLockRef = useRef(false)
 
   const isDark = themeManager.isDark()
   const classes = themeManager.getClasses()
@@ -180,8 +185,10 @@ export default function SplitPaymentModal({
 
   // Submit
   const handleSubmit = async () => {
+    if (processingLockRef.current) return // guard against double-click / double-Enter
     if (!validateForm()) return
 
+    processingLockRef.current = true
     setIsProcessing(true)
 
     try {
@@ -201,13 +208,15 @@ export default function SplitPaymentModal({
       console.error('Payment error:', error)
       setErrors({ submit: error.message || 'Failed to process payment' })
     } finally {
+      processingLockRef.current = false
       setIsProcessing(false)
     }
   }
 
-  // Handle Enter key to submit
+  // Handle Enter key to submit. The ref lock inside handleSubmit is the real
+  // guard; the !isProcessing check just avoids re-triggering while in flight.
   const handleKeyPress = (e) => {
-    if (e.key === 'Enter' && isComplete) {
+    if (e.key === 'Enter' && isComplete && !isProcessing) {
       handleSubmit()
     }
   }

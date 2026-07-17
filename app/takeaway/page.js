@@ -58,6 +58,8 @@ export default function TakeawayPage() {
   const [theme, setTheme] = useState('light')
   const [isReopenedOrder, setIsReopenedOrder] = useState(false)
   const [isPlacingOrder, setIsPlacingOrder] = useState(false)
+  // Synchronous lock for QuickPay complete/pay — blocks double-click duplicates.
+  const quickCompleteLockRef = useRef(false)
   const [originalOrderId, setOriginalOrderId] = useState(null)
 
   // View state management
@@ -2296,8 +2298,14 @@ export default function TakeawayPage() {
       localStorage.setItem('order_data', JSON.stringify(orderData))
       console.log('🔵 [Takeaway] Navigating to payment page')
       notify.info('Proceeding to payment...')
+      // Keep the button in its loading state through navigation — router.push()
+      // is async, so resetting isPlacingOrder here re-enables the button before
+      // /payment mounts and lets rapid clicks stack. Page unmounts on nav, so
+      // only reset on failure.
       router.push('/payment')
-    } finally {
+    } catch (err) {
+      console.error('Failed to proceed to payment:', err)
+      notify.error('Failed to proceed to payment')
       setIsPlacingOrder(false)
     }
   }
@@ -2333,6 +2341,8 @@ export default function TakeawayPage() {
           orderType="takeaway"
           refreshTrigger={ordersRefreshTrigger}
           onQuickComplete={async (order, paymentMethod, action, cashReceived) => {
+            if (quickCompleteLockRef.current) return // guard against double-click → duplicate payment/completion
+            quickCompleteLockRef.current = true
             try {
               if (!paymentMethod || action === 'complete') {
                 await handleCompleteAlreadyPaidOrder(order, true, true)
@@ -2341,7 +2351,7 @@ export default function TakeawayPage() {
                 const cash = parseFloat(cashReceived) || total
                 await handlePaymentRequired(order, { paymentMethod, newTotal: total, discountAmount: 0, discountType: 'percentage', discountValue: 0, changeAmount: Math.max(0, cash - total), cashAmount: cash, completeOrder: action === 'pay_complete', skipAutoPrint: true, forceModal: action === 'pay_complete' })
               }
-            } catch (err) { toast.error('Quick complete failed: ' + err.message) }
+            } catch (err) { toast.error('Quick complete failed: ' + err.message) } finally { quickCompleteLockRef.current = false }
           }}
         />
       ) : (

@@ -3,18 +3,16 @@
 import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
-import { Coffee, RefreshCw, ArrowLeft, Table2, ClipboardList, X, Truck, AlertCircle, User, ShoppingBag, Layers, LayoutList, ChevronDown, ChevronRight, MapPin, CheckCircle, DollarSign, CreditCard, Wallet, Smartphone, Building2, Clock, Gift, Printer, UtensilsCrossed, Star, SlidersHorizontal } from 'lucide-react'
+import { Coffee, RefreshCw, ArrowLeft, Table2, ClipboardList, X, Truck, AlertCircle, User, ShoppingBag, Layers, LayoutList, ChevronDown, ChevronRight, MapPin, CheckCircle, DollarSign, CreditCard, Wallet, Smartphone, Building2, Clock, Gift, Printer, UtensilsCrossed, Star } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { authManager } from '../../lib/authManager'
 import { cacheManager } from '../../lib/cacheManager'
 import { printerManager } from '../../lib/printerManager'
-import { permissionManager } from '../../lib/permissionManager'
 import { getOrderChanges, getOrderItemsWithChanges, getCurrentUpdateVersion } from '../../lib/utils/orderChangesTracker'
 import { mapKitchenItems, mapReceiptItems, buildKitchenTokenPayload, buildKitchenUserProfile, buildReceiptUserProfile, buildProductCategoryMap, resolveOrderTableName } from '../../lib/utils/printPayload'
 import dailySerialManager from '../../lib/utils/dailySerialManager'
 import { getBusinessDate, getContiguousBusinessDateRangeForPreset, formatTime12 } from '../../lib/utils/businessDayUtils'
 import AssignRiderButton from '../delivery/AssignRiderButton'
-import OrderSettingsDrawer from '../settings/OrderSettingsDrawer'
 
 // Collapse orders that share an order_number into a single entry, preferring the
 // synced (DB) copy over a not-yet-synced offline copy. This stops a temp-id offline
@@ -303,8 +301,6 @@ export default function WalkinOrdersSidebar({
   const closeQuickPayModal = useCallback(() => setQuickPayModalOrder(null), [])
   const [printingOrderId, setPrintingOrderId] = useState(null)
   const [openDropdown, setOpenDropdown] = useState(null) // `${orderId}-receipt` | `${orderId}-token`
-  const [showOrderSettings, setShowOrderSettings] = useState(false)
-  const canAccessSettings = permissionManager.hasPermission('SETTINGS')
 
   // Resolve the default printer, registering the current user with the
   // printerManager first (the sidebar can be mounted before any page did it).
@@ -919,25 +915,6 @@ export default function WalkinOrdersSidebar({
           </div>
 
           <div className="flex items-center gap-1 flex-shrink-0">
-            {/* Order Settings — opens the POS & Order Settings panel as a slide-in
-                drawer, so a cashier can tweak charges/printing/rules without losing
-                the order in progress. Purple + text label, stacked, to match
-                Orders/Table. */}
-            {canAccessSettings && (
-              <motion.button
-                whileHover={{ scale: 1.08 }}
-                whileTap={{ scale: 0.95 }}
-                onClick={() => setShowOrderSettings(true)}
-                className={`px-1.5 py-1 rounded-lg transition-all flex flex-col items-center gap-0 border ${
-                  isDark ? 'bg-purple-900/20 border-purple-800/40 hover:bg-purple-900/40' : 'bg-purple-50 border-purple-200 hover:bg-purple-100'
-                }`}
-                title="Order Settings"
-              >
-                <SlidersHorizontal className={`w-4 h-4 ${isDark ? 'text-purple-400' : 'text-purple-600'}`} />
-                <span className={`text-[9px] font-semibold leading-tight ${isDark ? 'text-purple-300' : 'text-purple-700'}`}>Settings</span>
-              </motion.button>
-            )}
-
             {/* Orders — toggles the orders panel. Blue + text label, stacked
                 (icon over text) to match the CategorySidebar on the other order
                 pages for a consistent look. */}
@@ -1450,15 +1427,6 @@ export default function WalkinOrdersSidebar({
         onClose={closeQuickPayModal}
         onComplete={onQuickComplete}
       />
-
-      {canAccessSettings && (
-        <OrderSettingsDrawer
-          isOpen={showOrderSettings}
-          onClose={() => setShowOrderSettings(false)}
-          isDark={isDark}
-          classes={classes}
-        />
-      )}
     </div>
   )
 }

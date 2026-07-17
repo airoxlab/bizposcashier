@@ -34,13 +34,26 @@ async function ensureQrFile(invoiceNumber) {
 // submission (pra:submit) and the proforma preview (pra:preview) so the
 // proforma always shows exactly what PRA will be charged.
 //
-// General rule applied: the restaurant SERVICE CHARGE is part of the value of
-// supply, so it is included in the taxable value and taxed. Because the PRA
-// payload is item-based (and PRA validates that the item amounts sum to the
-// header totals), the service charge is distributed across the line items in
-// proportion to each item's base sale value.
+// General rule applied: extra charges that are part of the value of supply
+// (the restaurant SERVICE CHARGE, and — when the cashier opts in — the DELIVERY
+// CHARGE) are included in the taxable value and taxed. Callers pass the total of
+// the included charges as `extraTaxableCharge`. Because the PRA payload is
+// item-based (and PRA validates that the item amounts sum to the header totals),
+// that charge is distributed across the line items in proportion to each item's
+// base sale value.
+//
+// DISCOUNTS reduce the value of supply, so they come off the taxable value the
+// same way — proportionally across the lines. Two kinds exist and BOTH must be
+// handled, because the POS can apply either:
+//   • order_items.item_discount_amount — per line, already netted into `bases`.
+//   • orders.discount_amount           — applied to the whole order at payment
+//     time (orders.subtotal stays gross; total_amount is the net). Passed in as
+//     `orderDiscount`.
+// Getting this wrong is not cosmetic: filing the pre-discount value taxes the
+// customer's discount and over-declares the sale. The header Discount is the sum
+// of the per-item Discount fields so the payload reconciles with itself.
 // ---------------------------------------------------------------------------
-function buildPraItemsAndTotals(orderItems, serviceChargeAmount, taxRate) {
+function buildPraItemsAndTotals(orderItems, extraTaxableCharge, taxRate, orderDiscount = 0) {
   const items = orderItems || [];
   const round2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -51,18 +64,30 @@ function buildPraItemsAndTotals(orderItems, serviceChargeAmount, taxRate) {
     return Math.max(0, round2(lineTotal - itemDisc));
   });
   const baseSubtotal = round2(bases.reduce((s, v) => s + v, 0));
-  const svc = parseFloat(serviceChargeAmount || 0);
+  const svc = parseFloat(extraTaxableCharge || 0);
 
-  // Distribute the service charge proportionally; assign any rounding remainder
-  // to the last item so the shares sum EXACTLY to the service charge.
-  const shares = bases.map(b => (baseSubtotal > 0 ? round2(svc * b / baseSubtotal) : 0));
-  if (svc > 0 && shares.length > 0) {
-    const allocated = round2(shares.reduce((s, v) => s + v, 0));
-    shares[shares.length - 1] = round2(shares[shares.length - 1] + (svc - allocated));
-  }
+  // Clamp to the item value: a discount larger than the order (bad data, or a
+  // discount that was meant to cover a charge we're filing without) must never
+  // drive the taxable value negative — PRA rejects that outright.
+  const disc = Math.min(Math.max(parseFloat(orderDiscount || 0), 0), baseSubtotal);
+
+  // Distribute an order-level amount proportionally across the lines; assign any
+  // rounding remainder to the last item so the shares sum EXACTLY to `amount`.
+  const distribute = (amount) => {
+    const shares = bases.map(b => (baseSubtotal > 0 ? round2(amount * b / baseSubtotal) : 0));
+    if (amount > 0 && shares.length > 0) {
+      const allocated = round2(shares.reduce((s, v) => s + v, 0));
+      shares[shares.length - 1] = round2(shares[shares.length - 1] + (amount - allocated));
+    }
+    return shares;
+  };
+
+  const svcShares = distribute(svc);
+  const discShares = distribute(disc);
 
   const payloadItems = items.map((item, idx) => {
-    const saleVal = round2(bases[idx] + shares[idx]);
+    const itemDisc = parseFloat(item.item_discount_amount || 0);
+    const saleVal = Math.max(0, round2(bases[idx] + svcShares[idx] - discShares[idx]));
     const taxCharged = round2(saleVal * taxRate / 100);
     const totalAmt = round2(saleVal + taxCharged);
     return {
@@ -74,7 +99,9 @@ function buildPraItemsAndTotals(orderItems, serviceChargeAmount, taxRate) {
       SaleValue: saleVal,
       TaxCharged: taxCharged,
       TotalAmount: totalAmt,
-      Discount: parseFloat(item.item_discount_amount || 0),
+      // Everything taken off this line: its own discount plus its share of the
+      // order-level one. SaleValue above is already net of both.
+      Discount: round2(itemDisc + discShares[idx]),
       FurtherTax: 0,
       InvoiceType: 1,
       RefUSIN: null,
@@ -84,13 +111,16 @@ function buildPraItemsAndTotals(orderItems, serviceChargeAmount, taxRate) {
   const totalSaleValue = round2(payloadItems.reduce((s, i) => s + i.SaleValue, 0));
   const totalTaxCharged = round2(payloadItems.reduce((s, i) => s + i.TaxCharged, 0));
   const totalBillAmount = round2(payloadItems.reduce((s, i) => s + i.TotalAmount, 0));
+  const totalDiscount = round2(payloadItems.reduce((s, i) => s + i.Discount, 0));
   const totalQuantity = items.reduce((s, i) => s + (parseInt(i.quantity) || 0), 0);
 
   return {
     items: payloadItems,
-    baseSubtotal,        // items only, before service charge (for receipt Subtotal line)
-    serviceCharge: svc,  // service charge folded into the taxable value
-    totalSaleValue,      // taxable value = items + service charge
+    baseSubtotal,        // items only, before extra charges/discount (receipt Subtotal line)
+    serviceCharge: svc,  // extra charge (service + delivery) folded into taxable value
+    orderDiscount: disc, // order-level discount taken off the taxable value (post-clamp)
+    totalDiscount,       // item discounts + order discount — the header Discount
+    totalSaleValue,      // taxable value = items + extra charges - discounts
     totalTaxCharged,
     totalBillAmount,     // taxable value + tax
     totalQuantity,
@@ -99,7 +129,7 @@ function buildPraItemsAndTotals(orderItems, serviceChargeAmount, taxRate) {
 
 function registerPRAHandlers(ipcMain) {
   // Main submission handler — bearer token NEVER leaves this process
-  ipcMain.handle('pra:submit', async (_event, { order_id, user_id, payment_mode }) => {
+  ipcMain.handle('pra:submit', async (_event, { order_id, user_id, payment_mode, include_service_charge, include_delivery_charge }) => {
     try {
       // 1. Read PRA settings fresh from DB on every call — never cached
       const { data: pra, error: praErr } = await supabase
@@ -183,8 +213,11 @@ function registerPRAHandlers(ipcMain) {
         .update({ pra_usin: usin, pra_status: 'pending', pra_payment_mode: payment_mode })
         .eq('id', order_id);
 
-      // 7. Build PRA payload — service charge is folded into the taxable value
-      //    via the shared helper (same math the proforma preview uses).
+      // 7. Build PRA payload — the service charge and delivery charge are folded
+      //    into the taxable value via the shared helper (same math the proforma
+      //    preview uses). Each is included only when its toggle from the Push-to-
+      //    PRA modal is on (undefined = on, the default), so the cashier can file
+      //    with or without them.
       const taxRate = payment_mode === 2
         ? parseFloat(pra.card_tax_rate || 5)
         : parseFloat(pra.cash_tax_rate || 16);
@@ -193,7 +226,10 @@ function registerPRAHandlers(ipcMain) {
       const pad = n => String(n).padStart(2, '0');
       const dateTime = `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())} ${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
 
-      const built = buildPraItemsAndTotals(order.order_items, order.service_charge_amount, taxRate);
+      const effectiveService = include_service_charge === false ? 0 : parseFloat(order.service_charge_amount || 0);
+      const effectiveDelivery = include_delivery_charge === false ? 0 : parseFloat(order.delivery_charges || 0);
+      const taxableExtra = effectiveService + effectiveDelivery;
+      const built = buildPraItemsAndTotals(order.order_items, taxableExtra, taxRate, order.discount_amount);
       const items = built.items;
       const totalSaleValue = built.totalSaleValue;
       const totalTaxCharged = built.totalTaxCharged;
@@ -213,7 +249,10 @@ function registerPRAHandlers(ipcMain) {
         TotalTaxCharged: totalTaxCharged,
         TotalBillAmount: totalBillAmount,
         TotalQuantity: totalQuantity,
-        Discount: parseFloat(order.discount_amount || 0),
+        // Sum of the per-item Discount fields (item discounts + the order-level
+        // one), so the header agrees with Items[] instead of declaring a discount
+        // no line accounts for.
+        Discount: built.totalDiscount,
         FurtherTax: 0,
         PaymentMode: payment_mode,
         RefUSIN: null,
@@ -305,7 +344,7 @@ function registerPRAHandlers(ipcMain) {
   // Proforma preview — computes the SAME amounts pra:submit would, WITHOUT
   // filing anything (no USIN consumed, no DB writes, no API call). Used by the
   // proforma print so the preview matches the eventual PRA receipt to the rupee.
-  ipcMain.handle('pra:preview', async (_event, { order_id, user_id, payment_mode }) => {
+  ipcMain.handle('pra:preview', async (_event, { order_id, user_id, payment_mode, service_charge, delivery_charge }) => {
     try {
       const { data: pra, error: praErr } = await supabase
         .from('pra_settings')
@@ -319,7 +358,7 @@ function registerPRAHandlers(ipcMain) {
       const { data: order, error: orderErr } = await supabase
         .from('orders')
         .select(`
-          id, subtotal, discount_amount, service_charge_amount,
+          id, subtotal, discount_amount, service_charge_amount, delivery_charges,
           order_items (
             id, product_id, product_name, quantity, final_price, total_price,
             item_discount_amount,
@@ -336,13 +375,25 @@ function registerPRAHandlers(ipcMain) {
         ? parseFloat(pra.card_tax_rate || 5)
         : parseFloat(pra.cash_tax_rate || 16);
 
-      const built = buildPraItemsAndTotals(order.order_items, order.service_charge_amount, taxRate);
+      // The caller can override the service charge and/or delivery charge (e.g.
+      // the modal toggles turned off → 0) so the preview tax matches exactly what
+      // Push-to-PRA will file. Both are folded into the taxable value. When a
+      // value is omitted, fall back to the order's stored amount.
+      const svcCharge = (service_charge !== undefined && service_charge !== null)
+        ? parseFloat(service_charge || 0)
+        : parseFloat(order.service_charge_amount || 0);
+      const dlvCharge = (delivery_charge !== undefined && delivery_charge !== null)
+        ? parseFloat(delivery_charge || 0)
+        : parseFloat(order.delivery_charges || 0);
+
+      const built = buildPraItemsAndTotals(order.order_items, svcCharge + dlvCharge, taxRate, order.discount_amount);
 
       return {
         success: true,
         tax_rate: taxRate,
         subtotal: built.baseSubtotal,
         service_charge: built.serviceCharge,
+        discount: built.totalDiscount,
         total_sale_value: built.totalSaleValue,
         total_tax_charged: built.totalTaxCharged,
         total_bill_amount: built.totalBillAmount,
@@ -365,4 +416,6 @@ function registerPRAHandlers(ipcMain) {
   });
 }
 
-module.exports = { registerPRAHandlers };
+// buildPraItemsAndTotals is exported for testing — the amount math is the part
+// that has to be exactly right, and it should be verifiable without Electron.
+module.exports = { registerPRAHandlers, buildPraItemsAndTotals };

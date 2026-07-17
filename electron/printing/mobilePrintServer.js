@@ -12,7 +12,7 @@ const fs = require('fs');
 const { execFile } = require('child_process');
 const { app, BrowserWindow } = require('electron');
 const log = require('electron-log');
-const { printReceipt } = require('./receiptPrinter');
+const { printReceipt, sendRawToIPPrinter } = require('./receiptPrinter');
 const { printKitchenToken } = require('./kitchenTokenPrinter');
 const {
   generateReceiptESCPOS,
@@ -20,6 +20,7 @@ const {
   printReceiptToUSB,
   printKitchenTokenToUSB,
   sendToWindowsPrinter,
+  sendToUSBPort,
 } = require('./usbPrinter');
 const { ensureAssets } = require('../handlers/onDemandAssetDownload');
 
@@ -112,6 +113,52 @@ async function printReceiptToAny(config, orderData, userProfile) {
   if (r.type === 'usb') {
     if (!r.usbPort) throw new Error('USB printer has no COM port configured.');
     await printReceiptToUSB(r.usbPort, orderData, userProfile);
+    return;
+  }
+  throw new Error('Printer connection type is not set. Re-add the printer in BizPOS Settings.');
+}
+
+// Short raw-ESC/POS confirmation slip for the mobile Test Print button.
+// Deliberately NOT the receipt template — no logo/QR/header/footer, just a few
+// lines so the test doesn't waste paper.
+function generateTestSlipESCPOS(userProfile) {
+  const ESC = 0x1B;
+  const GS = 0x1D;
+  const now = new Date();
+  const stamp = `${now.toLocaleDateString()} ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  return Buffer.concat([
+    Buffer.from([ESC, 0x40]),                       // Init
+    Buffer.from([ESC, 0x61, 0x01]),                 // Center
+    Buffer.from([ESC, 0x45, 0x01]),                 // Bold on
+    Buffer.from(`${userProfile?.store_name || 'BizPOS'}\n`, 'utf8'),
+    Buffer.from([ESC, 0x45, 0x00]),                 // Bold off
+    Buffer.from('PRINTER TEST\n', 'utf8'),
+    Buffer.from('------------------------------\n', 'utf8'),
+    Buffer.from('Printer is working fine!\n', 'utf8'),
+    Buffer.from(`${stamp}\n`, 'utf8'),
+    Buffer.from('Sent from BizPOS mobile app\n', 'utf8'),
+    Buffer.from('\n\n\n'),
+    Buffer.from([GS, 0x56, 0x41, 0x00]),            // Feed + cut
+  ]);
+}
+
+// Sends a pre-built raw buffer to whatever transport the config resolves to —
+// same routing as printReceiptToAny, minus the receipt generation.
+async function printRawToAny(config, buffer) {
+  const r = resolvePrinterType(config);
+  if (r.type === 'ip') {
+    if (!r.ipAddress) throw new Error('Network printer has no IP address configured.');
+    await sendRawToIPPrinter(r.ipAddress, r.port, buffer);
+    return;
+  }
+  if (r.type === 'windows_usb') {
+    if (!r.winName) throw new Error('USB printer has no Windows printer name configured.');
+    await sendToWindowsPrinter(r.winName, buffer);
+    return;
+  }
+  if (r.type === 'usb') {
+    if (!r.usbPort) throw new Error('USB printer has no COM port configured.');
+    await sendToUSBPort(r.usbPort, buffer);
     return;
   }
   throw new Error('Printer connection type is not set. Re-add the printer in BizPOS Settings.');
@@ -316,16 +363,9 @@ function registerMobilePrintServer() {
             return;
           }
         }
-        const testOrder = {
-          orderNumber: 'TEST',
-          orderType: 'walkin',
-          cart: [{ isDeal: false, productName: 'Test Print Item', quantity: 1, finalPrice: 100, totalPrice: 100 }],
-          subtotal: 100,
-          paymentMethod: 'Cash',
-        };
         try {
-          await printReceiptToAny(config, testOrder, body.userProfile || {});
-          log.info('[MobilePrint] Test receipt printed');
+          await printRawToAny(config, generateTestSlipESCPOS(body.userProfile));
+          log.info('[MobilePrint] Test slip printed');
           sendJson(res, 200, { success: true });
         } catch (printErr) {
           log.error('[MobilePrint] Test print failed:', printErr.message);

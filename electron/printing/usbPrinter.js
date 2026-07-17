@@ -259,12 +259,15 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
     commands.push(CMD.FEED);
   }
 
-  // Store address and phone
-  if (storeAddress) {
+  // Store address and phone — gated by show_company_info (default true).
+  // The proforma print maps proforma_show_company_info onto this flag; the
+  // normal customer receipt never sends it, so the default keeps prior behavior.
+  const showCompanyInfo = userProfile?.show_company_info !== false;
+  if (showCompanyInfo && storeAddress) {
     commands.push(CMD.ALIGN_CENTER);
     commands.push(text(storeAddress + '\n'));
   }
-  if (storePhone || storePhoneSecondary) {
+  if (showCompanyInfo && (storePhone || storePhoneSecondary)) {
     const phoneLine = storePhone && storePhoneSecondary
       ? `Ph: ${storePhone}, ${storePhoneSecondary}`
       : `Ph: ${storePhone || storePhoneSecondary}`;
@@ -278,7 +281,15 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
   commands.push(CMD.ALIGN_CENTER);
   commands.push(drawLine('-'));
   commands.push(CMD.BOLD_ON);
-  commands.push(text(isProforma ? 'PROFORMA INVOICE\n' : 'ORDER RECEIPT\n'));
+  if (isProforma) {
+    // Print "PROFORMA INVOICE" big & bold like the store name (16 chars fits the
+    // 21-char double-width limit on 80mm paper).
+    commands.push(CMD.DOUBLE_ON);
+    commands.push(text('PROFORMA INVOICE\n'));
+    commands.push(CMD.DOUBLE_OFF);
+  } else {
+    commands.push(text('ORDER RECEIPT\n'));
+  }
   commands.push(CMD.BOLD_OFF);
   commands.push(drawLine('-'));
 
@@ -479,7 +490,11 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
   // items + service charge + delivery + PRA tax. taxInfo holds the tax figures
   // for whichever applies (proforma block or filed-PRA block).
   const taxInfo = orderData.proforma || orderData.pra || null;
-  const praTaxAmount = taxInfo ? parseFloat(taxInfo.tax_charged || 0) : 0;
+  // A "simple" proforma (No-Tax option) still carries a proforma block so it
+  // keeps the proforma layout + settings, but sets show_tax:false so the PRA
+  // tax line is omitted and never added to the grand total.
+  const showTaxRow = !!taxInfo && taxInfo.show_tax !== false;
+  const praTaxAmount = showTaxRow ? parseFloat(taxInfo.tax_charged || 0) : 0;
   const grandTotal = subtotal - totalDiscounts + serviceChargeAmount + deliveryCharges + praTaxAmount;
 
   commands.push(leftRight('Subtotal:', `Rs ${subtotal.toFixed(0)}`));
@@ -514,7 +529,8 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
 
   // PRA tax row — shown for both the proforma preview and the filed PRA push
   // receipt, right after the service charge and before the grand total.
-  if (taxInfo) {
+  // Skipped for the No-Tax proforma (show_tax:false).
+  if (showTaxRow) {
     const praTaxRate = taxInfo.tax_rate;
     commands.push(leftRight(`PRA Tax (${praTaxRate}%):`, `+Rs ${praTaxAmount.toFixed(0)}`));
   }
@@ -571,7 +587,13 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
   // ========================================
   // FOOTER SECTION (Optional)
   // ========================================
-  const showFooterSection = userProfile?.show_footer_section !== false;
+  // For a proforma, footer visibility is driven by the Proforma "Show Footer
+  // Section" setting carried on the proforma block (so the cache layer can't
+  // resurrect it); the normal receipt keeps using the profile's flag. This
+  // gates the Business QR, the review message and the hashtags together.
+  const showFooterSection = isProforma
+    ? (orderData.proforma?.show_footer !== false)
+    : (userProfile?.show_footer_section !== false);
 
   if (showFooterSection) {
     // 1. Business QR — always first in footer
@@ -646,7 +668,13 @@ async function generateReceiptESCPOS(orderData, userProfile, assets) {
   // ========================================
   // FOOTER THANK-YOU MESSAGE & POWERED BY
   // ========================================
-  const footerMsg = userProfile?.receipt_footer_message;
+  // Proforma prints ONLY its dedicated "Custom Footer Note" (independent of the
+  // footer section, blank = nothing). The normal receipt keeps its general
+  // thank-you message. This prevents the general receipt's thank-you / review
+  // text from leaking onto the proforma when the footer section is turned off.
+  const footerMsg = isProforma
+    ? (orderData.proforma?.footer_note || '')
+    : userProfile?.receipt_footer_message;
   if (footerMsg) {
     // Blank line for visual separation from whatever printed above
     commands.push(CMD.FEED);

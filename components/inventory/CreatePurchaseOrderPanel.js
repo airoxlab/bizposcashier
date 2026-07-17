@@ -338,6 +338,7 @@ export default function CreatePurchaseOrderPanel({ onClose, onCreated, restoreDr
 
   // ── Submit ──────────────────────────────────────────────────────────────────
   const handleSubmit = async () => {
+    if (saving) return // guard against double-submit → duplicate payment
     if (!canCreate) { notify.error('No permission to create purchase orders'); return }
     if (validRows.length === 0) { notify.error('Add at least one complete item row'); return }
     if (payNow && !paymentAccountId) { notify.error('Select a payment account'); return }

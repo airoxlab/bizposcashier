@@ -71,6 +71,7 @@ export default function WalkinOrderDetails({
   const [selectedCancelReason, setSelectedCancelReason] = useState('')
   const [customCancelReason, setCustomCancelReason] = useState('')
   const [isConverting, setIsConverting] = useState(false)
+  const [isCancelling, setIsCancelling] = useState(false)
   // Loading state for the two print buttons — guards against rapid double-clicks
   const [isPrintingReceipt, setIsPrintingReceipt] = useState(false)
   const [isPrintingToken, setIsPrintingToken] = useState(false)
@@ -587,9 +588,11 @@ export default function WalkinOrderDetails({
   }
 
   const confirmCancelOrder = async () => {
+    if (isCancelling) return // guard against double-click → double status write / double ledger reversal
     const finalReason = selectedCancelReason === 'Other' ? customCancelReason : selectedCancelReason
     if (!finalReason) return
 
+    setIsCancelling(true)
     try {
       await updateOrderStatus(order.id, 'Cancelled', finalReason)
       setShowCancelModal(false)
@@ -608,6 +611,8 @@ export default function WalkinOrderDetails({
     } catch (error) {
       console.error('Error cancelling order:', error)
       toast.error('Failed to cancel order')
+    } finally {
+      setIsCancelling(false)
     }
   }
 
@@ -1670,14 +1675,14 @@ export default function WalkinOrderDetails({
               </button>
               <button
                 onClick={confirmCancelOrder}
-                disabled={!selectedCancelReason || (selectedCancelReason === 'Other' && !customCancelReason)}
+                disabled={isCancelling || !selectedCancelReason || (selectedCancelReason === 'Other' && !customCancelReason)}
                 className={`flex-1 px-4 py-2 rounded-lg ${
-                  !selectedCancelReason || (selectedCancelReason === 'Other' && !customCancelReason)
+                  isCancelling || !selectedCancelReason || (selectedCancelReason === 'Other' && !customCancelReason)
                     ? 'bg-gray-400 cursor-not-allowed'
                     : 'bg-red-600 hover:bg-red-700'
                 } text-white font-medium transition-colors`}
               >
-                Cancel Order
+                {isCancelling ? 'Cancelling…' : 'Cancel Order'}
               </button>
             </div>
           </motion.div>

@@ -126,6 +126,7 @@ export default function CreatePurchaseOrderModal({ isOpen, onClose, onCreated })
   }
 
   const handleSubmit = async () => {
+    if (loading) return // guard against double-submit → duplicate payment
     if (!canCreate) {
       notify.error('You do not have permission to create purchase orders')
       return

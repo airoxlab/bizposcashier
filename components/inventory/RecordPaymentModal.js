@@ -84,6 +84,7 @@ export default function RecordPaymentModal({ isOpen, onClose, purchaseOrder, onP
   }
 
   const handleSubmit = async () => {
+    if (loading) return // guard against double-submit → duplicate payment
     if (!form.payment_account_id) { notify.error('Select a payment account'); return }
     if (!form.amount || parseFloat(form.amount) <= 0) { notify.error('Enter a valid amount'); return }
     if (!purchaseOrder.supplier_id) { notify.error('Purchase order has no supplier'); return }

@@ -43,6 +43,8 @@ import {
   BarChart2,
   UserCheck,
   Send,
+  Receipt,
+  Percent,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabase";
@@ -200,6 +202,17 @@ export default function OrdersPage() {
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [orderHasChanges, setOrderHasChanges] = useState(false);
   const selectedOrderRef = useRef(null);
+  // Synchronous re-entry lock for handlePaymentComplete. Mirrors the airtight
+  // processingLockRef pattern in app/payment/page.js — a fast double-click on
+  // "Paid + Complete" or "Complete Split Payment" must never run the money
+  // write twice (the split-tender insert into order_payment_transactions is
+  // NOT idempotent, so a double-fire duplicates the tender in cash reports).
+  const paymentCompleteLockRef = useRef(false);
+  // Latest-fetchOrders ref: lets the realtime subscription refetch with the
+  // CURRENT filters (tab/status/date) without re-subscribing every time one of
+  // them changes. Re-subscribing on every filter change churned the realtime
+  // channel needlessly (join/leave storms).
+  const fetchOrdersRef = useRef(null);
   const [orderItems, setOrderItems] = useState([]);
   const [orderHistory, setOrderHistory] = useState([]);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
@@ -253,10 +266,21 @@ export default function OrdersPage() {
   const [showPRAModal, setShowPRAModal] = useState(false);
   const [praPaymentMode, setPraPaymentMode] = useState(null);
   const [praSubmitting, setPraSubmitting] = useState(false);
+  // Per-filing charge toggles — default ON so PRA gets the full order value.
+  // When off, that charge is excluded from the taxable value filed with PRA.
+  const [praIncludeServiceCharge, setPraIncludeServiceCharge] = useState(true);
+  const [praIncludeDeliveryCharge, setPraIncludeDeliveryCharge] = useState(true);
   // Proforma invoice (pre-PRA preview print) — not filed, no fiscal number
   const [showProformaModal, setShowProformaModal] = useState(false);
+  // Selected proforma mode: 1 = Cash, 2 = Card, 'none' = simple print (no tax)
   const [proformaPaymentMode, setProformaPaymentMode] = useState(null);
   const [proformaPrinting, setProformaPrinting] = useState(false);
+  // Proforma receipt display settings (proforma_* columns of pra_settings).
+  // Null until loaded / when migration 025 is absent → treated as all-on.
+  const [proformaSettings, setProformaSettings] = useState(null);
+  // Per-print charge toggles — default ON so the proforma matches the order.
+  const [proformaIncludeServiceCharge, setProformaIncludeServiceCharge] = useState(true);
+  const [proformaIncludeDeliveryCharge, setProformaIncludeDeliveryCharge] = useState(true);
 
   const cancellationReasons = [
     "Customer requested cancellation",
@@ -316,6 +340,18 @@ export default function OrdersPage() {
         .maybeSingle()
         .then(({ data }) => {
           if (data) setPraSettings(data)
+        })
+
+      // Fetch the Proforma display settings (migration 025). Kept in a separate
+      // query so a missing-column error (tenant hasn't run 025) doesn't hide the
+      // Proforma button — we just fall back to showing everything.
+      supabase
+        .from('pra_settings')
+        .select('proforma_show_company_logo, proforma_show_company_name, proforma_show_company_info, proforma_show_footer, proforma_footer_note')
+        .eq('user_id', userData.id)
+        .maybeSingle()
+        .then(({ data, error }) => {
+          if (!error && data) setProformaSettings(data)
         })
     }
 
@@ -401,11 +437,18 @@ export default function OrdersPage() {
         duration: 5000,
         description: `${data.order_type || ''} · Rs ${data.total || 0}`,
       });
-      fetchOrders(true);
+      fetchOrdersRef.current?.(true);
     };
     window.addEventListener('bizpos:new-order', handler);
     return () => window.removeEventListener('bizpos:new-order', handler);
   }, [user?.id]);
+
+  // Keep fetchOrdersRef pointed at the newest fetchOrders so the realtime
+  // handler below always refetches with the current filters. Runs every render
+  // (no deps) — cheap, and it decouples the subscription lifecycle from filters.
+  useEffect(() => {
+    fetchOrdersRef.current = fetchOrders;
+  });
 
   // Realtime subscription for orders
   useEffect(() => {
@@ -413,11 +456,14 @@ export default function OrdersPage() {
 
     console.log("📡 [Orders Page] Setting up realtime subscription");
 
-    // Listen to ALL order changes (no server-side filter) and handle in JS.
-    // A server-side filter `user_id=eq.X` requires the subscriber to have an
-    // authenticated Supabase session; without one (anon key only) the filter
-    // validation silently drops events from other clients. Filtering in the
-    // callback is safe because the orders table is scoped by user_id anyway.
+    // Scope to THIS user's orders SERVER-SIDE. In a multi-tenant DB the previous
+    // unfiltered version delivered every restaurant's order change to every
+    // terminal, and each delivered event triggered a fetchOrders() query — a
+    // primary driver of the Realtime + Postgres load. The user_id filter works
+    // with the anon key here (RLS is disabled, and web-orders/walkin already rely
+    // on this exact filter on the same table). The callback guard below stays as
+    // defense-in-depth. NOTE: verify with a live order that the list still
+    // auto-refreshes before trusting this in production.
     const channel = supabase
       .channel("orders-realtime")
       .on(
@@ -426,6 +472,7 @@ export default function OrdersPage() {
           event: "*",
           schema: "public",
           table: "orders",
+          filter: `user_id=eq.${user.id}`,
         },
         (payload) => {
           console.log("🔔 [Orders Page] Realtime update:", payload);
@@ -454,7 +501,7 @@ export default function OrdersPage() {
           }
 
           // Refresh list silently — no skeleton flash
-          fetchOrders(true);
+          fetchOrdersRef.current?.(true);
         }
       )
       .subscribe();
@@ -471,7 +518,7 @@ export default function OrdersPage() {
           duration: 5000,
           description: `${order_type || ''} · Rs ${total || 0}`,
         });
-        fetchOrders(true);
+        fetchOrdersRef.current?.(true);
       })
       .subscribe();
 
@@ -481,8 +528,8 @@ export default function OrdersPage() {
     // converges to its real DB row even if the realtime socket never reconnected
     // after the blip. fetchOrders keeps pending-sync orders visible in between,
     // so nothing disappears while we wait.
-    const handleOrdersUpdated = () => fetchOrders(true);
-    const handleBackOnline = () => fetchOrders(true);
+    const handleOrdersUpdated = () => fetchOrdersRef.current?.(true);
+    const handleBackOnline = () => fetchOrdersRef.current?.(true);
     window.addEventListener("ordersUpdated", handleOrdersUpdated);
     window.addEventListener("online", handleBackOnline);
 
@@ -493,7 +540,9 @@ export default function OrdersPage() {
       window.removeEventListener("ordersUpdated", handleOrdersUpdated);
       window.removeEventListener("online", handleBackOnline);
     };
-  }, [user?.id, activeTab, statusFilter, dateStartISO, dateEndISO]);
+    // Only depends on user.id — filter/date changes are picked up via
+    // fetchOrdersRef, so the channel is created once per session, not per filter.
+  }, [user?.id]);
 
   const toggleTheme = () => {
     const newTheme = theme === "light" ? "dark" : "light";
@@ -1129,6 +1178,8 @@ export default function OrdersPage() {
 
   // Handle payment completion from inline payment view
   const handlePaymentComplete = async (paymentData) => {
+    if (paymentCompleteLockRef.current) return; // guard against double-submit → duplicate payment write
+    paymentCompleteLockRef.current = true;
     try {
       if (!selectedOrder) return;
 
@@ -1361,6 +1412,8 @@ export default function OrdersPage() {
       }
 
       notify.error(errorMessage);
+    } finally {
+      paymentCompleteLockRef.current = false;
     }
   };
 
@@ -1935,6 +1988,15 @@ export default function OrdersPage() {
     router.push(routes[order.order_type] || "/walkin");
   };
 
+  // Open the Push-to-PRA modal with fresh defaults (no mode chosen, both charge
+  // toggles ON so the full order value is filed unless the cashier opts out).
+  const openPRAModal = () => {
+    setPraPaymentMode(null);
+    setPraIncludeServiceCharge(true);
+    setPraIncludeDeliveryCharge(true);
+    setShowPRAModal(true);
+  };
+
   const handlePushToPRA = async (paymentMode) => {
     if (!selectedOrder || !window.electronAPI?.praSubmit) return;
     setPraSubmitting(true);
@@ -1943,6 +2005,10 @@ export default function OrdersPage() {
         order_id: selectedOrder.id,
         user_id: user.id,
         payment_mode: paymentMode,
+        // Exclude a charge from the taxable value filed with PRA when its toggle
+        // is off. Only relevant when the charge actually exists on the order.
+        include_service_charge: praIncludeServiceCharge,
+        include_delivery_charge: praIncludeDeliveryCharge,
       });
       if (result.success) {
         const updatedOrder = {
@@ -1962,7 +2028,8 @@ export default function OrdersPage() {
             : o
         ));
         setShowPRAModal(false);
-        showSuccess('PRA Filed Successfully', `Invoice: ${result.invoice_number}`);
+        // Auto-dismissing toast (no OK to click) instead of the success modal.
+        notify.success(`PRA filed · Invoice ${result.invoice_number}`);
       } else if (result.already_filed) {
         setShowPRAModal(false);
         alert(result.error);
@@ -2022,7 +2089,7 @@ export default function OrdersPage() {
         serviceChargeAmount: parseFloat(ord.service_charge_amount || 0),
         serviceChargeType: parseFloat(ord.service_charge_percentage || 0) > 0 ? 'percentage' : 'fixed',
         serviceChargeValue: parseFloat(ord.service_charge_percentage || 0),
-        tableName: ord.tables?.table_name || '',
+        tableName: ord.tables?.table_name || (ord.tables?.table_number ? `Table ${ord.tables.table_number}` : '') || '',
         cart: printItems.map(item => ({
           isDeal: !!item.is_deal,
           productName: item.product_name,
@@ -2081,6 +2148,15 @@ export default function OrdersPage() {
     }
   };
 
+  // Open the proforma modal with fresh defaults (no mode chosen, both charge
+  // toggles ON so the invoice matches the order unless the cashier opts out).
+  const openProformaModal = () => {
+    setProformaPaymentMode(null);
+    setProformaIncludeServiceCharge(true);
+    setProformaIncludeDeliveryCharge(true);
+    setShowProformaModal(true);
+  };
+
   // Print a PROFORMA invoice — a preview receipt shown BEFORE pushing to PRA.
   // It does NOT submit to PRA, consumes no USIN, and has no fiscal invoice
   // number. It only estimates the PRA tax (using the same rate logic as the
@@ -2111,50 +2187,87 @@ export default function OrdersPage() {
         }
       }
 
-      // Get the PRA amounts from the SAME handler that pra:submit uses, so the
-      // proforma previews exactly what PRA will be charged (service charge is
-      // folded into the taxable value per the general rule). Fall back to an
-      // identical local calculation if the preview bridge is unavailable.
-      let taxRate, saleValue, taxCharged, billAmount;
-      const preview = window.electronAPI?.praPreview
-        ? await window.electronAPI.praPreview({ order_id: ord.id, user_id: user.id, payment_mode: paymentMode }).catch(() => null)
-        : null;
+      // Effective charges for THIS proforma. The modal lets the cashier drop the
+      // service charge (walk-in) or the delivery charge (delivery) so the invoice
+      // can be printed with or without them — both default ON.
+      const orderServiceCharge = parseFloat(ord.service_charge_amount || 0);
+      const effectiveServiceCharge = proformaIncludeServiceCharge ? orderServiceCharge : 0;
+      const effectiveDeliveryCharge = (ord.order_type === 'delivery' && proformaIncludeDeliveryCharge)
+        ? parseFloat(ord.delivery_charges || 0)
+        : 0;
 
-      if (preview?.success) {
-        taxRate = preview.tax_rate;
-        saleValue = preview.total_sale_value;   // items + service charge
-        taxCharged = preview.total_tax_charged;
-        billAmount = preview.total_bill_amount;
-      } else {
-        // Local fallback — mirror buildPraItemsAndTotals: per-item sale value,
-        // service charge distributed proportionally, tax on the augmented value.
-        taxRate = paymentMode === 2
-          ? parseFloat(praSettings?.card_tax_rate || 5)
-          : parseFloat(praSettings?.cash_tax_rate || 16);
-        const round2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
-        const bases = printItems.map(it => {
-          const lineTotal = parseFloat(it.total_price ?? it.totalPrice ?? 0);
-          const itemDisc = parseFloat(it.item_discount_amount ?? it.itemDiscountAmount ?? 0);
-          return Math.max(0, round2(lineTotal - itemDisc));
-        });
-        const baseSubtotal = round2(bases.reduce((s, v) => s + v, 0));
-        const svc = parseFloat(ord.service_charge_amount || 0);
-        const shares = bases.map(b => (baseSubtotal > 0 ? round2(svc * b / baseSubtotal) : 0));
-        if (svc > 0 && shares.length > 0) {
-          const allocated = round2(shares.reduce((s, v) => s + v, 0));
-          shares[shares.length - 1] = round2(shares[shares.length - 1] + (svc - allocated));
+      // "No Tax" (simple) proforma → skip PRA tax entirely. Otherwise estimate
+      // the PRA tax from the SAME handler pra:submit uses, folding the (possibly
+      // excluded) service charge into the taxable value. Fall back to an
+      // identical local calculation if the preview bridge is unavailable.
+      const isNoTax = paymentMode === 'none';
+      let taxRate = 0, saleValue = 0, taxCharged = 0, billAmount = 0;
+
+      if (!isNoTax) {
+        const preview = window.electronAPI?.praPreview
+          ? await window.electronAPI.praPreview({
+              order_id: ord.id,
+              user_id: user.id,
+              payment_mode: paymentMode,
+              // Fold the (possibly excluded) service AND delivery charges into the
+              // taxable value so the proforma matches what Push-to-PRA will file.
+              service_charge: effectiveServiceCharge,
+              delivery_charge: effectiveDeliveryCharge,
+            }).catch(() => null)
+          : null;
+
+        if (preview?.success) {
+          taxRate = preview.tax_rate;
+          saleValue = preview.total_sale_value;   // items + (included) service charge
+          taxCharged = preview.total_tax_charged;
+          billAmount = preview.total_bill_amount;
+        } else {
+          // Local fallback — mirror buildPraItemsAndTotals: per-item sale value,
+          // service charge distributed proportionally, tax on the augmented value.
+          taxRate = paymentMode === 2
+            ? parseFloat(praSettings?.card_tax_rate || 5)
+            : parseFloat(praSettings?.cash_tax_rate || 16);
+          const round2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
+          const bases = printItems.map(it => {
+            const lineTotal = parseFloat(it.total_price ?? it.totalPrice ?? 0);
+            const itemDisc = parseFloat(it.item_discount_amount ?? it.itemDiscountAmount ?? 0);
+            return Math.max(0, round2(lineTotal - itemDisc));
+          });
+          const baseSubtotal = round2(bases.reduce((s, v) => s + v, 0));
+          // Fold both the service and delivery charge into the taxable value, then
+          // take the order-level discount back off it — matching
+          // buildPraItemsAndTotals on the PRA side. Both are spread across the
+          // lines in proportion to each line's base value.
+          const svc = effectiveServiceCharge + effectiveDeliveryCharge;
+          const disc = Math.min(Math.max(parseFloat(ord.discount_amount || 0), 0), baseSubtotal);
+          const distribute = (amount) => {
+            const sh = bases.map(b => (baseSubtotal > 0 ? round2(amount * b / baseSubtotal) : 0));
+            if (amount > 0 && sh.length > 0) {
+              const allocated = round2(sh.reduce((s, v) => s + v, 0));
+              sh[sh.length - 1] = round2(sh[sh.length - 1] + (amount - allocated));
+            }
+            return sh;
+          };
+          const svcShares = distribute(svc);
+          const discShares = distribute(disc);
+          bases.forEach((b, i) => {
+            const sv = Math.max(0, round2(b + svcShares[i] - discShares[i]));
+            saleValue += sv;
+            taxCharged += round2(sv * taxRate / 100);
+          });
+          saleValue = round2(saleValue);
+          taxCharged = round2(taxCharged);
+          billAmount = round2(saleValue + taxCharged);
         }
-        saleValue = 0;
-        taxCharged = 0;
-        bases.forEach((b, i) => {
-          const sv = round2(b + shares[i]);
-          saleValue += sv;
-          taxCharged += round2(sv * taxRate / 100);
-        });
-        saleValue = round2(saleValue);
-        taxCharged = round2(taxCharged);
-        billAmount = round2(saleValue + taxCharged);
       }
+
+      // Proforma display settings (PRA Receipt Settings → Proforma Config).
+      // Missing/null columns (migration 025 absent) default to ON. Computed here
+      // so both the proforma block and the userProfile below can use them.
+      const pf = proformaSettings || {};
+      const pfBool = (v) => v !== false;
+      const proformaShowFooter = pfBool(pf.proforma_show_footer);
+      const proformaFooterNote = (pf.proforma_footer_note || '').trim();
 
       printerManager.setUserId(user.id);
       const printer = await printerManager.getPrinterForPrinting();
@@ -2170,12 +2283,14 @@ export default function OrdersPage() {
         specialNotes: ord.order_instructions,
         total: ord.total_amount,
         subtotal: ord.subtotal,
-        deliveryCharges: ord.delivery_charges || 0,
+        // Effective charges — reflect the modal's include toggles so the printed
+        // proforma matches the tax we computed above.
+        deliveryCharges: effectiveDeliveryCharge,
         discountAmount: ord.discount_amount || 0,
         loyaltyDiscountAmount: 0,
         loyaltyPointsRedeemed: 0,
         discountType: "amount",
-        serviceChargeAmount: parseFloat(ord.service_charge_amount || 0),
+        serviceChargeAmount: effectiveServiceCharge,
         serviceChargeType: parseFloat(ord.service_charge_percentage || 0) > 0 ? 'percentage' : 'fixed',
         serviceChargeValue: parseFloat(ord.service_charge_percentage || 0),
         tableName: ord.tables?.table_name || (ord.tables?.table_number ? `Table ${ord.tables.table_number}` : '') || '',
@@ -2222,12 +2337,20 @@ export default function OrdersPage() {
             ? (cacheManager.getOrderTakers().find(t => t.id === ord.order_taker_id)?.name || null)
             : null),
         // Proforma block — drives the title + tax row in generateReceiptESCPOS.
+        // show_tax:false → the "No Tax" (simple) proforma keeps the same layout
+        // but prints no PRA tax line and adds no tax to the grand total.
+        // show_footer / footer_note carry the Proforma footer config here (not on
+        // userProfile) so the cache-augmentation can't resurrect the general
+        // receipt's review/thank-you text when the footer section is turned off.
         proforma: {
           tax_rate: taxRate,
           sale_value: saleValue,
           tax_charged: taxCharged,
           bill_amount: billAmount,
-          payment_mode: paymentMode,
+          payment_mode: isNoTax ? null : paymentMode,
+          show_tax: !isNoTax,
+          show_footer: proformaShowFooter,
+          footer_note: proformaFooterNote,
         },
       };
 
@@ -2242,6 +2365,11 @@ export default function OrdersPage() {
         return def;
       };
 
+      // Apply the dedicated Proforma display settings (PRA Receipt Settings →
+      // Proforma Configuration). pf / pfBool were computed above. Header
+      // visibility maps onto the profile flags the renderer reads; footer
+      // visibility + note are carried on the proforma block instead (above), so
+      // the cache-augmentation can't resurrect the general footer text.
       const userProfile = {
         store_name: userProfileRaw?.store_name || userRaw?.store_name || '',
         store_address: userProfileRaw?.store_address || userRaw?.store_address || '',
@@ -2250,20 +2378,25 @@ export default function OrdersPage() {
         qr_code: localQr || userProfileRaw?.qr_code || null,
         hashtag1: userProfileRaw?.hashtag1 || '',
         hashtag2: userProfileRaw?.hashtag2 || '',
-        show_footer_section: resolveBool('show_footer_section'),
-        show_logo_on_receipt: resolveBool('show_logo_on_receipt'),
-        show_business_name_on_receipt: resolveBool('show_business_name_on_receipt'),
+        // Proforma header visibility comes from the Proforma config:
+        show_logo_on_receipt: pfBool(pf.proforma_show_company_logo),
+        show_business_name_on_receipt: pfBool(pf.proforma_show_company_name),
+        show_company_info: pfBool(pf.proforma_show_company_info),
+        show_footer_section: proformaShowFooter,
         show_powered_by_airoxlab: resolveBool('show_powered_by_airoxlab'),
         phone_secondary: userProfileRaw?.phone_secondary || '',
         receipt_review_message: userProfileRaw?.receipt_review_message || '',
-        receipt_footer_message: userProfileRaw?.receipt_footer_message || '',
+        // Footer text for the proforma is handled by proforma.footer_note in the
+        // renderer, not this field — left blank so nothing leaks through.
+        receipt_footer_message: '',
         cashier_name: ord.cashier_id ? ord.cashiers?.name : null,
       };
 
       await printerManager.printReceipt(orderData, userProfile, printer);
       setShowProformaModal(false);
       setProformaPaymentMode(null);
-      showSuccess('Proforma Printed', `Order #${ord.order_number}`);
+      // Auto-dismissing toast (no OK to click) instead of the success modal.
+      notify.success(`Proforma printed · Order #${ord.order_number}`);
     } catch (err) {
       console.error('[Proforma Print]', err);
       alert('Proforma print error: ' + err.message);
@@ -3246,7 +3379,7 @@ export default function OrdersPage() {
                           {praSettings?.is_enabled &&
                             !selectedOrder.pra_invoice_number && (
                               <button
-                                onClick={() => { setShowProformaModal(true); setProformaPaymentMode(null); setShowActionMenu(null); }}
+                                onClick={() => { openProformaModal(); setShowActionMenu(null); }}
                                 className={`w-full px-4 py-2 text-left hover:${
                                   isDark ? "bg-gray-700" : "bg-gray-50"
                                 } flex items-center space-x-3 text-sm text-amber-600 transition-colors`}
@@ -3260,7 +3393,7 @@ export default function OrdersPage() {
                             selectedOrder.order_status === 'Completed' &&
                             !selectedOrder.pra_invoice_number && (
                               <button
-                                onClick={() => { setShowPRAModal(true); setShowActionMenu(null); }}
+                                onClick={() => { openPRAModal(); setShowActionMenu(null); }}
                                 className={`w-full px-4 py-2 text-left hover:${
                                   isDark ? "bg-gray-700" : "bg-gray-50"
                                 } flex items-center space-x-3 text-sm text-sky-600 transition-colors`}
@@ -3303,7 +3436,7 @@ export default function OrdersPage() {
                     <motion.button
                       whileHover={{ scale: 1.02 }}
                       whileTap={{ scale: 0.98 }}
-                      onClick={() => { setShowProformaModal(true); setProformaPaymentMode(null); }}
+                      onClick={openProformaModal}
                       disabled={proformaPrinting}
                       className="flex items-center space-x-1.5 px-3 py-2 bg-amber-500 hover:bg-amber-600 disabled:bg-gray-400 text-white rounded-lg transition-all font-medium text-sm"
                     >
@@ -5220,6 +5353,53 @@ export default function OrdersPage() {
               </button>
             </div>
 
+            {/* Charge toggles — decide whether the service charge (walk-in) and
+                delivery charge (delivery) are included in the taxable value filed
+                with PRA. Both ON by default; turning one off files without it. */}
+            {(parseFloat(selectedOrder.service_charge_amount || 0) > 0 ||
+              (selectedOrder.order_type === 'delivery' && parseFloat(selectedOrder.delivery_charges || 0) > 0)) && (
+              <div className={`space-y-2 mb-6 p-3 rounded-xl border ${isDark ? "border-gray-700 bg-gray-700/20" : "border-gray-200 bg-gray-50"}`}>
+                {parseFloat(selectedOrder.service_charge_amount || 0) > 0 && (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <Percent className={`w-4 h-4 ${isDark ? "text-gray-400" : "text-gray-500"}`} />
+                      <div>
+                        <p className={`text-sm font-medium ${isDark ? "text-white" : "text-gray-900"}`}>Include Service Charge</p>
+                        <p className={`text-xs ${isDark ? "text-gray-400" : "text-gray-500"}`}>Rs {parseFloat(selectedOrder.service_charge_amount || 0).toFixed(0)} — added to taxable value</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setPraIncludeServiceCharge(v => !v)}
+                      disabled={praSubmitting}
+                      className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full border-2 border-transparent transition-colors ${praIncludeServiceCharge ? "bg-sky-500" : "bg-gray-500"} ${praSubmitting ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                    >
+                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg transition-transform ${praIncludeServiceCharge ? "translate-x-5" : "translate-x-0"}`} />
+                    </button>
+                  </div>
+                )}
+                {selectedOrder.order_type === 'delivery' && parseFloat(selectedOrder.delivery_charges || 0) > 0 && (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <Truck className={`w-4 h-4 ${isDark ? "text-gray-400" : "text-gray-500"}`} />
+                      <div>
+                        <p className={`text-sm font-medium ${isDark ? "text-white" : "text-gray-900"}`}>Include Delivery Charges</p>
+                        <p className={`text-xs ${isDark ? "text-gray-400" : "text-gray-500"}`}>Rs {parseFloat(selectedOrder.delivery_charges || 0).toFixed(0)} — added to taxable value</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setPraIncludeDeliveryCharge(v => !v)}
+                      disabled={praSubmitting}
+                      className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full border-2 border-transparent transition-colors ${praIncludeDeliveryCharge ? "bg-sky-500" : "bg-gray-500"} ${praSubmitting ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                    >
+                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg transition-transform ${praIncludeDeliveryCharge ? "translate-x-5" : "translate-x-0"}`} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             <motion.button
               whileHover={{ scale: praPaymentMode && !praSubmitting ? 1.02 : 1 }}
               whileTap={{ scale: praPaymentMode && !praSubmitting ? 0.98 : 1 }}
@@ -5272,10 +5452,10 @@ export default function OrdersPage() {
             </div>
 
             <p className={`text-sm mb-5 ${isDark ? "text-gray-300" : "text-gray-600"}`}>
-              Select the payment method to preview the receipt with the estimated PRA tax. This is a preview only — it does not file the invoice with PRA.
+              Choose how to print this invoice. Cash / Card add the estimated PRA tax; No Tax prints a simple invoice with no tax. This is a preview only — it does not file the invoice with PRA.
             </p>
 
-            <div className="space-y-3 mb-6">
+            <div className="space-y-3 mb-5">
               <button
                 onClick={() => setProformaPaymentMode(1)}
                 disabled={proformaPrinting}
@@ -5309,7 +5489,72 @@ export default function OrdersPage() {
                 </div>
                 {proformaPaymentMode === 2 && <CheckCircle className="w-4 h-4 text-amber-600" />}
               </button>
+
+              {/* Simple print — no PRA tax. Same invoice layout as Cash/Card. */}
+              <button
+                onClick={() => setProformaPaymentMode('none')}
+                disabled={proformaPrinting}
+                className={`w-full flex items-center space-x-3 px-4 py-3 rounded-xl border-2 transition-all ${
+                  proformaPaymentMode === 'none'
+                    ? isDark ? "border-amber-500 bg-amber-900/30" : "border-amber-500 bg-amber-50"
+                    : isDark ? "border-gray-600 hover:border-gray-500 bg-gray-700/30" : "border-gray-200 hover:border-gray-300"
+                }`}
+              >
+                <Receipt className={`w-5 h-5 ${proformaPaymentMode === 'none' ? "text-amber-400" : isDark ? "text-gray-400" : "text-gray-500"}`} />
+                <div className="text-left flex-1">
+                  <p className={`font-medium text-sm ${isDark ? "text-white" : "text-gray-900"}`}>No Tax (Simple)</p>
+                  <p className={`text-xs ${isDark ? "text-gray-400" : "text-gray-500"}`}>Plain customer invoice — no PRA tax added</p>
+                </div>
+                {proformaPaymentMode === 'none' && <CheckCircle className="w-4 h-4 text-amber-600" />}
+              </button>
             </div>
+
+            {/* Charge toggles — let the cashier print the proforma with or without
+                the service charge (walk-in) / delivery charge (delivery). Both on
+                by default. When off, the amount (and its tax) is dropped. */}
+            {(parseFloat(selectedOrder.service_charge_amount || 0) > 0 ||
+              (selectedOrder.order_type === 'delivery' && parseFloat(selectedOrder.delivery_charges || 0) > 0)) && (
+              <div className={`space-y-2 mb-6 p-3 rounded-xl border ${isDark ? "border-gray-700 bg-gray-700/20" : "border-gray-200 bg-gray-50"}`}>
+                {parseFloat(selectedOrder.service_charge_amount || 0) > 0 && (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <Percent className={`w-4 h-4 ${isDark ? "text-gray-400" : "text-gray-500"}`} />
+                      <div>
+                        <p className={`text-sm font-medium ${isDark ? "text-white" : "text-gray-900"}`}>Service Charge</p>
+                        <p className={`text-xs ${isDark ? "text-gray-400" : "text-gray-500"}`}>Rs {parseFloat(selectedOrder.service_charge_amount || 0).toFixed(0)}</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setProformaIncludeServiceCharge(v => !v)}
+                      disabled={proformaPrinting}
+                      className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full border-2 border-transparent transition-colors ${proformaIncludeServiceCharge ? "bg-amber-500" : "bg-gray-500"} ${proformaPrinting ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                    >
+                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg transition-transform ${proformaIncludeServiceCharge ? "translate-x-5" : "translate-x-0"}`} />
+                    </button>
+                  </div>
+                )}
+                {selectedOrder.order_type === 'delivery' && parseFloat(selectedOrder.delivery_charges || 0) > 0 && (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <Truck className={`w-4 h-4 ${isDark ? "text-gray-400" : "text-gray-500"}`} />
+                      <div>
+                        <p className={`text-sm font-medium ${isDark ? "text-white" : "text-gray-900"}`}>Delivery Charges</p>
+                        <p className={`text-xs ${isDark ? "text-gray-400" : "text-gray-500"}`}>Rs {parseFloat(selectedOrder.delivery_charges || 0).toFixed(0)}</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setProformaIncludeDeliveryCharge(v => !v)}
+                      disabled={proformaPrinting}
+                      className={`relative inline-flex h-6 w-11 flex-shrink-0 rounded-full border-2 border-transparent transition-colors ${proformaIncludeDeliveryCharge ? "bg-amber-500" : "bg-gray-500"} ${proformaPrinting ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+                    >
+                      <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg transition-transform ${proformaIncludeDeliveryCharge ? "translate-x-5" : "translate-x-0"}`} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
 
             <motion.button
               whileHover={{ scale: proformaPaymentMode && !proformaPrinting ? 1.02 : 1 }}

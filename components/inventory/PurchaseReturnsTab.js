@@ -320,6 +320,7 @@ function CreateReturnPanel({ user, onClose, onCreated }) {
     : poList
 
   const handleSave = async () => {
+    if (saving) return // guard against double-submit → duplicate payment
     if (activeItems.length === 0) { notify.error('Select at least one item with a return quantity'); return }
     for (const i of activeItems) {
       const rq  = parseFloat(i.return_qty)

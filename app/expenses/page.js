@@ -176,6 +176,7 @@ export default function ExpensesPage() {
   const [confirmDelete, setConfirmDelete] = useState({ show: false, expenseId: null })
   const [isDeleting, setIsDeleting] = useState(false)
   const [isSavingCategory, setIsSavingCategory] = useState(false)
+  const [isSavingExpense, setIsSavingExpense] = useState(false) // guards Save Expense against double-submit → duplicate rows
 
   // Category modal tab
   const [categoryTab, setCategoryTab] = useState('list')
@@ -765,6 +766,7 @@ export default function ExpensesPage() {
   }
 
   const handleSaveExpense = async () => {
+    if (isSavingExpense) return // guard against rapid double-clicks that duplicate the expense
     // Supplier selected AND a real payment account chosen → this is a payment
     // toward the supplier's balance, not a new unpaid purchase. (Not on edit —
     // editing an existing row must never mint a fresh payment.)
@@ -772,6 +774,7 @@ export default function ExpensesPage() {
       await doSupplierPayment()
       return
     }
+    setIsSavingExpense(true)
     try {
       const effectivePaymentMethod = expenseForm.supplierId ? 'Unpaid' : expenseForm.paymentMethod
       if (!expenseForm.amount || !expenseForm.categoryId || !effectivePaymentMethod) {
@@ -872,6 +875,8 @@ export default function ExpensesPage() {
       const msg = error?.message || error?.details || JSON.stringify(error) || 'Unknown error'
       console.error('Error saving expense:', msg)
       notify.error(`Failed to save expense: ${msg}`)
+    } finally {
+      setIsSavingExpense(false)
     }
   }
 
@@ -1925,13 +1930,14 @@ export default function ExpensesPage() {
                   </button>
                   {(() => {
                     const isSupplierPayment = !editingExpense && !!expenseForm.supplierId && !!expenseForm.paymentAccountId
+                    const isBusy = payingSupplier || isSavingExpense
                     return (
                       <motion.button
-                        whileHover={{ scale: payingSupplier ? 1 : 1.02 }}
-                        whileTap={{ scale: payingSupplier ? 1 : 0.98 }}
+                        whileHover={{ scale: isBusy ? 1 : 1.02 }}
+                        whileTap={{ scale: isBusy ? 1 : 0.98 }}
                         onClick={handleSaveExpense}
-                        disabled={payingSupplier}
-                        className={`flex-1 text-white font-semibold py-3 px-4 rounded-xl shadow-lg hover:shadow-xl transition-all disabled:opacity-60 ${
+                        disabled={isBusy}
+                        className={`flex-1 text-white font-semibold py-3 px-4 rounded-xl shadow-lg hover:shadow-xl transition-all disabled:opacity-60 disabled:cursor-not-allowed ${
                           isSupplierPayment
                             ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700'
                             : 'bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700'
@@ -1939,6 +1945,8 @@ export default function ExpensesPage() {
                       >
                         {payingSupplier ? (
                           <><Clock className="w-4 h-4 mr-2 inline animate-spin" /> Paying...</>
+                        ) : isSavingExpense ? (
+                          <><Clock className="w-4 h-4 mr-2 inline animate-spin" /> {editingExpense ? 'Updating...' : 'Saving...'}</>
                         ) : isSupplierPayment ? (
                           <><CreditCard className="w-4 h-4 mr-2 inline" /> Pay Supplier</>
                         ) : (

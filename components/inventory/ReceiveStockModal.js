@@ -56,6 +56,7 @@ export default function ReceiveStockModal({ isOpen, onClose, purchaseOrder, onRe
   const canReceive = permissionManager.hasPermission('PO_RECEIVE') || authManager.getRole() === 'admin'
 
   const handleReceive = async () => {
+    if (loading) return // guard against double-submit → duplicate payment
     if (!canReceive) {
       notify.error('You do not have permission to receive stock')
       return

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import {
   DollarSign,
@@ -35,6 +35,10 @@ export default function InlinePaymentSection({
   const [cashAmount, setCashAmount] = useState('')
   const [changeAmount, setChangeAmount] = useState(0)
   const [isProcessing, setIsProcessing] = useState(false)
+  // Synchronous re-entry lock — set before the await so a fast double-click on
+  // "Mark Paid" / "Paid + Complete" can't fire onPaymentComplete twice (which
+  // would double-debit a customer ledger or duplicate a split tender row).
+  const processingLockRef = useRef(false)
   const [complimentaryReason, setComplimentaryReason] = useState('')
 
   // Smart Discount States
@@ -311,11 +315,13 @@ export default function InlinePaymentSection({
 
   const handlePayment = async (completeOrder = true) => {
     console.log('[DEBUG] handlePayment called', { completeOrder, canProcess: canProcessPayment(), selectedPaymentMethod: selectedPaymentMethod?.name })
+    if (processingLockRef.current) return // guard against double-click double-submit
     if (!canProcessPayment()) {
       console.log('[DEBUG] canProcessPayment() returned false — button disabled, returning early')
       return
     }
 
+    processingLockRef.current = true
     setIsProcessing(true)
 
     try {
@@ -342,6 +348,7 @@ export default function InlinePaymentSection({
     } catch (error) {
       console.error('[DEBUG] Payment error in handlePayment:', error)
     } finally {
+      processingLockRef.current = false
       setIsProcessing(false)
     }
   }

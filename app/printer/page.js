@@ -399,7 +399,20 @@ const loadPrinters = async (userId = user?.id) => {
     
   } catch (error) {
     console.error('Error loading printers:', error)
-    notify.error('Failed to load printers')
+
+    // Offline/error fallback: show the cached printers from printerManager —
+    // the same source already used to actually send print jobs while offline —
+    // instead of leaving the list empty when the Supabase fetch fails.
+    try {
+      const cached = await printerManager.getConfiguredPrinters()
+      if (cached && cached.length > 0) {
+        setPrinters(cached)
+      } else {
+        notify.error('Failed to load printers')
+      }
+    } catch {
+      notify.error('Failed to load printers')
+    }
   } finally {
     setIsLoading(false)
   }

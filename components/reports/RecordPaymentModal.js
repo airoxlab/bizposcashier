@@ -50,6 +50,7 @@ export default function RecordPaymentModal({ customer, unpaidOrders, customerSum
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (isProcessing) return // guard against double-submit → duplicate payment
 
     if (!amount || Number(amount) <= 0) {
       notify.error('Please enter a valid amount');

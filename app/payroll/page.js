@@ -110,6 +110,7 @@ function PayrollPageInner() {
   }
 
   const handleGiveAdvance = async () => {
+    if (saving) return // guard against double-submit → duplicate payment
     if (!user?.id) return notify.error('Not authenticated')
     if (!form.employee_id) return notify.error('Select an employee')
     const amount = parseFloat(form.amount)

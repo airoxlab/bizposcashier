@@ -142,6 +142,10 @@ export default function NewOrderPage() {
   // Reopened/modified order state
   const [isReopenedOrder, setIsReopenedOrder] = useState(false)
   const [isPlacingOrder, setIsPlacingOrder] = useState(false)
+  // Synchronous lock for the QuickPay complete/pay action (order card + sidebar
+  // QuickPay modal). Prevents a fast double-click from running the money write
+  // twice (double Account-ledger debit / duplicate completion side effects).
+  const quickCompleteLockRef = useRef(false)
   const [modifyingOrderId, setModifyingOrderId] = useState(null)
   const [modifyingOrderNumber, setModifyingOrderNumber] = useState(null)
   const [modifyingDailySerial, setModifyingDailySerial] = useState(null)
@@ -952,8 +956,15 @@ export default function NewOrderPage() {
       // Do NOT clear cart here — payment page clears it on success.
       // If user comes back from payment, cart is preserved.
       notify.info('Proceeding to payment...')
+      // Keep the button in its loading state through navigation. router.push()
+      // is async/fire-and-forget — resetting isPlacingOrder here re-enables the
+      // button before /payment mounts, letting rapid clicks stack duplicate
+      // "Proceeding to payment..." toasts. The page unmounts on navigation, so
+      // no reset is needed on success; only reset if the setItem/push throws.
       router.push('/payment')
-    } finally {
+    } catch (err) {
+      console.error('Failed to proceed to payment:', err)
+      notify.error('Failed to proceed to payment')
       setIsPlacingOrder(false)
     }
   }
@@ -1670,6 +1681,8 @@ export default function NewOrderPage() {
   }
 
   const handleQuickCompleteOrder = async (order, paymentMethod, action, cashReceived) => {
+    if (quickCompleteLockRef.current) return // guard against double-click → duplicate payment/completion
+    quickCompleteLockRef.current = true
     try {
       if (!paymentMethod || action === 'complete') {
         await handleCompleteAlreadyPaidOrder(order)
@@ -1761,6 +1774,8 @@ export default function NewOrderPage() {
     } catch (err) {
       console.error('Quick complete failed:', err)
       toast.error('Quick complete failed: ' + err.message)
+    } finally {
+      quickCompleteLockRef.current = false
     }
   }
 

@@ -57,6 +57,8 @@ export default function WalkInPage() {
   const [isReopenedOrder, setIsReopenedOrder] = useState(false)
   const [originalOrderId, setOriginalOrderId] = useState(null)
   const [isPlacingOrder, setIsPlacingOrder] = useState(false)
+  // Synchronous lock for QuickPay complete/pay — blocks double-click duplicates.
+  const quickCompleteLockRef = useRef(false)
 
   // View state management
   const [currentView, setCurrentView] = useState('products') // 'products', 'variant', 'deal', 'tables', 'orders'
@@ -1966,6 +1968,8 @@ export default function WalkInPage() {
 
   // Quick-complete an order from the sidebar without opening it
   const handleQuickCompleteOrder = async (order, paymentMethod, action, cashReceived) => {
+    if (quickCompleteLockRef.current) return // guard against double-click → duplicate payment/completion
+    quickCompleteLockRef.current = true
     try {
       if (!paymentMethod || action === 'complete') {
         await handleCompleteAlreadyPaidOrder(order, true, true)
@@ -1993,6 +1997,8 @@ export default function WalkInPage() {
     } catch (err) {
       console.error('Quick complete failed:', err)
       toast.error('Quick complete failed: ' + err.message)
+    } finally {
+      quickCompleteLockRef.current = false
     }
   }
 
@@ -2882,8 +2888,14 @@ export default function WalkInPage() {
       orderData.sourcePage = 'walkin'
       localStorage.setItem('order_data', JSON.stringify(orderData))
       console.log('🔵 [Walkin] Navigating to payment page')
+      // Keep the button in its loading state through navigation — router.push()
+      // is async, so resetting isPlacingOrder here re-enables the button before
+      // /payment mounts and lets rapid clicks stack. Page unmounts on nav, so
+      // only reset on failure.
       router.push('/payment')
-    } finally {
+    } catch (err) {
+      console.error('Failed to proceed to payment:', err)
+      notify.error('Failed to proceed to payment')
       setIsPlacingOrder(false)
     }
   }

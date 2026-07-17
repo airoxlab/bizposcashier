@@ -285,6 +285,7 @@ export default function EditPurchaseOrderPanel({ purchaseOrder, onBack, onUpdate
 
   // ── Submit ──────────────────────────────────────────────────────────────────
   const handleSubmit = async () => {
+    if (saving) return // guard against double-submit → duplicate payment
     if (!canEdit) { notify.error('No permission to edit purchase orders'); return }
     if (validRows.length === 0) { notify.error('Add at least one complete item row'); return }
     if (payNow && !paymentAccountId) { notify.error('Select a payment account'); return }
