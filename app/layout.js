@@ -6,6 +6,8 @@ import GlobalFingerprintListener from '../components/GlobalFingerprintListener'
 import TrialBanner from '../components/TrialBanner'
 import TrialExpiredGate from '../components/TrialExpiredGate'
 import NavigationLoader from '../components/NavigationLoader'
+import MaintenanceGate from '../components/MaintenanceGate'
+import PlatformBanner from '../components/PlatformBanner'
 
 export const metadata = {
   title: 'BizPOS - Point of Sale System',
@@ -43,12 +45,15 @@ export default function RootLayout({ children }) {
       </head>
       <body className="font-sans overflow-x-hidden" suppressHydrationWarning>
         <NavigationLoader />
-        <TrialBanner />
-        <GlobalPrintListener />
-        <GlobalFingerprintListener />
-        <TrialExpiredGate>
-          {children}
-        </TrialExpiredGate>
+        <MaintenanceGate>
+          <PlatformBanner />
+          <TrialBanner />
+          <GlobalPrintListener />
+          <GlobalFingerprintListener />
+          <TrialExpiredGate>
+            {children}
+          </TrialExpiredGate>
+        </MaintenanceGate>
         <NotificationSystem />
       </body>
     </html>
